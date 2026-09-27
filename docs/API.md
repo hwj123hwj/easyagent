@@ -1,6 +1,6 @@
 # HTTP API 参考
 
-> EasyAgent Server 模式（`easyagent serve`）的完整 API 文档。
+> EasyAgent Server 模式（`easyagent serve`）的主要 API 参考。请求结构以 [`internal/server`](../internal/server/) 中对应处理器为准。
 
 ---
 
@@ -15,9 +15,11 @@ easyagent serve
 
 三级访问控制模型（`/health` 始终开放）：
 
-1. **设置了 `EA_API_KEY`** → 所有请求必须带 `Authorization: Bearer <key>`；WebSocket 用 `?token=<key>` 查询参数。
+1. **设置了 `EA_API_KEY`** → 普通 API 请求必须带 `Authorization: Bearer <key>`；WebSocket 用 `?token=<key>` 查询参数。
 2. **未设置（默认）** → 仅放行 loopback 来源；非回环请求返回 401。本机消费方（网页 UI、飞书 bridge、桌面端）零配置可用。
-3. **`EA_ALLOW_NO_AUTH=1`** → 完全开放（仅限本机调试，切勿暴露端口）。
+3. **未配置 Key 且 `EA_ALLOW_NO_AUTH=1`** → 放开普通 API（仅限本机调试，切勿暴露端口）。
+
+飞书设置管理接口始终要求显式 Bearer 认证；静态页面可加载不代表 API 已授权。
 
 CORS 默认不返回跨域头；需要浏览器跨域访问时配置 `EA_ALLOWED_ORIGINS`（逗号分隔白名单）。
 
@@ -37,7 +39,7 @@ POST /chat
 
 ```json
 {
-  "message": "帮我看看这个项目结构",
+  "prompt": "帮我看看这个项目结构",
   "session_id": "sess_123"
 }
 ```
@@ -48,12 +50,13 @@ POST /chat
 POST /chat/stream
 ```
 
-Server-Sent Events 流式输出，实时返回 AI 回复的每个 token。
+Server-Sent Events 流式输出，持续返回文本增量、工具与任务状态事件；增量块不保证对应单个 token。
 
 ```bash
 curl -N -X POST http://127.0.0.1:8080/chat/stream \
   -H "Content-Type: application/json" \
-  -d '{"message": "你好"}'
+  -H "Authorization: Bearer $EA_API_KEY" \
+  -d '{"prompt": "你好"}'
 ```
 
 ### WebSocket
@@ -62,7 +65,15 @@ curl -N -X POST http://127.0.0.1:8080/chat/stream \
 GET /ws
 ```
 
-全双工 WebSocket 连接，支持对话、模型切换、流式回复。
+全双工 WebSocket 连接，支持对话、取消、模型切换和流式回复。需要认证时使用 `ws://host:8080/ws?token=<URL 编码后的令牌>`；HTTPS 部署使用 `wss://`。
+
+客户端消息示例（继续已有会话；新会话可省略 `session_id`）：
+
+```json
+{"type":"prompt","session_id":"sess_123","prompt":"分析项目结构"}
+```
+
+其他类型为 `cancel`、`switch_model`（`model`，可选 `provider`）、`ping`。服务端类型为 `event`、`session_id`、`status`、`model_info`、`error`、`pong`；Agent 事件放在 `event` 字段，错误说明放在 `message` 字段。结构定义见 [websocket.go](../internal/server/websocket.go)。
 
 ---
 
@@ -80,6 +91,7 @@ GET /ws
 | `POST` | `/sessions/{id}/command` | 执行斜杠命令 |
 | `GET` | `/sessions/{id}/diff` | 获取会话 Git diff |
 | `GET` | `/sessions/{id}/file` | 获取会话文件内容 |
+| `PUT` | `/sessions/{id}/file` | 写入会话文件 |
 
 ### 切换模型
 
@@ -89,7 +101,7 @@ POST /sessions/{id}/model
 
 ```json
 {
-  "model": "gpt-4o",
+  "model": "your-model-id",
   "provider": "openai"
 }
 ```
@@ -136,10 +148,12 @@ POST /sessions/{id}/model
 | `GET` | `/workspace/list-dir` | 列出工作目录内容 |
 | `GET` | `/workspace/search-files` | 模糊搜索文件 |
 | `GET` | `/workspace/read-file` | 读取文件内容 |
+| `GET` | `/workspace/read-file-base64` | 以 base64 读取文件 |
 | `PUT` | `/workspace/write-file` | 写入文件内容 |
+
 ---
 
-## 工作流
+## YAML 流水线
 
 多步骤 Agent 编排（DAG、fan-out、重试、人工确认门、步骤缓存）。YAML 规范与模板语法见 [WORKFLOW.md](WORKFLOW.md)。
 
@@ -153,9 +167,9 @@ POST /sessions/{id}/model
 | `POST` | `/workflows/{id}/reject` | 拒绝确认门，运行终态 `rejected` |
 
 ```bash
-curl -s -X POST http://localhost:8080/workflows -H 'Content-Type: text/yaml' --data-binary @workflow.yaml
+curl -s -H "Authorization: Bearer $EA_API_KEY" -X POST http://localhost:8080/workflows -H 'Content-Type: text/yaml' --data-binary @workflow.yaml
 # 202 {"run_id":"wf-1790344371-2333d68c","status":"running"}
-curl -s http://localhost:8080/workflows/wf-1790344371-2333d68c | jq .meta.status
+curl -s -H "Authorization: Bearer $EA_API_KEY" http://localhost:8080/workflows/wf-1790344371-2333d68c | jq .meta.status
 ```
 
 ---
@@ -165,7 +179,9 @@ curl -s http://localhost:8080/workflows/wf-1790344371-2333d68c | jq .meta.status
 serve 模式内嵌网页控制台（浏览器打开 `http://<host>:<port>/`），无需独立前端：
 
 - **对话**：原有聊天界面（WebSocket 流式 + 会话侧栏 + 模型切换）。
-- **工作流**：YAML 提交运行、运行列表与详情（步骤状态、产出、事件流、确认门批准/拒绝/取消）。运行中每 1.5s 轮询详情，列表每 5s 刷新。
+- **工作流**：动态流程、Actor、脚本、节点结果与恢复。
+- **流水线**：YAML DAG 提交、运行详情、审批与取消。
+- **设置**：托管飞书配置、配对与服务状态。
 - **会话**：会话列表、消息回看（含工具调用）、删除。
 
 需要令牌时（非本机访问或已配置 `EA_API_KEY`），页面会弹出登录框，令牌保存在浏览器 localStorage；WebSocket 连接自动附带 `?token=`。
@@ -197,3 +213,18 @@ GET /health
 | POST | `/dynamic-workflows/{id}/resume` | body 必须为 `{"acknowledge_incomplete_actions":true}`；成功返回 202 及运行记录 |
 
 取消/恢复状态冲突返回 409，详情不存在返回 404。恢复重复使用已完成结果，未完成 ask 的外部操作可能重复执行。运行中的 Actor 会话拒绝外部聊天、命令、删除、压缩和模型修改请求（409）。协议详情与限制见 [DYNAMIC_WORKFLOW.md](DYNAMIC_WORKFLOW.md)。
+
+## Slash 命令
+
+`POST /sessions/{id}/command` 的 body 为 `{"command":"/help"}`。响应包含 `output`、`should_query`、可选 `query_prompt`；若 `should_query` 为 true，客户端还需通过对话接口提交 `query_prompt`，不能把命令解析成功当成任务已经执行。
+
+## 飞书管理与语音
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/settings/feishu` | 托管配置与服务状态，不返回 Secret |
+| PUT | `/settings/feishu` | 保存 `app_id` / `app_secret` 并重启桥接；空 Secret 保留旧值 |
+| GET | `/settings/feishu/pairing` | 获取当前可用的私聊配对信息；响应禁止缓存 |
+| POST | `/asr/transcribe` | 上传音频并转写，需配置语音服务 |
+
+飞书管理接口要求 `EA_API_KEY` 和托管文件路径；使用前参见 [飞书接入](FEISHU.md)。
