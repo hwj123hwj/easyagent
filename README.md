@@ -83,6 +83,6 @@ TUI 中输入 `/help` 查看命令。`Enter` 发送，`Ctrl+J` 换行，`PgUp/Pg
 
 完整导航见 [文档索引](docs/README.md)。产品与视觉约定分别在 [PRODUCT.md](PRODUCT.md) 和 [DESIGN.md](DESIGN.md)。
 
-## 开源组件
+## 许可与开源组件
 
-第三方代码的来源与许可保留在各自目录，动态工作流尤其参见 [组件来源说明](workflow-runtime/vendor/SOURCE.md)。修改和发布时须保留对应许可及 NOTICE。
+项目代码使用 [MIT License](LICENSE)。第三方代码的来源与许可保留在各自目录，动态工作流尤其参见 [组件来源说明](workflow-runtime/vendor/SOURCE.md)。修改和发布时须保留对应许可及 NOTICE。
