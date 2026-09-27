@@ -88,7 +88,7 @@ download_release() (
     if [ -z "$tag" ]; then
         info "Fetching latest stable release..."
         tag=$(curl -fsSL --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${REPO}/releases/latest" \
-            | sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p')
+            | sed -nE 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/p')
     fi
     [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?$ ]] \
         || fail "Invalid release version: $tag"

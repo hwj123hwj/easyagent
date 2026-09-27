@@ -27,7 +27,7 @@ class InstallTest(unittest.TestCase):
         self.wrapper('curl', '''import json,os,pathlib,sys
 root=pathlib.Path(os.environ['EA_TEST_ROOT']);args=sys.argv[1:]
 url=next(a for a in args if a.startswith('https://'))
-if url.endswith('/latest'): print(json.dumps({'tag_name':'v1.2.3'},indent=2));sys.exit(0)
+if url.endswith('/latest'): print(json.dumps({'tag_name':'v1.2.3'},indent=None if os.environ.get('EA_TEST_COMPACT_JSON') else 2));sys.exit(0)
 source=root/'assets'/url.rsplit('/',1)[-1]
 if not source.exists():sys.exit(22)
 pathlib.Path(args[args.index('-o')+1]).write_bytes(source.read_bytes())
@@ -68,6 +68,12 @@ pathlib.Path(args[args.index('-o')+1]).write_bytes(source.read_bytes())
         self.assertIn('v1.2.3', (self.install / 'easyagent').read_text())
         self.assertTrue((self.install / 'easyagent-bridge').exists())
         self.assertTrue((self.install / 'workflow-runtime-licenses.tar.gz').exists())
+
+    def test_latest_discovery_accepts_compact_json(self):
+        self.env.pop('EA_VERSION')
+        self.env['EA_TEST_COMPACT_JSON'] = '1'
+        result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_hash_mismatch_keeps_previous_install(self):
         (self.assets / 'workflow-runtime.mjs').write_text('corrupt bundle')
