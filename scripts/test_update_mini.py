@@ -1,9 +1,26 @@
 """Exercise deployment gates/rollback without touching a real service (Linux/flock)."""
 import io, json, os, pathlib, shutil, subprocess, tarfile, tempfile, unittest
+from unittest.mock import patch
 
 SCRIPT = pathlib.Path(__file__).with_name('update-mini.sh')
 REVISION = 'a' * 40
 
+def inherited_test_environment():
+    return {key: value for key, value in os.environ.items() if not key.startswith('EA_DEPLOY_')}
+
+class DeploymentEnvironmentTest(unittest.TestCase):
+    def test_host_deployment_settings_are_not_inherited(self):
+        host_settings = {
+            'EA_DEPLOY_BRIDGE_BIN': '/host/easyagent-bridge',
+            'EA_DEPLOY_REQUIRE_PATH_POLICY': 'true',
+            'EA_DEPLOY_REQUIRE_OWNER_ACCESS': 'true',
+            'EA_DEPLOY_CONTROL': 'http://host.invalid/admin/deploy',
+        }
+        with patch.dict(os.environ, host_settings):
+            env = inherited_test_environment()
+        self.assertFalse(any(key.startswith('EA_DEPLOY_') for key in env))
+
+@unittest.skipUnless(shutil.which('flock'), 'requires flock (Linux)')
 class DeploymentTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -12,7 +29,10 @@ class DeploymentTest(unittest.TestCase):
         fake = self.root / 'commands'; fake.mkdir()
         self.binary = self.root / 'bin/easyagent'; self.binary.parent.mkdir()
         self.binary.write_text('previous'); self.binary.chmod(0o755)
-        self.env = dict(os.environ, PATH=str(fake)+':'+os.environ['PATH'], EA_DEPLOY_ROOT=str(self.root/'deploy'), EA_DEPLOY_BIN=str(self.binary), EA_DEPLOY_GO=str(fake/'go'), EA_DEPLOY_SERVICE='fake.service', EA_DEPLOY_API='https://fixture.invalid/repo', EA_DEPLOY_HEALTH='https://fixture.invalid/health', EA_TEST_ROOT=str(self.root), EA_TEST_REVISION=REVISION)
+        # systemd starts this test with the real deployment configuration loaded.
+        # Keep the fake updater isolated so host paths and capability gates can
+        # never leak into a test run.
+        self.env = dict(inherited_test_environment(), PATH=str(fake)+':'+os.environ['PATH'], EA_DEPLOY_ROOT=str(self.root/'deploy'), EA_DEPLOY_BIN=str(self.binary), EA_DEPLOY_GO=str(fake/'go'), EA_DEPLOY_SERVICE='fake.service', EA_DEPLOY_API='https://fixture.invalid/repo', EA_DEPLOY_HEALTH='https://fixture.invalid/health', EA_TEST_ROOT=str(self.root), EA_TEST_REVISION=REVISION)
         (self.root/'fixture-guard.py').write_text('import os,sys,pathlib\nroot=pathlib.Path(os.environ["EA_TEST_ROOT"])\nwith (root/"guard-log").open("a") as out:out.write(sys.argv[1]+"\\n")\nif sys.argv[1]=="prepare":\n mode=os.environ.get("EA_TEST_MODE")\n if mode=="busy":sys.exit(75)\n if mode=="guard-failed":sys.exit(1)\n pathlib.Path(sys.argv[4]).write_text("lease")\n')
         self.wrapper(fake, 'curl', '''import json,os,pathlib,sys,tarfile,io
 args=sys.argv[1:];root=pathlib.Path(os.environ['EA_TEST_ROOT']);rev=os.environ['EA_TEST_REVISION']
@@ -32,7 +52,10 @@ root=pathlib.Path(os.environ['EA_TEST_ROOT'])
 with (root/'builds').open('a') as out: out.write(' '.join(sys.argv[1:])+'\\n')
 if os.environ.get('EA_TEST_MODE')=='bad-tests':sys.exit(1)
 if '-o' in sys.argv:
- p=pathlib.Path(sys.argv[sys.argv.index('-o')+1]);p.write_text('new binary');p.chmod(0o755)
+ p=pathlib.Path(sys.argv[sys.argv.index('-o')+1])
+ if p.name=='easyagent' and os.environ.get('EA_DEPLOY_REQUIRE_PATH_POLICY')=='true':p.write_text('#!/bin/sh\\nif [ "$1" = "--help" ]; then echo "usage: easyagent"; exit 0; fi\\nexit 0\\n')
+ else:p.write_text('new binary')
+ p.chmod(0o755)
 ''')
         self.wrapper(fake, 'systemctl', '''import os,pathlib,sys
 with (pathlib.Path(os.environ['EA_TEST_ROOT'])/'service-log').open('a') as out:out.write(' '.join(sys.argv[1:])+'\\n')
@@ -130,7 +153,6 @@ if os.environ.get('EA_TEST_MODE')=='bad-bridge' and 'is-active' in sys.argv and 
         self.assertFalse((self.binary.parent/'workflow-runtime.mjs').exists())
 
 import importlib.util, sys, urllib.error
-from unittest.mock import patch
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('guard', str(SCRIPT.with_name('deploy-guard.py')))
 guard=importlib.util.module_from_spec(spec)
