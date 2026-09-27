@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { copyText } from './clipboard.js';
 
 export class SettingsPage {
   constructor() {
@@ -12,8 +13,11 @@ export class SettingsPage {
     document.getElementById('feishu-show-pairing').onclick = () => this.showPairing();
     document.getElementById('feishu-copy-pairing').onclick = async () => {
       const field = document.getElementById('feishu-pair-command');
-      try { await navigator.clipboard.writeText(field.value); this.message('配对指令已复制，请私聊机器人发送。'); }
-      catch { field.focus(); field.select(); this.message('指令已选中，请按 Ctrl/Cmd+C 复制。'); }
+      try {
+        await copyText(field.value);
+        document.getElementById('feishu-copy-status').textContent = '已复制，请私聊机器人发送。';
+      }
+      catch { field.focus(); field.select(); document.getElementById('feishu-copy-status').textContent = '浏览器未允许自动复制，已选中指令，请按 Ctrl/Cmd+C 复制。'; }
     };
   }
   message(text, error = false) {
@@ -63,6 +67,7 @@ export class SettingsPage {
   }
   hidePairing() {
     this.pairing.hidden = true;
+    document.getElementById('feishu-copy-status').textContent = '';
     document.getElementById('feishu-pair-command').value = '';
   }
   async showPairing() {

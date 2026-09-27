@@ -453,5 +453,5 @@ textarea.wf-prompt { font-size: 13.5px; line-height: 1.6; resize: vertical; min-
 .service-table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}
 .service-table th,.service-table td{padding:12px 8px 12px 0;border-bottom:1px solid var(--border-subtle);font-weight:400}
 .service-table thead th{color:var(--text-secondary)}.service-table td{color:var(--accent)}
-.pair-command-row{display:flex;gap:10px}.pair-command-row input{min-width:0;font-family:var(--font-mono);font-size:12px}
+.pair-command-row{display:flex;gap:10px}.pair-command-row button{flex-shrink:0;white-space:nowrap}.pair-command-row input{flex:1;min-width:0;font-family:var(--font-mono);font-size:12px}
 @media(max-width:760px){.settings-layout{padding:24px 20px 48px}.settings-heading h1{font-size:22px}.settings-heading{align-items:flex-start}.settings-input{font-size:16px}.settings-actions{align-items:flex-start;flex-direction:column;gap:10px}.nav-tab{padding:8px 11px}.pair-command-row{flex-wrap:wrap}}

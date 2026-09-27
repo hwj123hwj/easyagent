@@ -32,3 +32,25 @@ test('markdown images are not transformed into links or executable attributes', 
   assert.ok(!html.includes(' onload="bad'));
   assert.ok(!renderMarkdown('![x](data:text/html,bad)').includes('<img'));
 });
+
+test('clipboard works on HTTP and falls back when modern access is denied', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { runInNewContext } = await import('node:vm');
+  const source = (await readFile(new URL('../internal/web/static/js/clipboard.js', import.meta.url), 'utf8')).replace('export async function', 'async function') + '\ncopyText;';
+  for (const secure of [false, true]) {
+    let copied = '', removed = false, restored = false;
+    const field = { value:'', setAttribute(){}, focus(){}, select(){}, setSelectionRange(){}, remove(){removed=true;} };
+    const copy = runInNewContext(source, {
+      isSecureContext:secure,
+      navigator:secure ? {clipboard:{writeText:async()=>{throw new Error('denied');}}} : {},
+      window:{getSelection:()=>null},
+      document:{activeElement:{focus(){restored=true;}},body:{append(){}},createElement:()=>field,execCommand:command=>{assert.equal(command,'copy');copied=field.value;return true;}},
+    });
+    await copy('/pair sample');
+    assert.equal(copied,'/pair sample');assert.ok(removed);assert.ok(restored);
+  }
+  let removed = false;
+  const copy = runInNewContext(source, {isSecureContext:false,navigator:{},window:{getSelection:()=>null},document:{body:{append(){}},createElement:()=>({setAttribute(){},focus(){},select(){},setSelectionRange(){},remove(){removed=true;}}),execCommand:()=>false}});
+  await assert.rejects(copy('sample'), /clipboard unavailable/);
+  assert.ok(removed);
+});

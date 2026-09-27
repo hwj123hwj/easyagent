@@ -560,6 +560,7 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 	setAgentAuth(req, h.piAgentAPIKey)
 
 	resp, err := h.httpClient.Do(req)
@@ -569,6 +570,12 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 	defer resp.Body.Close()
 
 	slog.Debug("SSE response", "status", resp.StatusCode, "contentType", resp.Header.Get("Content-Type"))
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("agent stream HTTP %d", resp.StatusCode)
+	}
+	if strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0]) != "text/event-stream" {
+		return "", errors.New("agent response is not an event stream")
+	}
 
 	var buf strings.Builder
 	startTime := time.Now()
@@ -581,13 +588,13 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		if strings.HasPrefix(line, "event: ") {
-			currentEvent = strings.TrimPrefix(line, "event: ")
+		if strings.HasPrefix(line, "event:") {
+			currentEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 			continue
 		}
 
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
+		if strings.HasPrefix(line, "data:") {
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 
 			switch currentEvent {
 			case "text_delta":
@@ -614,6 +621,21 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 				}
 
 			case "done":
+				var ev struct {
+					FinalMessage struct {
+						Text string `json:"text"`
+					} `json:"final_message"`
+				}
+				if err := json.Unmarshal([]byte(data), &ev); err != nil {
+					return buf.String(), fmt.Errorf("invalid completion event: %w", err)
+				}
+				if strings.TrimSpace(buf.String()) == "" {
+					buf.Reset()
+					buf.WriteString(ev.FinalMessage.Text)
+				}
+				if strings.TrimSpace(buf.String()) == "" {
+					return "", errors.New("agent completed without reply text")
+				}
 				slog.Debug("SSE stream done", "textLen", buf.Len())
 				return buf.String(), nil
 
@@ -628,7 +650,7 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 		return buf.String(), fmt.Errorf("read SSE: %w", err)
 	}
 
-	return buf.String(), nil
+	return buf.String(), fmt.Errorf("agent stream ended before completion: %w", io.ErrUnexpectedEOF)
 }
 
 // pushContentToCard pushes content to the streaming card (no-op if card is nil).

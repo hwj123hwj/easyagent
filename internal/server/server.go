@@ -211,6 +211,7 @@ func (s *Server) Handler() http.Handler {
 	// Register REST API routes (these take precedence over "/" catch-all)
 	topMux.Handle("/health", restHandler)
 	topMux.Handle("/chat", restHandler)
+	topMux.Handle("/chat/", restHandler)
 	topMux.Handle("/sessions", restHandler)
 	topMux.Handle("/sessions/", restHandler)
 	topMux.Handle("/models", restHandler)

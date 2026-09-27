@@ -1,3 +1,4 @@
+import { copyText } from './clipboard.js';
 import { authFetch } from './api.js';
 import { renderMarkdown } from './markdown.js';
 
@@ -175,11 +176,7 @@ export class ChatPanel {
     const button = document.createElement('button'); button.className = 'copy-reply'; button.textContent = '复制回复';
     button.onclick = async () => {
       try {
-        if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
-        else {
-          const field = document.createElement('textarea'); field.value = text; field.className = 'clipboard-buffer'; document.body.append(field); field.select();
-          const copied = document.execCommand('copy'); field.remove(); if (!copied) throw new Error('copy unavailable');
-        }
+        await copyText(text);
         button.textContent = '已复制'; setTimeout(() => { button.textContent = '复制回复'; }, 1600);
       } catch { this._notice('浏览器不允许自动复制，请选中回复文字后复制。'); }
     };
