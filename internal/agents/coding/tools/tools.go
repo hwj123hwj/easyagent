@@ -8,20 +8,21 @@ import (
 
 // ListOptions controls how the coding-agent toolset is assembled.
 type ListOptions struct {
-	Workspace          string
-	MaxOutputLen       int
-	EnableBash         bool
-	BashOps            operations.BashOperations
-	EnableWeb          bool
-	WebTimeoutSeconds  int
-	EnableWebSearch    bool
-	FileOps            operations.FileOperations
-	ExtensionTools     []agent.Tool
-	AllowedTools       []string
-	BlockedTools       []string
-	FileMutationQueue  *FileMutationQueue     // 可选：per-file 写操作串行化
-	BackupManager      *basetools.BackupManager // 可选：操作前自动快照
-	ToolRegistry       basetools.ToolRegistry  // 可选：batch 工具需要的 tool registry
+	AllowOutsideWorkspace bool
+	Workspace             string
+	MaxOutputLen          int
+	EnableBash            bool
+	BashOps               operations.BashOperations
+	EnableWeb             bool
+	WebTimeoutSeconds     int
+	EnableWebSearch       bool
+	FileOps               operations.FileOperations
+	ExtensionTools        []agent.Tool
+	AllowedTools          []string
+	BlockedTools          []string
+	FileMutationQueue     *FileMutationQueue       // 可选：per-file 写操作串行化
+	BackupManager         *basetools.BackupManager // 可选：操作前自动快照
+	ToolRegistry          basetools.ToolRegistry   // 可选：batch 工具需要的 tool registry
 }
 
 // BaseToolNames returns the canonical coding-agent tool names before extension tools.
@@ -64,43 +65,51 @@ func BuildList(opts ListOptions) []agent.Tool {
 	toolList = append(toolList,
 		basetools.NewReadTool(
 			basetools.WithReadWorkspace(opts.Workspace),
+			basetools.WithReadPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithReadMaxOutputLen(opts.MaxOutputLen),
 			basetools.WithReadOperations(opts.FileOps),
 		),
 		basetools.NewWriteTool(
 			basetools.WithWriteWorkspace(opts.Workspace),
+			basetools.WithWritePathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithWriteOperations(opts.FileOps),
 			basetools.WithWriteMutationQueue(opts.FileMutationQueue),
 			basetools.WithWriteBackupManager(opts.BackupManager),
 		),
 		basetools.NewEditTool(
 			basetools.WithEditWorkspace(opts.Workspace),
+			basetools.WithEditPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithEditOperations(opts.FileOps),
 			basetools.WithEditMutationQueue(opts.FileMutationQueue),
 			basetools.WithEditBackupManager(opts.BackupManager),
 		),
 		basetools.NewGrepTool(
 			basetools.WithGrepWorkspace(opts.Workspace),
+			basetools.WithGrepPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithGrepMaxOutputLen(opts.MaxOutputLen),
 			basetools.WithGrepOperations(opts.FileOps),
 		),
 		basetools.NewFindTool(
 			basetools.WithFindWorkspace(opts.Workspace),
+			basetools.WithFindPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithFindOperations(opts.FileOps),
 		),
 		basetools.NewLsTool(
 			basetools.WithLsWorkspace(opts.Workspace),
+			basetools.WithLsPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithLsMaxOutputLen(opts.MaxOutputLen),
 			basetools.WithLsOperations(opts.FileOps),
 		),
 		// ── New enhanced tools ──
 		basetools.NewMultiEditTool(
 			basetools.WithMultiEditWorkspace(opts.Workspace),
+			basetools.WithMultiEditPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithMultiEditOperations(opts.FileOps),
 			basetools.WithMultiEditBackupManager(opts.BackupManager),
 		),
 		basetools.NewPatchTool(
 			basetools.WithPatchWorkspace(opts.Workspace),
+			basetools.WithPatchPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithPatchOperations(opts.FileOps),
 			basetools.WithPatchBackupManager(opts.BackupManager),
 		),
@@ -112,11 +121,13 @@ func BuildList(opts ListOptions) []agent.Tool {
 		basetools.NewLocalTimeTool(),
 		basetools.NewDeleteFileTool(
 			basetools.WithDeleteFileWorkspace(opts.Workspace),
+			basetools.WithDeleteFilePathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithDeleteFileOperations(opts.FileOps),
 			basetools.WithDeleteFileBackupManager(opts.BackupManager),
 		),
 		basetools.NewReadManyFilesTool(
 			basetools.WithReadManyFilesWorkspace(opts.Workspace),
+			basetools.WithReadManyFilesPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithReadManyFilesMaxOutputLen(opts.MaxOutputLen),
 			basetools.WithReadManyFilesOperations(opts.FileOps),
 		),

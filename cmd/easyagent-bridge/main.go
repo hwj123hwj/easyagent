@@ -69,9 +69,20 @@ func main() {
 		"callbackURL", callbackURL,
 	)
 
+	accessPath := os.Getenv("FEISHU_OWNER_STATE_FILE")
+	if accessPath == "" {
+		accessPath = filepath.Join(config.HomeDir(), "feishu-owner.json")
+	}
+	access, err := feishu.OpenOwnerAccess(accessPath, ownerOpenID)
+	if err != nil {
+		slog.Error("owner access initialization failed")
+		os.Exit(1)
+	}
+
 	// Create components
 	client := feishu.NewClient(appID, appSecret)
 	handler := feishu.NewHandler(piAgentURL, appID, client, workspace)
+	handler.SetOwnerAccess(access)
 
 	// Wrap handler for gateway
 	msgHandler := func(ctx context.Context, msg feishu.Message) {
@@ -80,8 +91,8 @@ func main() {
 
 	gateway := feishu.NewGateway(appID, appSecret, client, msgHandler)
 	handler.SetGateway(gateway)
+	gateway.SetOwnerAccess(access)
 	gateway.SetCardActionHandler(handler.HandleCardAction)
-	feishu.ConfigureStartupWelcome(gateway, appID, ownerOpenID, workspace, client)
 
 	// Start tool callback HTTP server
 	if callbackURL != "" {

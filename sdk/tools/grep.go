@@ -16,6 +16,7 @@ import (
 // GrepTool 在文件中搜索正则表达式模式。
 // 支持递归目录搜索，返回匹配的文件路径、行号和行内容。
 type GrepTool struct {
+	pathPolicy   PathPolicy
 	workspace    string // 工作目录，用于解析相对路径
 	maxOutputLen int    // 最大输出长度，0 表示使用 DefaultMaxOutputLen
 	ops          operations.FileOperations
@@ -38,6 +39,11 @@ type grepMatch struct {
 
 // GrepToolOption configures a GrepTool during construction.
 type GrepToolOption func(*GrepTool)
+
+// WithGrepPathPolicy explicitly controls access outside the workspace.
+func WithGrepPathPolicy(policy PathPolicy) GrepToolOption {
+	return func(t *GrepTool) { t.pathPolicy = policy }
+}
 
 // WithGrepWorkspace sets the workspace for path resolution.
 func WithGrepWorkspace(ws string) GrepToolOption {
@@ -129,7 +135,7 @@ func (t *GrepTool) Execute(ctx context.Context, raw json.RawMessage, onUpdate fu
 	searchPath := ResolvePath(t.workspace, params.Path)
 
 	// Check path safety if workspace is set
-	if t.workspace != "" && !IsPathSafe(t.workspace, searchPath) {
+	if !t.pathPolicy.Allows(t.workspace, searchPath) {
 		return agent.ToolResult{
 			IsError: true,
 			Content: fmt.Sprintf("path %s is outside workspace %s", params.Path, t.workspace),
@@ -248,6 +254,9 @@ func (t *GrepTool) searchDir(ctx context.Context, re *regexp.Regexp, root string
 }
 
 func (t *GrepTool) searchFile(ctx context.Context, re *regexp.Regexp, path string, maxResults int) []grepMatch {
+	if !t.pathPolicy.Allows(t.workspace, path) {
+		return nil
+	}
 	data, err := t.ops.ReadFile(ctx, path)
 	if err != nil {
 		return nil

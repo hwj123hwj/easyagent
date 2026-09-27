@@ -53,6 +53,18 @@ mkdir -p "$release"
 install -m 755 easyagent "$release/easyagent"
 if [[ -n "$BRIDGE_BIN" ]]; then install -m 755 easyagent-bridge "$release/easyagent-bridge"; fi
 if [[ -f scripts/web-test.mjs ]]; then node --test scripts/web-test.mjs; fi
+# Prevent an older branch from silently removing capabilities enabled on this host.
+if [[ ${EA_DEPLOY_REQUIRE_PATH_POLICY:-false} == true ]]; then
+  help_text=$("$release/easyagent" --help 2>&1)
+  [[ "$help_text" == *"-allow-outside-workspace"* ]] || { echo 'Release lacks required path policy switch' >&2; exit 1; }
+fi
+if [[ -n "$BRIDGE_BIN" && ${EA_DEPLOY_REQUIRE_OWNER_ACCESS:-false} == true ]]; then
+  "$GO_BIN" tool nm "$release/easyagent-bridge" > "$build_dir/bridge-symbols"
+  grep -Fq 'internal/feishu.OpenOwnerAccess' "$build_dir/bridge-symbols" &&
+    grep -Fq 'internal/feishu.(*OwnerAccess).Allowed' "$build_dir/bridge-symbols" || {
+      echo 'Release lacks required bridge owner access checks' >&2; exit 1;
+    }
+fi
 # Keep an exact copy of the previous binary even if it predates this updater.
 previous="$DEPLOY_ROOT/previous-binary"
 if [[ -f "$BIN_PATH" ]]; then cp -p "$BIN_PATH" "$previous"; else echo 'Existing service binary is required for rollback' >&2; exit 1; fi

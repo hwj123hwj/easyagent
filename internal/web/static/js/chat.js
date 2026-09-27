@@ -135,7 +135,7 @@ export class ChatPanel {
   }
   async _send() {
     const text = this.input.value.trim();
-    if (!text || this.state.streaming || this.creating || this.loading) return;
+    if (!text || this.state.streaming || this.creating || this.loading || this.state.modelChanging || this.state.modelInfoLoading) return;
     if (this.busy.size) { this._notice('另一个对话正在执行，请等待完成或返回该对话停止。'); return; }
     if (!this.ws.connected) { this._notice('尚未连接到服务，消息已保留。'); return; }
     let sessionId = this.state.currentSessionId;
@@ -236,9 +236,9 @@ export class ChatPanel {
   _finalizeWithError(error) { this._notice(error || '任务失败，请重试。'); this._finalizeStream(); }
   _updateButtons() {
     this.sendBtn.style.display = this.state.streaming ? 'none' : 'flex'; this.stopBtn.style.display = this.state.streaming ? 'flex' : 'none';
-    this.sendBtn.disabled = !this.input.value.trim() || !this.ws.connected || this.creating || this.loading || this.busy.size > 0;
+    this.sendBtn.disabled = !this.input.value.trim() || !this.ws.connected || this.creating || this.loading || this.busy.size > 0 || this.state.modelChanging || this.state.modelInfoLoading;
     this.stopBtn.disabled = !this.ws.connected;
-    document.getElementById('model-select').disabled = !!this.state.streaming;
+    document.getElementById('model-select').disabled = !!(this.state.streaming || this.state.modelChanging || this.state.modelInfoLoading || this.creating || !this.ws.connected || !this.state.models?.length);
     this.status.textContent = this.state.streaming ? '正在处理' : this.ws.connected ? '准备就绪' : '等待连接';
   }
   _resizeInput() { this.input.style.height = 'auto'; this.input.style.height = Math.min(this.input.scrollHeight, 200) + 'px'; }

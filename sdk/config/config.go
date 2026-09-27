@@ -66,12 +66,13 @@ type Config struct {
 	OpenAIBaseURL string
 
 	// Tool sandbox
-	Workspace         string
-	EnableBash        bool
-	AutoApprove       bool // 全权模式：跳过危险工具的 y/n 确认（信得过自己环境再开）
-	EnableWeb         bool
-	WebTimeoutSeconds int
-	EnableWebSearch   bool
+	AllowOutsideWorkspace bool // Explicit file-path policy; independent of confirmation.
+	Workspace             string
+	EnableBash            bool
+	AutoApprove           bool // 全权模式：跳过危险工具的 y/n 确认（信得过自己环境再开）
+	EnableWeb             bool
+	WebTimeoutSeconds     int
+	EnableWebSearch       bool
 
 	// Execution backend
 	ExecutionMode string // "local" (default) or "ssh"
@@ -197,6 +198,7 @@ func (c *Config) LoadFromEnv() {
 	}
 	c.EnableBash = getEnvBool("EA_ENABLE_BASH", c.EnableBash)
 	c.AutoApprove = getEnvBool("EA_AUTO_APPROVE", c.AutoApprove)
+	c.AllowOutsideWorkspace = getEnvBool("EA_ALLOW_OUTSIDE_WORKSPACE", c.AllowOutsideWorkspace)
 	c.EnableWeb = getEnvBool("EA_ENABLE_WEB", c.EnableWeb)
 	c.WebTimeoutSeconds = getEnvInt("EA_WEB_TIMEOUT_SECONDS", c.WebTimeoutSeconds)
 	c.EnableWebSearch = getEnvBool("EA_ENABLE_WEB_SEARCH", c.EnableWebSearch)
@@ -333,10 +335,11 @@ func LoadDotEnv(path string) error {
 // yamlConfig is the YAML representation of Config for file-based configuration.
 // Uses yaml tags so users can write easyagent.yaml (legacy pi-go.yaml is still accepted).
 type yamlConfig struct {
-	Name    string `yaml:"name,omitempty"`
-	Host    string `yaml:"host,omitempty"`
-	Port    int    `yaml:"port,omitempty"`
-	DataDir string `yaml:"data_dir,omitempty"`
+	AllowOutsideWorkspace bool   `yaml:"allow_outside_workspace,omitempty"`
+	Name                  string `yaml:"name,omitempty"`
+	Host                  string `yaml:"host,omitempty"`
+	Port                  int    `yaml:"port,omitempty"`
+	DataDir               string `yaml:"data_dir,omitempty"`
 
 	Provider string `yaml:"provider,omitempty"`
 
@@ -432,6 +435,9 @@ func (c *Config) LoadFromYAML(path string) error {
 	}
 	if yc.EnableBash {
 		c.EnableBash = true
+	}
+	if yc.AllowOutsideWorkspace {
+		c.AllowOutsideWorkspace = true
 	}
 	if yc.AutoApprove {
 		c.AutoApprove = true

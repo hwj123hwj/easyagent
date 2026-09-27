@@ -17,9 +17,10 @@ import (
 // PatchTool applies standard unified diff patches to modify multiple files.
 // Supports adding, updating, and deleting files with context-aware changes.
 type PatchTool struct {
-	workspace string
-	ops       operations.FileOperations
-	backupMgr *BackupManager
+	pathPolicy PathPolicy
+	workspace  string
+	ops        operations.FileOperations
+	backupMgr  *BackupManager
 }
 
 type PatchParams struct {
@@ -27,6 +28,11 @@ type PatchParams struct {
 }
 
 type PatchOption func(*PatchTool)
+
+// WithPatchPathPolicy explicitly controls access outside the workspace.
+func WithPatchPathPolicy(policy PathPolicy) PatchOption {
+	return func(t *PatchTool) { t.pathPolicy = policy }
+}
 
 func WithPatchWorkspace(ws string) PatchOption {
 	return func(t *PatchTool) { t.workspace = ws }
@@ -132,7 +138,7 @@ func (t *PatchTool) Execute(ctx context.Context, raw json.RawMessage, _ func(age
 		filePath = filepath.Clean(filePath)
 
 		// Path safety
-		if t.workspace != "" && !IsPathSafe(t.workspace, filePath) {
+		if !t.pathPolicy.Allows(t.workspace, filePath) {
 			return agent.ToolResult{IsError: true, Content: fmt.Sprintf("access denied: %s is outside workspace", filePath)}, fmt.Errorf("path escapes workspace")
 		}
 
@@ -191,10 +197,10 @@ func (t *PatchTool) Execute(ctx context.Context, raw json.RawMessage, _ func(age
 
 // patchHunk represents a parsed section of a unified diff.
 type patchHunk struct {
-	Path    string       // target file path
-	Type    string       // "add", "delete", "update"
-	Content string       // for "add": full file content
-	Chunks  []diffChunk  // for "update": list of diff chunks
+	Path    string      // target file path
+	Type    string      // "add", "delete", "update"
+	Content string      // for "add": full file content
+	Chunks  []diffChunk // for "update": list of diff chunks
 }
 
 // diffChunk represents a single change hunk within a file diff.
@@ -205,7 +211,7 @@ type diffChunk struct {
 }
 
 type diffLine struct {
-	Type    byte   // ' ' context, '-' removed, '+' added
+	Type    byte // ' ' context, '-' removed, '+' added
 	Content string
 }
 

@@ -42,6 +42,7 @@ async function onSessionChange(sessionId) {
   await chat.selectSession(sessionId);
 }
 state.createSession = () => sidebar.createSession({select:false});
+state.refreshControls = () => chat._updateButtons();
 state.selectSession = id => sidebar.selectSession(id);
 state.onSessionUpdated = () => sidebar.loadSessions();
 state.onPromptSent = (text) => {

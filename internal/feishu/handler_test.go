@@ -367,7 +367,12 @@ func TestLoadRoutes_InvalidJSON(t *testing.T) {
 
 func newTestHandler(t *testing.T) *Handler {
 	t.Helper()
+	access, err := OpenOwnerAccess(filepath.Join(t.TempDir(), "owner.json"), "test-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &Handler{
+		access:     access,
 		routes:     make(map[string]*ChatRoute),
 		routesFile: filepath.Join(t.TempDir(), "routes.json"),
 		workspace:  "/default/workspace",
@@ -437,7 +442,8 @@ func cardActionEvent(chatKey, action, commitMessage string) *callback.CardAction
 	}
 	return &callback.CardActionTriggerEvent{
 		Event: &callback.CardActionTriggerRequest{
-			Context: &callback.Context{OpenChatID: chatKey},
+			Operator: &callback.Operator{OpenID: "test-owner"},
+			Context:  &callback.Context{OpenChatID: chatKey},
 			Action: &callback.CallBackAction{
 				Value: map[string]interface{}{
 					worktreeCardActionKey: action,

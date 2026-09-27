@@ -22,9 +22,10 @@ type MutationQueue interface {
 // Supports single replacement (old_string must be unique) and replace_all mode.
 // If file doesn't exist and old_string is empty, creates a new file.
 type EditTool struct {
+	pathPolicy    PathPolicy
 	workspace     string // 工作目录，用于解析相对路径
 	ops           operations.FileOperations
-	mutationQueue MutationQueue // 可选：per-file 串行化
+	mutationQueue MutationQueue  // 可选：per-file 串行化
 	backupMgr     *BackupManager // 可选：操作前自动快照
 }
 
@@ -44,6 +45,11 @@ type EditEntry struct {
 
 // EditToolOption configures an EditTool during construction.
 type EditToolOption func(*EditTool)
+
+// WithEditPathPolicy explicitly controls access outside the workspace.
+func WithEditPathPolicy(policy PathPolicy) EditToolOption {
+	return func(t *EditTool) { t.pathPolicy = policy }
+}
 
 // WithEditWorkspace sets the workspace for path resolution.
 func WithEditWorkspace(ws string) EditToolOption {
@@ -171,20 +177,20 @@ func (t *EditTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate 
 
 	cleanPath := ResolvePath(t.workspace, params.Path)
 
+	// Check path safety if workspace is set
+	if !t.pathPolicy.Allows(t.workspace, cleanPath) {
+		return agent.ToolResult{
+			IsError: true,
+			Content: fmt.Sprintf("path %s is outside workspace %s", params.Path, t.workspace),
+		}, fmt.Errorf("path escapes workspace")
+	}
+
 	// Auto-snapshot before modification (if backup manager is set)
 	if t.backupMgr != nil {
 		if _, err := t.backupMgr.Snapshot(cleanPath); err != nil {
 			// Non-fatal: log but continue with the edit
 			_ = err
 		}
-	}
-
-	// Check path safety if workspace is set
-	if t.workspace != "" && !IsPathSafe(t.workspace, cleanPath) {
-		return agent.ToolResult{
-			IsError: true,
-			Content: fmt.Sprintf("path %s is outside workspace %s", params.Path, t.workspace),
-		}, fmt.Errorf("path escapes workspace")
 	}
 
 	// Read existing file

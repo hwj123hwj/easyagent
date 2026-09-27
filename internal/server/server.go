@@ -655,10 +655,11 @@ func (s *Server) getSessionInfo(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id":        sess.SessionID(),
-		"provider":  provider,
-		"model":     modelID,
-		"workspace": workspace,
+		"id":                      sess.SessionID(),
+		"provider":                provider,
+		"model":                   modelID,
+		"workspace":               workspace,
+		"allow_outside_workspace": sess.Config().AllowOutsideWorkspace,
 	})
 }
 

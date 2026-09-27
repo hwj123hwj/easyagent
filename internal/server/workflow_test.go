@@ -53,7 +53,7 @@ func newWorkflowTestServer(t *testing.T) (*Server, *fakeWFFactory) {
 	return srv, f
 }
 
-func waitForRunStatus(t *testing.T, srv *Server, runID, want string) map[string]any {
+func waitForRunStatus(t *testing.T, srv *Server, runID string, want ...string) map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -65,8 +65,10 @@ func waitForRunStatus(t *testing.T, srv *Server, runID, want string) map[string]
 			Meta workflow.RunMeta `json:"meta"`
 		}
 		require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-		if resp.Meta.Status == want {
-			return map[string]any{"meta": resp.Meta}
+		for _, status := range want {
+			if resp.Meta.Status == status {
+				return map[string]any{"meta": resp.Meta}
+			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -237,16 +239,8 @@ steps:
 	srv.Handler().ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	time.Sleep(100 * time.Millisecond)
-	req = localReq(http.MethodGet, "/workflows/"+startResp.RunID, nil)
-	w = httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp struct {
-		Meta workflow.RunMeta `json:"meta"`
-	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	assert.Contains(t, []string{workflow.StatusCompleted, workflow.StatusCancelled}, resp.Meta.Status)
+	// Cancellation completes asynchronously; wait for its persisted terminal state.
+	waitForRunStatus(t, srv, startResp.RunID, workflow.StatusCompleted, workflow.StatusCancelled)
 }
 
 func TestServer_WorkflowGetUnknownID(t *testing.T) {

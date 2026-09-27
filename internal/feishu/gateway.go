@@ -37,6 +37,7 @@ type CardActionHandler func(ctx context.Context, event *callback.CardActionTrigg
 
 // Gateway manages a WebSocket long connection to Feishu event subscription.
 type Gateway struct {
+	access      *OwnerAccess
 	appID       string
 	appSecret   string
 	client      *Client // for API calls like image download
@@ -89,6 +90,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 		})
 	if g.cardHandler != nil {
 		dispatcher.OnP2CardActionTrigger(func(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
+			if event == nil || event.Event == nil || event.Event.Operator == nil || !g.access.Allowed(event.Event.Operator.OpenID) {
+				return cardToast("error", "未授权"), nil
+			}
 			return g.cardHandler(ctx, event)
 		})
 	}
@@ -96,6 +100,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	wsClient := larkws.NewClient(g.appID, g.appSecret,
 		larkws.WithEventHandler(dispatcher),
 		larkws.WithOnReady(func() {
+			slog.Info("feishu WebSocket connected")
 			if g.onReady != nil {
 				g.onReady()
 			}
@@ -104,7 +109,27 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	slog.Info("feishu gateway connecting via WebSocket...")
 
-	err := wsClient.Start(ctx)
+	return runGatewayClient(ctx, wsClient)
+}
+
+type gatewayClient interface {
+	Start(context.Context) error
+	Close()
+}
+
+// The SDK's Start parks indefinitely after connecting, even after cancellation.
+// Close explicitly so service shutdown does not wait for systemd's kill timeout.
+func runGatewayClient(ctx context.Context, client gatewayClient) error {
+	done := make(chan error, 1)
+	go func() { done <- client.Start(ctx) }()
+	var err error
+	select {
+	case <-ctx.Done():
+		client.Close()
+		return nil
+	case err = <-done:
+		client.Close()
+	}
 	if err != nil {
 		slog.Error("feishu ws client stopped", "error", err)
 	}
@@ -138,6 +163,24 @@ func (g *Gateway) handleEvent(ctx context.Context, event *larkim.P2MessageReceiv
 	msgType := "text"
 	if msg.MessageType != nil {
 		msgType = *msg.MessageType
+	}
+
+	// Gate before media downloads, choice waiters, dedup, or handler dispatch.
+	actor := ""
+	if sender != nil && sender.SenderId != nil && sender.SenderType != nil && *sender.SenderType == "user" {
+		actor = derefStr(sender.SenderId.OpenId)
+	}
+	if !g.access.Allowed(actor) {
+		if msgType == "text" && actor != "" {
+			m := Message{Text: extractText(msg.Content), SenderOpenID: actor, ChatType: derefStr(msg.ChatType), MsgType: msgType}
+			if g.access.Pair(m) {
+				_, _ = g.client.ReplyMessage(ctx, derefStr(msg.MessageId), derefStr(msg.ChatId), "配对完成，仅此飞书账号获授权。")
+			}
+		}
+		return
+	}
+	if msgType == "text" && isPairCommand(extractText(msg.Content)) {
+		return
 	}
 
 	// Extract text content based on message type
@@ -553,3 +596,5 @@ func derefStr(s *string) string {
 	}
 	return *s
 }
+
+func (g *Gateway) SetOwnerAccess(access *OwnerAccess) { g.access = access }

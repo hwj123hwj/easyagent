@@ -14,25 +14,31 @@ import (
 // MultiEditTool performs multiple edits sequentially on the same file or across multiple files.
 // It is transactional per file: if any edit fails, all edits to that file are rolled back.
 type MultiEditTool struct {
-	workspace string
-	ops       operations.FileOperations
-	backupMgr *BackupManager
+	pathPolicy PathPolicy
+	workspace  string
+	ops        operations.FileOperations
+	backupMgr  *BackupManager
 }
 
 // MultiEditSingleEntry represents one edit operation within a multi-edit call.
 type MultiEditSingleEntry struct {
-	FilePath  string `json:"file_path,omitempty"`
-	OldString string `json:"old_string"`
-	NewString string `json:"new_string"`
-	ReplaceAll bool  `json:"replace_all,omitempty"`
+	FilePath   string `json:"file_path,omitempty"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
 type MultiEditParams struct {
-	FilePath string               `json:"file_path"`
+	FilePath string                 `json:"file_path"`
 	Edits    []MultiEditSingleEntry `json:"edits"`
 }
 
 type MultiEditOption func(*MultiEditTool)
+
+// WithMultiEditPathPolicy explicitly controls access outside the workspace.
+func WithMultiEditPathPolicy(policy PathPolicy) MultiEditOption {
+	return func(t *MultiEditTool) { t.pathPolicy = policy }
+}
 
 func WithMultiEditWorkspace(ws string) MultiEditOption {
 	return func(t *MultiEditTool) { t.workspace = ws }
@@ -131,8 +137,8 @@ func (t *MultiEditTool) Execute(ctx context.Context, raw json.RawMessage, onUpda
 
 	// Group edits by target file for transactional handling
 	type fileEdits struct {
-		path   string
-		edits  []MultiEditSingleEntry
+		path  string
+		edits []MultiEditSingleEntry
 	}
 	fileGroups := make(map[string]*fileEdits)
 	groupOrder := []string{} // preserve order
@@ -178,7 +184,7 @@ func (t *MultiEditTool) Execute(ctx context.Context, raw json.RawMessage, onUpda
 // applyEditsToFile applies multiple edits to a single file with transactional rollback.
 func (t *MultiEditTool) applyEditsToFile(ctx context.Context, filePath string, edits []MultiEditSingleEntry) (string, int, error) {
 	// Path safety check
-	if t.workspace != "" && !IsPathSafe(t.workspace, filePath) {
+	if !t.pathPolicy.Allows(t.workspace, filePath) {
 		return "", 0, fmt.Errorf("path %s is outside workspace", filePath)
 	}
 
