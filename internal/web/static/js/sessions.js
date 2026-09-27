@@ -7,6 +7,9 @@ export class SessionsPage {
   constructor(state) {
     this.state = state;
     this.sessions = [];
+    this.detailRequest = 0;
+    this.$overview = document.getElementById('sess-overview');
+    this.$close = document.getElementById('sess-close-btn');
 
     this.$table = document.getElementById('sess-table');
     this.$messages = document.getElementById('sess-messages');
@@ -14,12 +17,28 @@ export class SessionsPage {
     this.$msgTitle = document.getElementById('sess-msg-title');
 
     document.getElementById('sess-refresh-btn').onclick = () => this.load();
-    document.getElementById('sess-close-btn').onclick = () => { this.$messages.hidden = true; };
+    this.$close.onclick = () => this.closeMessages();
+    this.$messages.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); this.closeMessages(); }
+    });
   }
 
   activate() {
     this.load();
   }
+
+  closeMessages(restoreFocus = true) {
+    this.detailRequest++;
+    this.$messages.hidden = true;
+    this.$overview.hidden = false;
+    this.$overview.scrollTop = this.listScrollTop || 0;
+    if (restoreFocus) {
+      const target = this.returnFocus?.isConnected ? this.returnFocus : document.getElementById('sess-refresh-btn');
+      target.focus({preventScroll:true});
+    }
+  }
+
+  deactivate() { this.closeMessages(false); }
 
   async load() {
     let sessions;
@@ -72,15 +91,32 @@ export class SessionsPage {
   }
 
   async viewMessages(sessionID) {
+    const request = ++this.detailRequest;
+    this.returnFocus = document.activeElement;
+    this.listScrollTop = this.$overview.scrollTop;
+    this.$overview.hidden = true;
+    this.$messages.hidden = false;
+    this.$msgTitle.textContent = '会话消息';
+    this.$msgList.innerHTML = '<p class="wf-empty" role="status">正在加载消息…</p>';
+    this.$msgList.scrollTop = 0;
+    this.$close.focus({preventScroll:true});
     let messages;
     try {
       messages = await api.get(`/sessions/${sessionID}/messages`);
     } catch (e) {
-      alert('加载失败：' + e.message);
+      if (request !== this.detailRequest) return;
+      this.$msgList.innerHTML = '';
+      const error = document.createElement('p');
+      error.className = 'wf-empty';
+      error.setAttribute('role', 'alert');
+      error.textContent = '加载失败：' + e.message + '。请返回会话后重试。';
+      this.$msgList.appendChild(error);
       return;
     }
+    if (request !== this.detailRequest) return;
     this.$msgTitle.textContent = `会话消息 · ${shortID(sessionID)}`;
     this.$msgList.innerHTML = '';
+    if (!messages?.length) this.$msgList.innerHTML = '<p class="wf-empty">这段会话还没有消息</p>';
     for (const msg of messages || []) {
       const item = document.createElement('div');
       item.className = 'sess-msg sess-msg-' + msg.role;
