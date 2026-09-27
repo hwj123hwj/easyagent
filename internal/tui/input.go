@@ -5,23 +5,24 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // InputModel is a multi-line text input editor.
 // Supports cursor movement, word deletion, undo, and history.
 type InputModel struct {
-	lines       []string
-	cursorX     int
-	cursorY     int
-	undoStack   []InputSnapshot
-	history     []string
-	histIdx     int
-	draftLines  []string // saved draft when entering history mode
+	lines        []string
+	cursorX      int
+	cursorY      int
+	undoStack    []InputSnapshot
+	history      []string
+	histIdx      int
+	draftLines   []string // saved draft when entering history mode
 	draftCursorX int
 	draftCursorY int
-	prompt      string
-	width       int // terminal width for soft-wrap; 0 = unknown (no wrap)
-	theme       *Theme
+	prompt       string
+	width        int // terminal width for soft-wrap; 0 = unknown (no wrap)
+	theme        *Theme
 }
 
 // InputSnapshot captures input state for undo.
@@ -233,6 +234,41 @@ func (im *InputModel) renderSegmentWithCursor(seg string, localX int) string {
 func (im *InputModel) cursorHighlight(ch string) string {
 	// Use lipgloss reverse video — safer than raw escape codes.
 	return im.theme.InputPrompt.Reverse(true).Render(ch)
+}
+
+// CursorColumn 返回光标在 View() 最后一行上的可视列（0 基）。
+// bubbletea 每帧渲染完把终端光标停在最后一行，输入法内联组词（预编辑串）
+// 跟随终端光标位置；配合 tea.SetCursorColumn（HWJ bubbletea 本地补丁）
+// 让组词串落在光标处而不是行首。
+// 光标不在 View 最后一行（多行输入时编辑前面的行）时返回 0，无更好落点。
+func (im *InputModel) CursorColumn() int {
+	// 找 View 实际渲染的最后一个段（空逻辑行不产生渲染行）
+	lastY := -1
+	var segments []string
+	for i := len(im.lines) - 1; i >= 0; i-- {
+		segments = wrapVisual(im.lines[i], im.wrapWidth(i == 0))
+		if len(segments) > 0 {
+			lastY = i
+			break
+		}
+	}
+	if lastY < 0 || im.cursorY != lastY {
+		return 0
+	}
+	segIdx := len(segments) - 1
+	if !segmentHoldsCursor(segments, segIdx, im.cursorX) {
+		return 0
+	}
+	prefix := "  " // 续段缩进
+	if lastY == 0 && segIdx == 0 {
+		prefix = im.prompt + " " // 首段 "› "
+	}
+	localX := segmentCursorOffset(segments, segIdx, im.cursorX)
+	segRunes := []rune(segments[segIdx])
+	if localX > len(segRunes) {
+		localX = len(segRunes)
+	}
+	return lipgloss.Width(prefix) + lipgloss.Width(string(segRunes[:localX]))
 }
 
 // sanitizeRunes filters out non-printable control characters from a rune slice.
