@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -502,4 +503,100 @@ func TestStreamHTTPError(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "应产生 EventError 事件")
+}
+
+// ─── 回归：断流重试（2026-09-27 踩坑）───────────────────────────────────────────
+// 场景：glm coding 端点长思考静默期被前置 LB 掐断，客户端读到 unexpected EOF，
+// 或收到无内容的 finish_reason（网关补的假帧）。TUI 直接显示 "Error: unexpected EOF"。
+
+// shortRetry 把退避间隔缩到毫秒级，测试不真等 1s/2s。
+func shortRetry(t *testing.T) {
+	t.Helper()
+	old := streamRetryDelay
+	streamRetryDelay = 5 * time.Millisecond
+	t.Cleanup(func() { streamRetryDelay = old })
+}
+
+// TestStreamRetriesEmptyThenSucceeds：第一次请求空流断开（EOF），重试后拿到正常内容。
+func TestStreamRetriesEmptyThenSucceeds(t *testing.T) {
+	shortRetry(t)
+
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if atomic.AddInt32(&hits, 1) == 1 {
+			// 首次：不发任何 data 直接断开 → scanner.Err() = unexpected EOF
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", textChunk("恢复后的回答"))
+		fmt.Fprintf(w, "data: %s\n\n", finishChunk("stop"))
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	p := NewOpenAIProvider("test-key", srv.URL)
+
+	events, msg, err := collectStream(t, p)
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&hits), "should retry exactly once")
+	assert.Equal(t, "恢复后的回答", msg.Text)
+	assert.Equal(t, ai.StopReasonStop, msg.StopReason)
+
+	// 只应有一次 EventStart（重试不重复推流开始事件）
+	starts := 0
+	for _, ev := range events {
+		if _, ok := ev.(ai.EventStart); ok {
+			starts++
+		}
+	}
+	assert.Equal(t, 1, starts)
+}
+
+// TestStreamRetriesFakeFinishReason：上游断流后网关补了无内容的 finish_reason=length（假帧），
+// 同样要重试而不是把空消息标成 length 收场。
+func TestStreamRetriesFakeFinishReason(t *testing.T) {
+	shortRetry(t)
+
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if atomic.AddInt32(&hits, 1) == 1 {
+			fmt.Fprintf(w, "data: %s\n\n", finishChunk("length"))
+			fmt.Fprintf(w, "data: [DONE]\n\n")
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", textChunk("第二次成功"))
+		fmt.Fprintf(w, "data: %s\n\n", finishChunk("stop"))
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	p := NewOpenAIProvider("test-key", srv.URL)
+
+	_, msg, err := collectStream(t, p)
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&hits))
+	assert.Equal(t, "第二次成功", msg.Text)
+	assert.Equal(t, ai.StopReasonStop, msg.StopReason)
+}
+
+// TestStreamEmptyExhaustsRetries：连续空流，重试耗尽后必须报错，不能静默空收场。
+func TestStreamEmptyExhaustsRetries(t *testing.T) {
+	shortRetry(t)
+
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		atomic.AddInt32(&hits, 1)
+		// 空流直接断开
+	}))
+	t.Cleanup(srv.Close)
+	p := NewOpenAIProvider("test-key", srv.URL)
+
+	_, msg, err := collectStream(t, p)
+
+	require.Error(t, err)
+	assert.Equal(t, int32(streamRetryAttempts), atomic.LoadInt32(&hits))
+	assert.Equal(t, ai.StopReasonError, msg.StopReason)
+	assert.Contains(t, err.Error(), "empty stream")
 }
