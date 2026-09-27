@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -193,7 +194,15 @@ func (g *Gateway) handleEvent(ctx context.Context, event *larkim.P2MessageReceiv
 	case "image":
 		text = g.handleImageMessage(ctx, msg)
 	case "post":
-		text = g.handlePostMessage(ctx, msg)
+		var err error
+		text, err = g.handlePostMessage(ctx, msg)
+		if err != nil {
+			slog.Warn("invalid rich text message", "messageID", messageID, "error", err)
+			if !g.isDuplicate(messageID) && g.client != nil {
+				_, _ = g.client.ReplyMessage(ctx, messageID, derefStr(msg.ChatId), "这条富文本消息未能读取，未提交给 Agent。请重发为纯文本，或分段发送。")
+			}
+			return
+		}
 	default:
 		slog.Debug("unsupported message type, skipping", "type", msgType, "messageID", messageID)
 		return
@@ -442,32 +451,41 @@ func (g *Gateway) handleImageMessage(ctx context.Context, msg *larkim.EventMessa
 }
 
 // handlePostMessage parses a post (rich text) message into markdown.
-func (g *Gateway) handlePostMessage(ctx context.Context, msg *larkim.EventMessage) string {
+func (g *Gateway) handlePostMessage(ctx context.Context, msg *larkim.EventMessage) (string, error) {
 	if msg.Content == nil {
-		return "[富文本消息]"
+		return "", fmt.Errorf("missing post content")
 	}
-
-	// Post content format: {"zh_cn": {"title": "...", "content": [[...]]}}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(*msg.Content), &raw); err != nil {
-		return "[富文本消息解析失败]"
-	}
-
-	// Find the first locale block
-	var postBody struct {
+	type body struct {
 		Title   string          `json:"title"`
 		Content [][]postElement `json:"content"`
 	}
-
-	var parsed bool
-	for _, v := range raw {
-		if err := json.Unmarshal(v, &postBody); err == nil && postBody.Content != nil {
-			parsed = true
-			break
+	var postBody body
+	// Receive events use a direct body; some integrations send locale-wrapped bodies.
+	if err := json.Unmarshal([]byte(*msg.Content), &postBody); err != nil || postBody.Content == nil {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(*msg.Content), &raw); err != nil {
+			return "", fmt.Errorf("invalid post JSON")
 		}
-	}
-	if !parsed {
-		return "[富文本消息解析失败]"
+		keys := make([]string, 0, len(raw))
+		for key := range raw {
+			if key != "zh_cn" && key != "en_us" {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		keys = append([]string{"zh_cn", "en_us"}, keys...)
+		parsed := false
+		for _, key := range keys {
+			var candidate body
+			if err := json.Unmarshal(raw[key], &candidate); err == nil && candidate.Content != nil {
+				postBody = candidate
+				parsed = true
+				break
+			}
+		}
+		if !parsed {
+			return "", fmt.Errorf("missing post paragraphs")
+		}
 	}
 
 	var parts []string
@@ -479,8 +497,12 @@ func (g *Gateway) handlePostMessage(ctx context.Context, msg *larkim.EventMessag
 		var paraText string
 		for _, elem := range paragraph {
 			switch elem.Tag {
-			case "text":
+			case "text", "md":
 				paraText += elem.Text
+			case "code_block":
+				paraText += "\n```" + elem.Language + "\n" + elem.Text + "\n```\n"
+			case "hr":
+				paraText += "\n---\n"
 			case "a":
 				paraText += fmt.Sprintf("[%s](%s)", elem.Text, elem.Href)
 			case "at":
@@ -503,14 +525,15 @@ func (g *Gateway) handlePostMessage(ctx context.Context, msg *larkim.EventMessag
 	}
 
 	if len(parts) == 0 {
-		return "[空富文本消息]"
+		return "", fmt.Errorf("post contains no readable content")
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n"), nil
 }
 
 // postElement represents a single element in a post message paragraph.
 type postElement struct {
 	Tag      string `json:"tag"`
+	Language string `json:"language"`
 	Text     string `json:"text"`
 	Href     string `json:"href"`
 	ImageKey string `json:"image_key"`

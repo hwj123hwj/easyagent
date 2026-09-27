@@ -65,7 +65,7 @@ func NewHandler(piAgentURL, appID string, client *Client, workspace string) *Han
 		client:        client,
 		routes:        make(map[string]*ChatRoute),
 		routesFile:    defaultRoutesFile(),
-		httpClient:    &http.Client{Timeout: 10 * time.Minute},
+		httpClient:    &http.Client{Timeout: 31 * time.Minute}, // Core bounds a chat turn to 30 minutes.
 		workspace:     workspace,
 		senders:       make(map[string]string),
 	}

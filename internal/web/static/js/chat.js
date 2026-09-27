@@ -135,13 +135,16 @@ export class ChatPanel {
       const messages = await resp.json();
       if (id !== this.state.currentSessionId) return;
       this.clear();
+      const completed = new Set((messages || []).filter(msg => msg.role === 'toolResult' || msg.role === 'tool').map(msg => msg.tool_call_id));
       for (const msg of messages || []) {
         if (msg.role === 'user') this._addUserMessage(msg.content || '');
         else if (msg.role === 'assistant') {
           if (msg.content) this._addAssistantMessage(msg.content);
           if (msg.tool_calls?.length) {
             this._startAssistantStream();
-            for (const tc of msg.tool_calls) this._addToolCall(tc.id, tc.name, 'done', tc.args);
+            for (const tc of msg.tool_calls) {
+              this._addToolCall(tc.id, tc.name, completed.has(tc.id) ? 'done' : 'unknown', tc.args);
+            }
           }
         } else if (msg.role === 'toolResult' || msg.role === 'tool') this._updateToolCall(msg.tool_call_id, msg.is_error ? 'error' : 'done', msg.content);
       }
@@ -222,16 +225,16 @@ export class ChatPanel {
     const el = document.createElement('details'); el.className = `tool-call ${status}`;
     el.innerHTML = '<summary><span class="tool-name"></span><span class="tool-status"></span></summary><pre class="tool-args"></pre><pre class="tool-result"></pre>';
     el.querySelector('.tool-name').textContent = name || '工具';
-    el.querySelector('.tool-status').textContent = status === 'running' ? '执行中' : '已完成';
+    el.querySelector('.tool-status').textContent = status === 'running' ? '执行中' : status === 'unknown' ? '未收到结果' : '已完成';
     const argEl = el.querySelector('.tool-args'); argEl.textContent = args ? (typeof args === 'string' ? args : JSON.stringify(args, null, 2)) : ''; argEl.hidden = !args;
-    el.querySelector('.tool-result').textContent = status === 'running' ? '等待执行结果…' : '暂无输出';
+    el.querySelector('.tool-result').textContent = status === 'running' ? '等待执行结果…' : status === 'unknown' ? '未保存执行结果，可能仍在运行或已中断。请先确认执行状态，避免重复执行有副作用的操作。' : '暂无输出';
     group.append(el); this._currentToolCalls[id] = el;
     group.querySelector('summary').textContent = `工具执行 · ${group.querySelectorAll('.tool-call').length} 项`;
     this._scrollToBottom();
   }
   _updateToolCall(id, status, result) {
     const el = this._currentToolCalls[id]; if (!el) return;
-    el.classList.remove('running', 'done', 'error'); el.classList.add(status);
+    el.classList.remove('running', 'done', 'error', 'unknown'); el.classList.add(status);
     el.querySelector('.tool-status').textContent = status === 'error' ? '执行失败' : '已完成';
     el.querySelector('.tool-result').textContent = typeof result === 'string' ? result : JSON.stringify(result ?? '无输出', null, 2);
     if (status === 'error') { el.open = true; el.parentElement.open = true; }
@@ -241,8 +244,8 @@ export class ChatPanel {
     this.messageList.querySelectorAll('.streaming-cursor').forEach(cursor => cursor.remove());
     this.messageList.querySelectorAll('.tool-group').forEach(group => {
       const pending = group.querySelectorAll('.running');
-      pending.forEach(el => { el.classList.remove('running'); el.querySelector('.tool-status').textContent = '已结束'; });
-      if (!group.querySelector('.error') && !group.querySelector('.tool-call[open]')) group.open = false;
+      pending.forEach(el => { el.classList.remove('running'); el.classList.add('unknown'); el.querySelector('.tool-status').textContent = '未收到结果'; el.querySelector('.tool-result').textContent = '本轮已结束，但未收到执行结果。请先检查状态再重试。'; });
+      if (!group.querySelector('.error, .unknown') && !group.querySelector('.tool-call[open]')) group.open = false;
     });
   }
   _finalizeStream(finalMessage) {

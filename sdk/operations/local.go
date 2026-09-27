@@ -34,12 +34,15 @@ func (LocalBashOperations) Run(ctx context.Context, req RunRequest) (RunResult, 
 		ExitCode: 0,
 	}
 
+	if err != nil && ctx.Err() != nil {
+		result.ExitCode = -1
+		return result, ctx.Err()
+	}
+
 	if err != nil {
 		// Try to extract exit code
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
-		} else if ctx.Err() == context.DeadlineExceeded {
-			result.ExitCode = -1
 		} else {
 			result.ExitCode = 1
 		}

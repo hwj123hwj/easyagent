@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/hwj123hwj/easyagent/sdk/compaction"
@@ -98,7 +99,16 @@ func runAgentLoop(ctx context.Context, a *Agent, provider interface {
 		}
 	}
 
+	var recoveryErr error
+	history, recoveryErr = recoverPendingToolResults(ctx, a, history)
+	if recoveryErr != nil {
+		return lastAssistant, recoveryErr
+	}
+
 	for {
+		if err := ctx.Err(); err != nil {
+			return lastAssistant, err
+		}
 		if effectiveMaxTurns > 0 && turns >= effectiveMaxTurns {
 			return lastAssistant, nil
 		}
@@ -139,6 +149,35 @@ func runAgentLoop(ctx context.Context, a *Agent, provider interface {
 			}
 		}
 	}
+}
+
+// recoverPendingToolResults closes an interrupted last turn before accepting a new
+// prompt. It records uncertainty, never retries commands or assumes they failed.
+func recoverPendingToolResults(ctx context.Context, a *Agent, history []ai.Message) ([]ai.Message, error) {
+	completed := make(map[string]bool)
+	for i := len(history) - 1; i >= 0; i-- {
+		switch msg := history[i].(type) {
+		case ai.ToolResultMessage:
+			completed[msg.ToolCallID] = true
+		case ai.AssistantMessage:
+			for _, call := range msg.ToolCalls {
+				if completed[call.ID] {
+					continue
+				}
+				result := ai.ToolResultMessage{ToolCallID: call.ID, IsError: true, Content: "Execution interrupted; no result was saved. The command may have produced side effects. Check its state before retrying."}
+				if a.session != nil {
+					if err := a.session.AppendMessage(ctx, result); err != nil {
+						return history, fmt.Errorf("recover interrupted tool: %w", err)
+					}
+				}
+				history = append(history, result)
+			}
+			return history, nil
+		default:
+			return history, nil
+		}
+	}
+	return history, nil
 }
 
 // processTurn 处理一个 Agent 轮次。
@@ -219,11 +258,18 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 
 		// 保存 tool results 到 session
 		if a.session != nil {
+			// A canceled request must still close its persisted tool-call records.
+			saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
 			for _, tr := range toolResults {
-				_ = a.session.AppendMessage(ctx, tr)
+				if err := a.session.AppendMessage(saveCtx, tr); err != nil {
+					return turnResult{assistant: message}, history, fmt.Errorf("persist tool result: %w", err)
+				}
 			}
 		}
-
+		if err := ctx.Err(); err != nil {
+			return turnResult{assistant: message}, history, err
+		}
 		return turnResult{assistant: message, action: actionContinue}, history, nil
 	}
 
@@ -467,6 +513,10 @@ func executeToolCallsSequential(ctx context.Context, a *Agent, calls []ai.ToolCa
 }
 
 func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) ai.Message {
+	if err := ctx.Err(); err != nil {
+		return ai.ToolResultMessage{ToolCallID: call.ID, Content: "tool not started: " + err.Error(), IsError: true}
+	}
+
 	// 1. Find tool
 	tool, ok := a.tools[call.Name]
 	if !ok {

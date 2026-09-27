@@ -15,6 +15,7 @@ import (
 // BashOperations abstracts command execution.
 type BashOperations interface {
 	// Run executes a shell command and returns its output.
+	// Cancellation returns the context error together with any captured output.
 	Run(ctx context.Context, req RunRequest) (RunResult, error)
 }
 
