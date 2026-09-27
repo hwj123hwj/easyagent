@@ -1411,6 +1411,15 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// Flush preserves SSE delivery through logging middleware. Without this method,
+// short progress events stay in net/http's buffer until the whole turn finishes.
+func (rw *responseWriter) Flush() {
+	_ = http.NewResponseController(rw.ResponseWriter).Flush()
+}
+
+// Unwrap lets ResponseController reach the underlying writer's capabilities.
+func (rw *responseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
+
 // Hijack implements the http.Hijacker interface so WebSocket upgrades work
 // through the logging middleware wrapper.
 func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
