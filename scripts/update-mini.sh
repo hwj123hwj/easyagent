@@ -7,6 +7,10 @@ API_URL=${EA_DEPLOY_API:-https://api.github.com/repos/hwj123hwj/easyagent}
 DEPLOY_REF=${EA_DEPLOY_REF:-refs/heads/main}
 BIN_PATH=${EA_DEPLOY_BIN:-"$HOME/.easyagent/bin/easyagent"}
 SERVICE=${EA_DEPLOY_SERVICE:-easyagent-core.service}
+BRIDGE_BIN=${EA_DEPLOY_BRIDGE_BIN:-}
+BRIDGE_SERVICE=${EA_DEPLOY_BRIDGE_SERVICE:-easyagent-bridge.service}
+services=("$SERVICE")
+if [[ -n "$BRIDGE_BIN" ]]; then services+=("$BRIDGE_SERVICE"); fi
 HEALTH_URL=${EA_DEPLOY_HEALTH:-http://192.168.5.16:8080/health}
 GO_BIN=${EA_DEPLOY_GO:-go}
 mkdir -p "$DEPLOY_ROOT/releases" "$(dirname "$BIN_PATH")"
@@ -47,16 +51,25 @@ cd "$build_dir"
 release="$DEPLOY_ROOT/releases/$revision"
 mkdir -p "$release"
 install -m 755 easyagent "$release/easyagent"
+if [[ -n "$BRIDGE_BIN" ]]; then install -m 755 easyagent-bridge "$release/easyagent-bridge"; fi
 if [[ -f scripts/web-test.mjs ]]; then node --test scripts/web-test.mjs; fi
 # Keep an exact copy of the previous binary even if it predates this updater.
 previous="$DEPLOY_ROOT/previous-binary"
 if [[ -f "$BIN_PATH" ]]; then cp -p "$BIN_PATH" "$previous"; else echo 'Existing service binary is required for rollback' >&2; exit 1; fi
+if [[ -n "$BRIDGE_BIN" ]]; then
+  [[ -f "$BRIDGE_BIN" ]] || { echo 'Existing bridge binary is required for rollback' >&2; exit 1; }
+  cp -p "$BRIDGE_BIN" "$DEPLOY_ROOT/previous-bridge-binary"
+fi
 rollback() {
   trap - ERR TERM INT HUP
   echo "Deployment failed; restoring previous binary" >&2
   install -m 755 "$previous" "$BIN_PATH.rollback"
   mv -f "$BIN_PATH.rollback" "$BIN_PATH"
-  systemctl --user restart "$SERVICE" || echo "Rollback restart failed; inspect service journal" >&2
+  if [[ -n "$BRIDGE_BIN" ]]; then
+    install -m 755 "$DEPLOY_ROOT/previous-bridge-binary" "$BRIDGE_BIN.rollback"
+    mv -f "$BRIDGE_BIN.rollback" "$BRIDGE_BIN"
+  fi
+  systemctl --user restart "${services[@]}" || echo "Rollback restart failed; inspect service journal" >&2
   printf '%s\n' "$revision" > "$DEPLOY_ROOT/failed-revision"
 }
 install -m 755 "$release/easyagent" "$BIN_PATH.next"
@@ -64,11 +77,15 @@ install -m 755 "$release/easyagent" "$BIN_PATH.next"
 trap 'rollback; rm -rf "$build_dir"' ERR
 trap 'rollback; exit 1' TERM INT HUP
 mv -f "$BIN_PATH.next" "$BIN_PATH"
-systemctl --user restart "$SERVICE"
+if [[ -n "$BRIDGE_BIN" ]]; then
+  install -m 755 "$release/easyagent-bridge" "$BRIDGE_BIN.next"
+  mv -f "$BRIDGE_BIN.next" "$BRIDGE_BIN"
+fi
+systemctl --user restart "${services[@]}"
 healthy=false
 for attempt in $(seq 1 20); do
   if systemctl --user is-active --quiet "$SERVICE" && curl --fail --silent --max-time 3 "$HEALTH_URL" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("status")=="ok" and d.get("version")==sys.argv[1] else 1)' "$revision" 2>/dev/null; then
-    healthy=true; break
+    if [[ -z "$BRIDGE_BIN" ]] || systemctl --user is-active --quiet "$BRIDGE_SERVICE"; then healthy=true; break; fi
   fi
   sleep 1
 done

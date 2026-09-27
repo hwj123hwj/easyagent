@@ -30,6 +30,7 @@ if '-o' in sys.argv:
 ''')
         self.wrapper(fake, 'systemctl', '''import os,pathlib,sys
 with (pathlib.Path(os.environ['EA_TEST_ROOT'])/'service-log').open('a') as out:out.write(' '.join(sys.argv[1:])+'\\n')
+if os.environ.get('EA_TEST_MODE')=='bad-bridge' and 'is-active' in sys.argv and 'bridge.service' in sys.argv:sys.exit(1)
 ''')
         self.wrapper(fake, 'sleep', '')
     def wrapper(self, directory, name, body):
@@ -55,5 +56,23 @@ with (pathlib.Path(os.environ['EA_TEST_ROOT'])/'service-log').open('a') as out:o
         self.assertEqual((self.root/'deploy/failed-revision').read_text().strip(),REVISION)
         before=(self.root/'builds').read_text();self.assertNotEqual(self.run_update().returncode,0)
         self.assertEqual(before,(self.root/'builds').read_text())
+    def test_bridge_updated_with_core(self):
+        bridge=self.root/'bin/easyagent-bridge';bridge.write_text('previous bridge')
+        self.env.update(EA_DEPLOY_BRIDGE_BIN=str(bridge),EA_DEPLOY_BRIDGE_SERVICE='bridge.service')
+        result=self.run_update();self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(bridge.read_text(),'new binary')
+        self.assertIn('restart fake.service bridge.service',(self.root/'service-log').read_text())
+    def test_bridge_restored_with_core_on_health_failure(self):
+        bridge=self.root/'bin/easyagent-bridge';bridge.write_text('previous bridge')
+        self.env.update(EA_DEPLOY_BRIDGE_BIN=str(bridge),EA_DEPLOY_BRIDGE_SERVICE='bridge.service')
+        self.assertNotEqual(self.run_update('bad-health').returncode,0)
+        self.assertEqual(self.binary.read_text(),'previous')
+        self.assertEqual(bridge.read_text(),'previous bridge')
+    def test_inactive_bridge_rolls_back_both(self):
+        bridge=self.root/'bin/easyagent-bridge';bridge.write_text('previous bridge')
+        self.env.update(EA_DEPLOY_BRIDGE_BIN=str(bridge),EA_DEPLOY_BRIDGE_SERVICE='bridge.service')
+        self.assertNotEqual(self.run_update('bad-bridge').returncode,0)
+        self.assertEqual(self.binary.read_text(),'previous')
+        self.assertEqual(bridge.read_text(),'previous bridge')
 
 if __name__=='__main__': unittest.main()
