@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -352,7 +353,7 @@ func (gm *GatewayManager) StartWithHandler(creds Credentials, client *Client, ha
 	if handler == nil {
 		return fmt.Errorf("feishu handler is required")
 	}
-	return gm.start(creds, client, handler.Handle, handler.HandleCardAction, handler.SetGateway)
+	return gm.start(creds, client, handler.Handle, handler.HandleCardAction, func(g *Gateway) { handler.SetGateway(g); handler.SetOwnerAccess(g.access) })
 }
 
 func (gm *GatewayManager) start(creds Credentials, client *Client, handler MessageHandler, cardHandler CardActionHandler, attach func(*Gateway)) error {
@@ -365,17 +366,26 @@ func (gm *GatewayManager) start(creds Credentials, client *Client, handler Messa
 
 	ctx, cancel := context.WithCancel(context.Background())
 	gw := NewGateway(creds.AppID, creds.AppSecret, client, handler)
+	owner := strings.TrimSpace(os.Getenv("FEISHU_OWNER_OPEN_ID"))
+	if owner == "" {
+		owner = creds.UserOpenID
+	}
+	statePath := os.Getenv("FEISHU_OWNER_STATE_FILE")
+	if statePath == "" {
+		statePath = filepath.Join(config.HomeDir(), "feishu-owner.json")
+	}
+	access, err := OpenOwnerAccess(statePath, owner)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("initialize owner access: %w", err)
+	}
+	gw.SetOwnerAccess(access)
 	if cardHandler != nil {
 		gw.SetCardActionHandler(cardHandler)
 	}
 	if attach != nil {
 		attach(gw)
 	}
-	ownerOpenID := strings.TrimSpace(os.Getenv("FEISHU_OWNER_OPEN_ID"))
-	if ownerOpenID == "" {
-		ownerOpenID = creds.UserOpenID
-	}
-	ConfigureStartupWelcome(gw, creds.AppID, ownerOpenID, config.Env("EA_WORKSPACE"), client)
 
 	gm.gateway = gw
 	gm.cancel = cancel

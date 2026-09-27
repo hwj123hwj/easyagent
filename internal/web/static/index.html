@@ -47,10 +47,11 @@
 
         <div class="sidebar-footer">
           <div class="model-selector">
-            <label for="model-select" class="model-label">当前模型</label>
-            <select id="model-select" class="model-select">
-              <option value="">加载模型…</option>
-            </select>
+            <label id="model-label" class="model-label">当前模型</label>
+            <button id="model-select" class="model-select" aria-labelledby="model-label model-selected-name" aria-haspopup="dialog" aria-expanded="false" aria-controls="model-menu" disabled>
+              <span id="model-selected-name">加载模型…</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m7 14 5-5 5 5"/></svg>
+            </button>
           </div>
           <div class="build-info"><span>EasyAgent</span><span id="build-version" title="服务版本">—</span></div>
         </div>

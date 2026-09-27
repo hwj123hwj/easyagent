@@ -112,6 +112,39 @@ func TestServer_CreateSession(t *testing.T) {
 	assert.NotEmpty(t, resp.ID)
 }
 
+func TestSessionInfoReportsPathPolicyBehindAuthentication(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		cfg := config.Default()
+		cfg.DataDir = t.TempDir()
+		cfg.Provider, cfg.OpenAIAPIKey, cfg.OpenAIBaseURL = "openai", "test-key", "http://127.0.0.1:1"
+		cfg.AllowOutsideWorkspace = allow
+		application, err := app.New(app.AppOptions{Config: cfg})
+		require.NoError(t, err)
+		t.Cleanup(func() { application.Close() })
+		srv := New(application, nil)
+		srv.SetAPIKey("secret-key")
+		req := localReq(http.MethodPost, "/sessions", nil)
+		req.Header.Set("Authorization", "Bearer secret-key")
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		var session SessionResponse
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&session))
+		path := "/sessions/" + session.ID + "/info"
+		req = localReq(http.MethodGet, path, nil)
+		w = httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code)
+		req.Header.Set("Authorization", "Bearer secret-key")
+		w = httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		var info map[string]any
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
+		assert.Equal(t, allow, info["allow_outside_workspace"])
+	}
+}
+
 func TestServer_DeleteSession(t *testing.T) {
 	application := newTestApp(t)
 	srv := New(application, nil)

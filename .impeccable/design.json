@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-27T08:08:01.753878+00:00",
+  "generatedAt": "2026-09-27T08:39:29.829251+00:00",
   "title": "Design System: EasyAgent 青夜",
   "extensions": {
     "colorMeta": {
@@ -115,11 +115,18 @@
       "description": "原生 details 提供键盘可操作的渐进披露。",
       "html": "<details class=\"ds-tool\"><summary>工具执行 · 1 项</summary><pre>工具结果示例</pre></details>",
       "css": ".ds-tool{border:1px solid var(--border,#304746);border-radius:8px;background:#142420;color:var(--text-secondary,#acbeb6)}.ds-tool summary{cursor:pointer;padding:10px 14px;font:12px/1.6 -apple-system,BlinkMacSystemFont,sans-serif}.ds-tool summary:focus-visible{outline:2px solid var(--accent,#82d5ca);outline-offset:3px;}.ds-tool pre{padding:14px;border-top:1px solid var(--border-subtle,#253a39);font:12px/1.7 \"SF Mono\",Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}"
+    },
+    {
+      "name": "模型搜索菜单",
+      "kind": "custom",
+      "description": "青夜模型菜单的静态样例：搜索、模型名与服务商、当前选择和键盘提示。实际组件支持 API 确认后更新模型、首条消息前应用偏好及可见视口定位。",
+      "html": "<section class=\"ds-model-menu\" aria-label=\"选择模型\"><div class=\"ds-model-heading\"><span>选择模型</span><span class=\"ds-model-count\">1 个模型</span></div><input class=\"ds-model-search\" type=\"search\" aria-label=\"搜索模型\" placeholder=\"搜索名称或服务商…\"><div class=\"ds-model-options\"><div class=\"ds-model-option\" aria-current=\"true\"><span class=\"ds-model-copy\"><span class=\"ds-model-name\">示例模型</span><span class=\"ds-model-provider\">示例服务商</span></span><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" aria-hidden=\"true\"><path d=\"m5 12 4 4 10-10\"/></svg></div></div><div class=\"ds-model-hint\">↑ ↓ 选择 · Enter 确认 · Esc 关闭</div></section>",
+      "css": ".ds-model-menu{width:336px;max-width:calc(100% - 24px);display:flex;flex-direction:column;overflow:hidden;padding:12px;border:1px solid var(--border-strong,#526f6c);border-radius:12px;background:var(--bg-secondary,#162526);color:var(--text-primary,#e5efeb);font:13px/1.6 -apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif}.ds-model-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px 10px;font-weight:600}.ds-model-count{font-size:11px;font-weight:400;color:var(--text-tertiary,#8fa79b)}.ds-model-search{min-width:0;padding:9px 11px;border:1px solid var(--border,#304746);border-radius:8px;background:var(--bg-base,#101b1c);color:var(--text-primary,#e5efeb);font:inherit}.ds-model-search::placeholder{color:var(--text-tertiary,#8fa79b)}.ds-model-search:focus-visible{outline:2px solid var(--accent,#82d5ca);outline-offset:3px}.ds-model-options{min-height:0;max-height:320px;overflow-y:auto;margin:8px -4px 0;padding:0 4px}.ds-model-option{display:flex;align-items:center;gap:12px;padding:10px;margin:2px 0;border-radius:6px}.ds-model-option:hover{background:var(--bg-hover,#213333)}.ds-model-option[aria-current=true]{background:var(--accent-dim,#203c39);color:var(--accent,#82d5ca)}.ds-model-copy{flex:1;min-width:0}.ds-model-name{display:block;font-size:13px;line-height:1.5;overflow-wrap:anywhere}.ds-model-provider{display:block;margin-top:2px;font-size:11px;color:var(--text-tertiary,#8fa79b)}.ds-model-option svg{flex-shrink:0}.ds-model-hint{margin-top:8px;padding:10px 4px 0;border-top:1px solid var(--border-subtle,#253a39);font-size:11px;color:var(--text-tertiary,#8fa79b)}@media(max-width:760px){.ds-model-search{font-size:16px}}"
     }
   ],
   "narrative": {
     "northStar": "青夜",
-    "overview": "沿用用户明确指定的青夜身份：深青底色、青绿色操作强调、带绿调的浅色正文。界面服务于持续对话、阅读结果与查看执行过程；密度集中在导航、历史和工具信息，阅读区域保留宽松行距。\n\n本文记录当前 `internal/web/static` 的 HTML、CSS 和 JavaScript，结合 `.impeccable/review/` 中的桌面与手机截图核对。令牌为实现值，文字描述用于延续现有系统，不代表新增的用户审批、无障碍认证或服务部署结果。正式入口在迷你主机、Mac 用于开发预览的产品边界见 `PRODUCT.md`。",
+    "overview": "沿用用户明确指定的青夜身份：深青底色、青绿色操作强调、带绿调的浅色正文。界面服务于持续对话、阅读结果与查看执行过程；密度集中在导航、历史和工具信息，阅读区域保留宽松行距。\n\n本文记录当前 `internal/web/static` 的 HTML、CSS 和 JavaScript，结合 `.impeccable/review/` 中的桌面与手机尺寸浏览器截图核对。令牌为实现值，文字描述用于延续现有系统，不代表新增的用户审批、无障碍认证或服务部署结果。正式入口在迷你主机、Mac 用于开发预览的产品边界见 `PRODUCT.md`。",
     "keyCharacteristics": [
       "深色同色系表面与实线边界组成层次。",
       "紧凑导航和可搜索历史围绕连续可用的输入区。",

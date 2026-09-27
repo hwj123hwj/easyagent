@@ -1,4 +1,5 @@
-import { authFetch } from './api.js';
+import { api, authFetch } from './api.js';
+import { ModelPicker } from './model-picker.js';
 // Sidebar: session list, model selector, connection status
 
 export class Sidebar {
@@ -9,6 +10,7 @@ export class Sidebar {
 
     this.sessionList = document.getElementById('session-list');
     this.modelSelect = document.getElementById('model-select');
+    this.modelPicker = new ModelPicker(this.modelSelect, model => this.chooseModel(model));
     this.newSessionBtn = document.getElementById('new-session-btn');
     this.connectionStatus = document.getElementById('connection-status');
 
@@ -20,14 +22,6 @@ export class Sidebar {
 
   _bindEvents() {
     this.newSessionBtn.addEventListener('click', () => this.createSession());
-
-    this.modelSelect.addEventListener('change', () => {
-      const val = this.modelSelect.value;
-      if (!val || !this.state.currentSessionId) return;
-      const slash = val.indexOf('/');
-      const provider = val.slice(0, slash), model = val.slice(slash + 1);
-      this.ws.sendSwitchModel(this.state.currentSessionId, model, provider);
-    });
 
     // Session list click delegation
     this.sessionList.addEventListener('click', (e) => {
@@ -81,19 +75,39 @@ export class Sidebar {
       if (!resp.ok) throw new Error('请求失败（' + resp.status + '）');
       const data = await resp.json();
       this.state.models = data.models || [];
-      this._renderModels(data.current);
+      this.state.selectedModel ||= data.current;
+      this.modelPicker.setModels(this.state.models, this.state.selectedModel);
+      this.state.refreshControls?.();
     } catch (e) {
-      this.modelSelect.replaceChildren(new Option('模型加载失败', ''));
+      document.getElementById('model-selected-name').textContent = '模型加载失败';
     }
   }
 
+  async chooseModel(model) {
+    if (this.state.streaming || this.state.modelChanging) return;
+    const id = this.state.currentSessionId;
+    this.state.modelChanging = true; this.state.refreshControls?.();
+    try {
+      if (id) await api.post(`/sessions/${encodeURIComponent(id)}/model`, {model:model.id, provider:model.provider});
+      if (id === this.state.currentSessionId) {
+        this.state.selectedModel = model;
+        this.modelPicker.setSelected(model);
+      }
+    } catch (error) {
+      const notice = document.getElementById('chat-notice');
+      notice.textContent = '模型切换失败：' + error.message; notice.hidden = false;
+    } finally { this.state.modelChanging = false; this.state.refreshControls?.(); }
+  }
+
   async createSession({select = true} = {}) {
-    if (this.creating) return null;
+    if (this.creating || this.state.modelChanging) return null;
     this.creating = true; this.newSessionBtn.disabled = true;
     try {
       const resp = await authFetch(`${this.state.baseUrl}/sessions`, { method: 'POST' });
       if (!resp.ok) throw new Error('请求失败（' + resp.status + '）');
       const data = await resp.json();
+      const model = this.state.selectedModel;
+      if (model?.id) await api.post(`/sessions/${encodeURIComponent(data.id)}/model`, {model:model.id, provider:model.provider});
       this.state.sessions.unshift({
         id: data.id,
         created_at: data.created_at,
@@ -130,7 +144,22 @@ export class Sidebar {
     this.state.currentSessionId = sessionId;
     this._renderSessions();
     history.replaceState(null, "", "#s=" + encodeURIComponent(sessionId));
-    await this.onSessionChange(sessionId);
+    const messages = this.onSessionChange(sessionId);
+    this.state.modelInfoLoading = true; this.state.refreshControls?.();
+    try {
+      const info = await api.get(`/sessions/${encodeURIComponent(sessionId)}/info`);
+      if (sessionId === this.state.currentSessionId) {
+        this.state.selectedModel = {id:info.model, provider:info.provider};
+        this.modelPicker.setSelected(this.state.selectedModel);
+      }
+    } catch {
+      if (sessionId === this.state.currentSessionId) {
+        this.state.selectedModel = null; this.modelPicker.setSelected(null);
+      }
+    } finally {
+      if (sessionId === this.state.currentSessionId) { this.state.modelInfoLoading = false; this.state.refreshControls?.(); }
+    }
+    await messages;
   }
 
   _renderSessions() {
@@ -151,18 +180,6 @@ export class Sidebar {
       item.append(open, remove); this.sessionList.append(item);
     }
   }
-  _renderModels(current) {
-    this.modelSelect.replaceChildren();
-    if (!this.state.models.length) { this.modelSelect.append(new Option('暂无可用模型', '')); return; }
-    const models = [...this.state.models];
-    if (current?.id && !models.some(m => m.id === current.id && m.provider === current.provider)) models.unshift(current);
-    for (const model of models) {
-      const option = new Option(model.name || model.id, `${model.provider}/${model.id}`);
-      option.selected = current?.id === model.id && (!current.provider || current.provider === model.provider);
-      this.modelSelect.append(option);
-    }
-  }
-
   _formatSessionMeta(s) {
     const msgCount = s.message_count || 0;
     return `${msgCount} 条消息 · ${this._formatTime(s.last_active)}`;

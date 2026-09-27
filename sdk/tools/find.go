@@ -23,8 +23,9 @@ var defaultSkipDirs = map[string]bool{
 
 // FindTool searches for files and directories matching name patterns.
 type FindTool struct {
-	workspace string // 工作目录，用于解析相对路径
-	ops       operations.FileOperations
+	pathPolicy PathPolicy
+	workspace  string // 工作目录，用于解析相对路径
+	ops        operations.FileOperations
 }
 
 type FindParams struct {
@@ -37,6 +38,11 @@ type FindParams struct {
 
 // FindToolOption configures a FindTool during construction.
 type FindToolOption func(*FindTool)
+
+// WithFindPathPolicy explicitly controls access outside the workspace.
+func WithFindPathPolicy(policy PathPolicy) FindToolOption {
+	return func(t *FindTool) { t.pathPolicy = policy }
+}
 
 // WithFindWorkspace sets the workspace for path resolution.
 func WithFindWorkspace(ws string) FindToolOption {
@@ -105,7 +111,7 @@ func (t *FindTool) Execute(ctx context.Context, raw json.RawMessage, onUpdate fu
 	searchPath := ResolvePath(t.workspace, params.Path)
 
 	// Check path safety if workspace is set
-	if t.workspace != "" && !IsPathSafe(t.workspace, searchPath) {
+	if !t.pathPolicy.Allows(t.workspace, searchPath) {
 		return agent.ToolResult{
 			IsError: true,
 			Content: fmt.Sprintf("path %s is outside workspace %s", params.Path, t.workspace),

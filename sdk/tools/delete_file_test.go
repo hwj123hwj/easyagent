@@ -100,6 +100,5 @@ func TestDeleteFileTool_Directory(t *testing.T) {
 func TestDeleteFileTool_RelativePath(t *testing.T) {
 	tool := NewDeleteFileTool()
 	_, err := tool.Validate([]byte(`{"file_path":"relative/path.txt"}`))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "absolute")
+	assert.NoError(t, err) // Relative paths are resolved against the configured workspace.
 }

@@ -18,21 +18,27 @@ import (
 // It supports glob patterns, include/exclude filters, and default exclusion of
 // common directories like node_modules, .git, etc.
 type ReadManyFilesTool struct {
-	workspace     string
-	maxOutputLen  int
-	ops           operations.FileOperations
+	pathPolicy   PathPolicy
+	workspace    string
+	maxOutputLen int
+	ops          operations.FileOperations
 }
 
 type ReadManyFilesParams struct {
-	Paths            []string `json:"paths"`
-	Include          []string `json:"include,omitempty"`
-	Exclude          []string `json:"exclude,omitempty"`
-	Recursive        *bool    `json:"recursive,omitempty"`
-	UseDefaultExcludes *bool  `json:"useDefaultExcludes,omitempty"`
-	AllowLocalExecution bool  `json:"allowLocalExecution,omitempty"`
+	Paths               []string `json:"paths"`
+	Include             []string `json:"include,omitempty"`
+	Exclude             []string `json:"exclude,omitempty"`
+	Recursive           *bool    `json:"recursive,omitempty"`
+	UseDefaultExcludes  *bool    `json:"useDefaultExcludes,omitempty"`
+	AllowLocalExecution bool     `json:"allowLocalExecution,omitempty"`
 }
 
 type ReadManyFilesOption func(*ReadManyFilesTool)
+
+// WithReadManyFilesPathPolicy explicitly controls access outside the workspace.
+func WithReadManyFilesPathPolicy(policy PathPolicy) ReadManyFilesOption {
+	return func(t *ReadManyFilesTool) { t.pathPolicy = policy }
+}
 
 func WithReadManyFilesWorkspace(ws string) ReadManyFilesOption {
 	return func(t *ReadManyFilesTool) { t.workspace = ws }
@@ -60,17 +66,7 @@ func NewReadManyFilesTool(opts ...ReadManyFilesOption) *ReadManyFilesTool {
 func (t *ReadManyFilesTool) Name() string { return "read_many_files" }
 
 func (t *ReadManyFilesTool) Description() string {
-	return `Reads content from multiple files or single files, including external files outside the workspace.
-Supports both relative paths (within workspace) and absolute paths (anywhere on system).
-For text files, it concatenates their content into a single string.
-
-IMPORTANT: This is the PREFERRED tool for:
-- Reading files outside the workspace directory (external files with absolute paths)
-- Processing single files when they are outside the workspace
-- Reading multiple files at once
-
-For text files, it uses UTF-8 encoding and '--- {filePath} ---' separator between file contents.
-Supports glob patterns like 'src/**/*.js' for workspace files and direct absolute paths for external files.`
+	return `Reads multiple text files, with glob and exclusion filters. Relative paths resolve against the workspace. Outside-workspace access requires the operator-configured path policy; tool arguments cannot grant it.`
 }
 
 func (t *ReadManyFilesTool) Parameters() map[string]any {
@@ -95,10 +91,6 @@ func (t *ReadManyFilesTool) Parameters() map[string]any {
 			"useDefaultExcludes": map[string]any{
 				"type":        "boolean",
 				"description": "Optional. Whether to apply default exclusion patterns (e.g. node_modules, .git). Defaults to true.",
-			},
-			"allowLocalExecution": map[string]any{
-				"type":        "boolean",
-				"description": "Optional. Allow reading files outside the workspace directory. Defaults to false.",
 			},
 		},
 		"required": []string{"paths"},
@@ -221,7 +213,7 @@ func (t *ReadManyFilesTool) Execute(ctx context.Context, raw json.RawMessage, _ 
 	var filteredPaths []string
 	for _, fp := range filePaths {
 		// Path safety check
-		if t.workspace != "" && !params.AllowLocalExecution && !IsPathSafe(t.workspace, fp) {
+		if !t.pathPolicy.Allows(t.workspace, fp) {
 			continue
 		}
 

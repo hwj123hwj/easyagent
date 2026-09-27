@@ -168,6 +168,12 @@ cp .env.example .env
 - `openai` — OpenAI Chat Completions API（或兼容端点）
 - `deepv` — DeepV Code Server（公司内部）
 
+文件工具默认限制在 workspace 内。显式设置 `EA_ALLOW_OUTSIDE_WORKSPACE=true`、YAML `allow_outside_workspace: true` 或 CLI `--allow-outside-workspace` 可允许工作区外绝对/相对路径（含符号链接）；相对路径仍基于原 workspace，cwd 不变。该设置适用于 `serve`，不改变 OS 权限。
+
+`-y` / `EA_AUTO_APPROVE` 只控制交互确认，与路径策略严格独立；`serve` 原有无交互确认行为也不解除路径限制。Bash 另由 `EA_ENABLE_BASH` 控制，路径限制不是 shell/OS 沙箱。放开路径意味着 Agent 可读写运行用户有权限的文件（包括凭据），仅在可信用户、API 认证和入站 owner 门禁下启用。`read_many_files` 的旧 `allowLocalExecution` 参数不再授予越界权限。
+
+飞书桥接在接收消息、媒体、文本选择和卡片操作前检查 owner。可用 `FEISHU_OWNER_OPEN_ID`（或已保存注册凭据中的用户）明确指定可信 owner；否则启动时在 `FEISHU_OWNER_STATE_FILE`（默认 `~/.easyagent/feishu-owner.json`）生成 0600 私有配对状态。运维者仅向目标用户私下交付其中的 code，用户私聊机器人精确发送 `/pair <code>`。24 小时有效、首个持码者单次绑定，原子保存 open_id 并删除 code；过期后重启桥接可重新发码。未配对时普通消息和卡片不执行，不主动发启动欢迎。bridge 使用 `PI_AGENT_URL` 和 `EA_API_KEY` 连接核心；可选 HTTP 工具回调也必须携带认证并具备该会话的 owner 上下文。
+
 ### 4.4 前端开发（Electron + React）
 
 ```bash

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
@@ -17,9 +16,10 @@ import (
 // It reads and preserves file content before deletion (via BackupManager if available).
 // Only text files are allowed — for non-text files, the user should use bash rm.
 type DeleteFileTool struct {
-	workspace string
-	ops       operations.FileOperations
-	backupMgr *BackupManager
+	pathPolicy PathPolicy
+	workspace  string
+	ops        operations.FileOperations
+	backupMgr  *BackupManager
 }
 
 type DeleteFileParams struct {
@@ -28,6 +28,11 @@ type DeleteFileParams struct {
 }
 
 type DeleteFileOption func(*DeleteFileTool)
+
+// WithDeleteFilePathPolicy explicitly controls access outside the workspace.
+func WithDeleteFilePathPolicy(policy PathPolicy) DeleteFileOption {
+	return func(t *DeleteFileTool) { t.pathPolicy = policy }
+}
 
 func WithDeleteFileWorkspace(ws string) DeleteFileOption {
 	return func(t *DeleteFileTool) { t.workspace = ws }
@@ -71,7 +76,7 @@ func (t *DeleteFileTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"file_path": map[string]any{
 				"type":        "string",
-				"description": "The absolute path to the file to delete (e.g. '/home/user/project/file.txt'). Relative paths are not supported.",
+				"description": "Absolute or workspace-relative path to the file to delete.",
 			},
 			"reason": map[string]any{
 				"type":        "string",
@@ -89,9 +94,6 @@ func (t *DeleteFileTool) Validate(raw json.RawMessage) (json.RawMessage, error) 
 	}
 	if params.FilePath == "" {
 		return nil, fmt.Errorf("file_path is required")
-	}
-	if !filepath.IsAbs(params.FilePath) {
-		return nil, fmt.Errorf("file_path must be absolute: %s", params.FilePath)
 	}
 	return json.Marshal(params)
 }
@@ -119,7 +121,7 @@ func (t *DeleteFileTool) Execute(ctx context.Context, raw json.RawMessage, _ fun
 	cleanPath := ResolvePath(t.workspace, params.FilePath)
 
 	// Check path safety
-	if t.workspace != "" && !IsPathSafe(t.workspace, cleanPath) {
+	if !t.pathPolicy.Allows(t.workspace, cleanPath) {
 		return agent.ToolResult{
 			IsError: true,
 			Content: fmt.Sprintf("path %s is outside workspace %s", params.FilePath, t.workspace),

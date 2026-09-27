@@ -74,5 +74,17 @@ if os.environ.get('EA_TEST_MODE')=='bad-bridge' and 'is-active' in sys.argv and 
         self.assertNotEqual(self.run_update('bad-bridge').returncode,0)
         self.assertEqual(self.binary.read_text(),'previous')
         self.assertEqual(bridge.read_text(),'previous bridge')
+    def test_missing_required_path_capability_does_not_replace(self):
+        self.env['EA_DEPLOY_REQUIRE_PATH_POLICY']='true'
+        self.assertNotEqual(self.run_update().returncode,0)
+        self.assertEqual(self.binary.read_text(),'previous')
+        self.assertFalse((self.root/'service-log').exists())
+    def test_missing_owner_capability_does_not_replace_bridge(self):
+        bridge=self.root/'bin/easyagent-bridge';bridge.write_text('previous bridge')
+        self.env.update(EA_DEPLOY_BRIDGE_BIN=str(bridge),EA_DEPLOY_REQUIRE_OWNER_ACCESS='true')
+        self.assertNotEqual(self.run_update().returncode,0)
+        self.assertEqual(self.binary.read_text(),'previous')
+        self.assertEqual(bridge.read_text(),'previous bridge')
+        self.assertFalse((self.root/'service-log').exists())
 
 if __name__=='__main__': unittest.main()

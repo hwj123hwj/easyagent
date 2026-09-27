@@ -63,19 +63,20 @@ func (a CodingApplication) BuildTools(opts runtime.ToolBuildOptions) []agent.Too
 	mutationQueue := codingtools.NewFileMutationQueue()
 	backupMgr := commands.GetUndoManager()
 	return codingtools.BuildList(codingtools.ListOptions{
-		Workspace:         opts.Workspace,
-		MaxOutputLen:      opts.MaxOutputLen,
-		EnableBash:        a.Cfg.EnableBash,
-		BashOps:           opts.BashOps,
-		EnableWeb:         a.Cfg.EnableWeb,
-		WebTimeoutSeconds: a.Cfg.WebTimeoutSeconds,
-		EnableWebSearch:   a.Cfg.EnableWebSearch,
-		FileOps:           opts.FileOps,
-		ExtensionTools:    opts.ExtensionTools,
-		AllowedTools:      opts.AllowedTools,
-		BlockedTools:      opts.BlockedTools,
-		FileMutationQueue: mutationQueue,
-		BackupManager:     backupMgr,
+		Workspace:             opts.Workspace,
+		AllowOutsideWorkspace: a.Cfg.AllowOutsideWorkspace,
+		MaxOutputLen:          opts.MaxOutputLen,
+		EnableBash:            a.Cfg.EnableBash,
+		BashOps:               opts.BashOps,
+		EnableWeb:             a.Cfg.EnableWeb,
+		WebTimeoutSeconds:     a.Cfg.WebTimeoutSeconds,
+		EnableWebSearch:       a.Cfg.EnableWebSearch,
+		FileOps:               opts.FileOps,
+		ExtensionTools:        opts.ExtensionTools,
+		AllowedTools:          opts.AllowedTools,
+		BlockedTools:          opts.BlockedTools,
+		FileMutationQueue:     mutationQueue,
+		BackupManager:         backupMgr,
 	})
 }
 

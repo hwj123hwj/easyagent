@@ -1,6 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderMarkdown } from '../internal/web/static/js/markdown.js';
+import { filterModels, modelKey } from '../internal/web/static/js/model-picker.js';
+
+test('model search matches names, IDs and providers without changing IDs', () => {
+  const models = [{id:'vendor/model-v3',provider:'openai',name:'代码模型'}, {id:'coding',provider:'anthropic',name:'Coding'}];
+  assert.deepEqual(filterModels(models, 'OPENAI v3'), [models[0]]);
+  assert.deepEqual(filterModels(models, '代码'), [models[0]]);
+  assert.deepEqual(filterModels(models, 'unknown'), []);
+  assert.deepEqual(filterModels(models, '  '), models);
+  assert.equal(modelKey(models[0]), 'openai/vendor/model-v3');
+});
 
 test('markdown safely renders links, inline code and fenced language', () => {
   const html = renderMarkdown('[危险](javascript:alert(1)) [文档](https://example.com/"onclick="bad) `**literal**`');

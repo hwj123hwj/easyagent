@@ -78,6 +78,10 @@ func RegisterTool(piAgentURL, callbackURL string) error {
 
 // HandleToolCallback handles the HTTP callback from easyagent for tool execution.
 func (h *Handler) HandleToolCallback(w http.ResponseWriter, r *http.Request) {
+	if h.piAgentAPIKey == "" || r.Header.Get("Authorization") != "Bearer "+h.piAgentAPIKey {
+		writeToolError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeToolError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -86,6 +90,13 @@ func (h *Handler) HandleToolCallback(w http.ResponseWriter, r *http.Request) {
 	var req ToolCallbackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeToolError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Never infer an owner from another conversation. Deny before worktree creation.
+	senderOpenID := h.getSender(r.Context(), req.SessionID)
+	if !h.access.Allowed(senderOpenID) {
+		writeToolError(w, http.StatusForbidden, "owner context required")
 		return
 	}
 
@@ -110,14 +121,6 @@ func (h *Handler) HandleToolCallback(w http.ResponseWriter, r *http.Request) {
 			IsError: true,
 		})
 		return
-	}
-
-	// Get sender OpenID from stored context.
-	// Use session_id as the chatKey to find the sender who triggered this tool call.
-	senderOpenID := h.getSender(r.Context(), req.SessionID)
-	if senderOpenID == "" {
-		// Fallback: try all senders (best effort for backward compat)
-		senderOpenID = h.getAnySender()
 	}
 
 	// Create group chat

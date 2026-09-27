@@ -12,6 +12,7 @@ import (
 )
 
 type ReadTool struct {
+	pathPolicy   PathPolicy
 	workspace    string // 工作目录，用于解析相对路径
 	maxOutputLen int    // 最大输出长度，0 表示使用 DefaultMaxOutputLen
 	ops          operations.FileOperations
@@ -25,6 +26,11 @@ type ReadParams struct {
 
 // ReadToolOption configures a ReadTool during construction.
 type ReadToolOption func(*ReadTool)
+
+// WithReadPathPolicy explicitly controls access outside the workspace.
+func WithReadPathPolicy(policy PathPolicy) ReadToolOption {
+	return func(t *ReadTool) { t.pathPolicy = policy }
+}
 
 // WithReadWorkspace sets the workspace for path resolution.
 func WithReadWorkspace(ws string) ReadToolOption {
@@ -87,7 +93,7 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, onUpdate fu
 	cleanPath := ResolvePath(t.workspace, params.Path)
 
 	// Check path safety if workspace is set
-	if t.workspace != "" && !IsPathSafe(t.workspace, cleanPath) {
+	if !t.pathPolicy.Allows(t.workspace, cleanPath) {
 		return agent.ToolResult{
 			IsError: true,
 			Content: fmt.Sprintf("path %s is outside workspace %s", params.Path, t.workspace),

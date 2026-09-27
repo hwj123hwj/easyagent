@@ -11,10 +11,11 @@ import (
 )
 
 type WriteTool struct {
+	pathPolicy    PathPolicy
 	workspace     string // 工作目录，用于解析相对路径
 	ops           operations.FileOperations
-	mutationQueue MutationQueue   // 可选：per-file 串行化
-	backupMgr     *BackupManager   // 可选：操作前自动快照
+	mutationQueue MutationQueue  // 可选：per-file 串行化
+	backupMgr     *BackupManager // 可选：操作前自动快照
 }
 
 type WriteParams struct {
@@ -24,6 +25,11 @@ type WriteParams struct {
 
 // WriteToolOption configures a WriteTool during construction.
 type WriteToolOption func(*WriteTool)
+
+// WithWritePathPolicy explicitly controls access outside the workspace.
+func WithWritePathPolicy(policy PathPolicy) WriteToolOption {
+	return func(t *WriteTool) { t.pathPolicy = policy }
+}
 
 // WithWriteWorkspace sets the workspace for path resolution.
 func WithWriteWorkspace(ws string) WriteToolOption {
@@ -111,20 +117,20 @@ func (t *WriteTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate
 
 	cleanPath := ResolvePath(t.workspace, params.Path)
 
+	// Check path safety if workspace is set
+	if !t.pathPolicy.Allows(t.workspace, cleanPath) {
+		return agent.ToolResult{
+			IsError: true,
+			Content: fmt.Sprintf("path %s is outside workspace %s", params.Path, t.workspace),
+		}, fmt.Errorf("path escapes workspace")
+	}
+
 	// Auto-snapshot before modification (if backup manager is set)
 	if t.backupMgr != nil {
 		if _, err := t.backupMgr.Snapshot(cleanPath); err != nil {
 			// Non-fatal: log but continue with the write
 			_ = err
 		}
-	}
-
-	// Check path safety if workspace is set
-	if t.workspace != "" && !IsPathSafe(t.workspace, cleanPath) {
-		return agent.ToolResult{
-			IsError: true,
-			Content: fmt.Sprintf("path %s is outside workspace %s", params.Path, t.workspace),
-		}, fmt.Errorf("path escapes workspace")
 	}
 
 	// Ensure parent directory exists

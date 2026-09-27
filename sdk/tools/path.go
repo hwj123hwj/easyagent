@@ -7,6 +7,17 @@ import (
 	"strings"
 )
 
+// PathPolicy controls file-tool access without changing path resolution or cwd.
+// The zero value keeps the existing workspace restriction. It does not change
+// OS permissions, shell access, or tool confirmation requirements.
+type PathPolicy struct {
+	AllowOutsideWorkspace bool
+}
+
+func (p PathPolicy) Allows(workspace, path string) bool {
+	return p.AllowOutsideWorkspace || IsPathSafe(workspace, path)
+}
+
 // parentDir returns the directory containing the given file path.
 func parentDir(path string) string {
 	return filepath.Dir(path)
@@ -48,11 +59,14 @@ func IsPathSafe(workspace, path string) bool {
 
 	resolvedReal, err := filepath.EvalSymlinks(resolved)
 	if err != nil {
+		if info, statErr := os.Lstat(resolved); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return false // A dangling symlink must not become a write escape.
+		}
 		// resolved doesn't exist. Walk up to the nearest existing ancestor.
 		parent := resolved
 		for parent != "/" && parent != "." {
 			parent = filepath.Dir(parent)
-			if _, err := os.Stat(parent); err == nil {
+			if _, err := os.Lstat(parent); err == nil {
 				resolvedReal, err = filepath.EvalSymlinks(parent)
 				if err != nil {
 					// parent exists but is itself a broken symlink — unsafe
@@ -68,8 +82,7 @@ func IsPathSafe(workspace, path string) bool {
 		}
 	}
 
-	absWorkspace += string(filepath.Separator)
-	return strings.HasPrefix(resolvedReal, absWorkspace) || resolvedReal == filepath.Clean(workspace)
+	return resolvedReal == absWorkspace || strings.HasPrefix(resolvedReal, absWorkspace+string(filepath.Separator))
 }
 
 // stringCheck is the fallback: pure string prefix comparison, no symlink resolution.

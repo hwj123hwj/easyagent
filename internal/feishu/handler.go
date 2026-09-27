@@ -36,6 +36,7 @@ type ChatRoute struct {
 
 // Handler processes Feishu messages by calling the easyagent HTTP API.
 type Handler struct {
+	access        *OwnerAccess
 	piAgentURL    string // e.g. "http://127.0.0.1:8080"
 	piAgentAPIKey string // EA_API_KEY，非空时对 easyagent 请求带 Bearer
 	appID         string // Feishu app ID for permission links
@@ -105,11 +106,14 @@ func (h *Handler) saveRoutes() {
 
 // Handle processes a single Feishu message.
 func (h *Handler) Handle(ctx context.Context, msg Message) {
+	if !h.access.Allowed(msg.SenderOpenID) || isPairCommand(msg.Text) {
+		return
+	}
 	chatKey := msg.ChatKey()
 	messageID := msg.MessageID
 	text := strings.TrimSpace(msg.Text)
 
-	slog.Info("handling feishu message", "chatKey", chatKey, "text", text, "messageID", messageID)
+	slog.Info("handling feishu message", "chatKey", chatKey, "messageID", messageID)
 
 	if text == "" {
 		return
@@ -416,6 +420,9 @@ func (h *Handler) cmdWorktree(ctx context.Context, chatKey, text string) string 
 func (h *Handler) HandleCardAction(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
 	if event == nil || event.Event == nil || event.Event.Action == nil {
 		return cardToast("error", "无效的卡片回调"), nil
+	}
+	if event.Event.Operator == nil || !h.access.Allowed(event.Event.Operator.OpenID) {
+		return cardToast("error", "未授权"), nil
 	}
 	value := event.Event.Action.Value
 	action := stringValue(value[worktreeCardActionKey])
@@ -949,3 +956,6 @@ func (h *Handler) forwardCommand(ctx context.Context, chatKey, text string) stri
 
 	return result.Output
 }
+
+// SetOwnerAccess must be configured before handling inbound events.
+func (h *Handler) SetOwnerAccess(access *OwnerAccess) { h.access = access }

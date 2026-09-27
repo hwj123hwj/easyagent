@@ -411,3 +411,24 @@ textarea.wf-prompt { font-size: 13.5px; line-height: 1.6; resize: vertical; min-
 .clipboard-buffer{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0}
 
 @media(max-width:760px){.wf-opt:not(.wf-opt-check){display:grid;grid-template-columns:auto 1fr;gap:6px 10px;width:100%}.wf-opt-label{white-space:nowrap}.wf-opt-fe{grid-column:1/-1;width:100%}.wf-opt-check{align-items:flex-start}.wf-opt-check input{flex-shrink:0;margin-top:3px}}
+
+/* The model menu shares the workspace surfaces instead of the OS select sheet. */
+.model-select { display:flex; align-items:center; justify-content:space-between; gap:12px; text-align:left; }
+.model-select>span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.model-select>svg { flex-shrink:0; color:var(--text-tertiary); }
+.model-select:hover:not(:disabled),.model-select[aria-expanded=true] { border-color:var(--accent-deep); background:var(--bg-hover); }
+.model-menu { position:fixed; z-index:var(--z-modal); display:flex; flex-direction:column; overflow:hidden; padding:12px; border:1px solid var(--border-strong); border-radius:12px; background:var(--bg-secondary); }
+.model-menu-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:2px 4px 10px; font-size:13px; font-weight:600; }
+.model-count { font-size:11px; font-weight:400; color:var(--text-tertiary); }
+.model-search { flex-shrink:0; width:100%; padding:9px 11px; border:1px solid var(--border); border-radius:8px; background:var(--bg-base); color:var(--text-primary); font-size:13px; }
+.model-options { min-height:0; max-height:320px; overflow-y:auto; overscroll-behavior:contain; margin:8px -4px 0; padding:0 4px; }
+.model-option { display:flex; align-items:center; gap:12px; padding:10px; margin:2px 0; border-radius:6px; cursor:pointer; }
+.model-option.active { background:var(--bg-hover); }
+.model-option[aria-selected=true] { background:var(--accent-dim); color:var(--accent); }
+.model-option-copy { flex:1; min-width:0; }
+.model-option-name { display:block; font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+.model-option-provider { display:block; margin-top:2px; font-size:11px; color:var(--text-tertiary); }
+.model-option svg { flex-shrink:0; }
+.model-empty { padding:24px 10px; font-size:12px; color:var(--text-secondary); }
+.model-menu-hint { flex-shrink:0; margin-top:8px; padding:10px 4px 0; border-top:1px solid var(--border-subtle); font-size:11px; color:var(--text-tertiary); }
+@media(max-width:760px) { .model-search { font-size:16px; } }
