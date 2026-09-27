@@ -51,11 +51,11 @@ func (s *Session) AppendMessage(ctx context.Context, msg ai.Message) error {
 	if err != nil {
 		return fmt.Errorf("failed to get leaf after append: %w", err)
 	}
-	// 持久化 leaf 指针，确保重新加载后可以恢复
+	s.leafID = leaf
+	// Explicit cursor record preserves compatibility with older readers.
 	if err := s.storage.SetLeaf(ctx, leaf); err != nil {
 		return fmt.Errorf("failed to set leaf: %w", err)
 	}
-	s.leafID = leaf
 	return nil
 }
 
