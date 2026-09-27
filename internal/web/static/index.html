@@ -9,9 +9,9 @@
 <body>
   <div id="app">
     <!-- Top Navigation -->
-    <nav id="topnav" class="topnav">
+    <nav id="topnav" class="topnav" aria-label="主导航">
       <div class="nav-brand">
-        <span class="logo-icon">⚡</span>
+        <span class="logo-icon" aria-hidden="true">ea<span>·</span></span>
         <span class="nav-brand-text">EasyAgent</span>
       </div>
       <div class="nav-tabs">
@@ -20,66 +20,83 @@
         <button class="nav-tab" data-page="page-sessions">会话</button>
       </div>
       <div class="nav-right">
-        <span id="nav-auth" class="nav-auth" title="点击重新登录">未登录</span>
+        <span class="workspace-label">个人工作区</span><button id="nav-auth" class="nav-auth" title="管理访问令牌">连接中</button>
       </div>
     </nav>
 
     <!-- Page: Chat (sidebar + chat panel) -->
     <div id="page-chat" class="page active">
-      <aside id="sidebar" class="sidebar">
+      <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="关闭侧边栏" hidden></button>
+      <aside id="sidebar" class="sidebar" aria-label="历史对话">
         <div class="sidebar-header">
           <div class="connection-status" id="connection-status">
             <span class="status-dot offline"></span>
-            <span class="status-text">Connecting...</span>
+            <span class="status-text">连接中…</span>
           </div>
         </div>
 
         <button id="new-session-btn" class="new-session-btn">
-          <span>+</span> 新对话
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> 新对话
         </button>
 
+        <label class="session-search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="session-search" type="search" placeholder="搜索对话" aria-label="搜索对话"></label>
+        <div class="list-heading">最近对话 <span id="session-count">0</span></div>
         <div id="session-list" class="session-list">
           <!-- Sessions will be rendered here -->
         </div>
 
         <div class="sidebar-footer">
           <div class="model-selector">
-            <label class="model-label">模型</label>
+            <label for="model-select" class="model-label">当前模型</label>
             <select id="model-select" class="model-select">
-              <option value="">Loading...</option>
+              <option value="">加载模型…</option>
             </select>
           </div>
+          <div class="build-info"><span>EasyAgent</span><span id="build-version" title="服务版本">—</span></div>
         </div>
       </aside>
 
       <main id="chat-panel" class="chat-panel">
+        <header class="chat-header">
+          <button id="sidebar-toggle" class="icon-btn" aria-label="打开历史对话" aria-expanded="false" aria-controls="sidebar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+          <div class="chat-heading"><h1 id="chat-title">新对话</h1></div>
+          <span id="chat-status" class="chat-status" role="status">准备就绪</span>
+        </header>
         <!-- Empty State -->
         <div id="empty-state" class="empty-state">
-          <div class="empty-icon">💬</div>
-          <h2 class="empty-title">欢迎使用 EasyAgent</h2>
-          <p class="empty-subtitle">新建一个对话，或从左侧选择历史记录开始</p>
+          <div class="welcome-mark" aria-hidden="true">ea<span>·</span></div>
+          <h2 class="empty-title">今天，想一起完成什么？</h2>
+          <p class="empty-subtitle">写下任务，理清思路。执行过程和每一步结果，都留在对话里。</p>
+          <div class="starter-list" aria-label="任务建议">
+            <button data-prompt="帮我梳理这个想法，列出可执行的下一步："><span>梳理一个想法</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></button>
+            <button data-prompt="帮我分析这段代码，说明问题和改进建议："><span>一起看段代码</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></button>
+            <button data-prompt="帮我排查这个问题，先明确可能原因和验证方式："><span>排查一个问题</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></button>
+          </div>
         </div>
 
-        <!-- Chat View (hidden initially) -->
-        <div id="chat-view" class="chat-view" style="display: none;">
-          <div id="message-list" class="message-list">
+        <!-- Composer remains available before a session is created. -->
+        <div id="chat-view" class="chat-view">
+          <div id="message-list" class="message-list" aria-label="对话消息" tabindex="0" hidden>
             <!-- Messages will be rendered here -->
           </div>
 
+          <button id="jump-latest" class="jump-latest" hidden>↓ 回到最新</button>
           <div class="input-area">
+            <div id="chat-notice" class="chat-notice" role="status" hidden></div>
             <div class="input-container">
-              <textarea id="message-input" class="message-input" placeholder="输入消息，Enter 发送…" rows="1"></textarea>
-              <button id="send-btn" class="send-btn" title="Send">
+              <textarea id="message-input" class="message-input" placeholder="描述你想完成的事…" aria-label="消息" rows="2"></textarea>
+              <button id="send-btn" class="send-btn" title="发送消息" aria-label="发送消息">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M8 1.5l-6.5 6.5h4v6.5h5v-6.5h4L8 1.5z"/>
                 </svg>
               </button>
-              <button id="stop-btn" class="stop-btn" style="display: none;" title="Stop">
+              <button id="stop-btn" class="stop-btn" style="display: none;" title="停止生成" aria-label="停止生成">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                   <rect x="3" y="3" width="10" height="10" rx="1"/>
                 </svg>
               </button>
             </div>
+            <div class="composer-footer"><span><kbd>Enter</kbd> 发送 <span class="hint-separator">/</span> <kbd>Shift Enter</kbd> 换行</span><span>重要信息请核实</span></div>
           </div>
         </div>
       </main>
@@ -90,7 +107,7 @@
       <div class="wf-layout">
         <section class="wf-submit">
           <div class="panel-header">
-            <h3>新建流水线</h3>
+            <div><h3>流水线</h3></div>
             <div class="wf-mode-switch">
               <button id="wf-mode-form" class="btn btn-sm active">表单</button>
               <button id="wf-mode-yaml" class="btn btn-sm">YAML</button>
@@ -146,7 +163,7 @@
     <div id="page-sessions" class="page" hidden>
       <div class="sess-layout">
         <div class="panel-header">
-          <h3>会话管理</h3>
+          <div><h3>全部会话</h3></div>
           <button id="sess-refresh-btn" class="btn btn-ghost">刷新</button>
         </div>
         <div id="sess-table" class="sess-table"></div>
@@ -162,10 +179,10 @@
 
     <!-- Login Overlay -->
     <div id="login-overlay" class="login-overlay" hidden>
-      <div class="login-card">
-        <h2>需要访问令牌</h2>
+      <div class="login-card" role="dialog" aria-modal="true" aria-labelledby="login-title">
+        <h2 id="login-title">连接你的工作区</h2>
         <p class="login-hint">服务器已开启鉴权。输入 EA_API_KEY 对应的令牌（本机默认无需令牌）。</p>
-        <input id="login-token" type="password" class="login-input" placeholder="API Token" autocomplete="off">
+        <input id="login-token" type="password" class="login-input" placeholder="输入访问令牌" aria-label="访问令牌" autocomplete="off">
         <div class="login-error" id="login-error"></div>
         <div class="login-actions">
           <button id="login-save-btn" class="btn btn-primary">保存并继续</button>

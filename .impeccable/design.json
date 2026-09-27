@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-27T08:08:01.753878+00:00",
+  "title": "Design System: EasyAgent 青夜",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "浅青"
+      },
+      "bg-base": {
+        "role": "neutral",
+        "displayName": "夜青底色"
+      },
+      "text-primary": {
+        "role": "neutral",
+        "displayName": "浅雾正文"
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "欢迎标题",
+        "purpose": "对话空状态的起点提示。"
+      },
+      "chat-body": {
+        "displayName": "对话正文",
+        "purpose": "长回复阅读。"
+      },
+      "code": {
+        "displayName": "执行文本",
+        "purpose": "代码、工具参数和结果。"
+      }
+    },
+    "shadows": [
+      {
+        "name": "surface-depth",
+        "value": "none",
+        "purpose": "普通表面通过色差和边界建立层次。"
+      },
+      {
+        "name": "field-focus",
+        "value": "0 0 0 3px rgba(45, 212, 191, 0.14)",
+        "purpose": "流水线与令牌字段的聚焦反馈。"
+      }
+    ],
+    "motion": [
+      {
+        "name": "transition-fast",
+        "value": "160ms ease-out",
+        "purpose": "按钮与字段状态。"
+      },
+      {
+        "name": "transition-normal",
+        "value": "200ms ease-out",
+        "purpose": "步骤边界与抽屉进出。"
+      },
+      {
+        "name": "streaming-cursor",
+        "value": "pulse 1s ease-in-out infinite",
+        "purpose": "正在生成时光标透明度脉动。"
+      },
+      {
+        "name": "reduced-motion",
+        "value": "animation:none; transition:none; scroll-behavior:auto",
+        "purpose": "prefers-reduced-motion: reduce 覆盖。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact-desktop",
+        "value": "1050px"
+      },
+      {
+        "name": "mobile-drawer",
+        "value": "760px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "主要操作",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "浅青实底操作，展示运行按钮。",
+      "html": "<button class=\"ds-primary\">运行</button>",
+      "css": ".ds-primary{font:13px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;cursor:pointer;transition:background 160ms ease-out,color 160ms ease-out,border-color 160ms ease-out;background:var(--accent,#82d5ca);color:var(--text-inverse,#0c2421);border:1px solid transparent;border-radius:8px;padding:7px 14px;font-weight:600}.ds-primary:hover:not(:disabled){background:var(--accent-hover,#a3e5dc)}.ds-primary:focus-visible{outline:2px solid var(--accent,#82d5ca);outline-offset:3px;}.ds-primary:disabled{opacity:.45;cursor:not-allowed}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}"
+    },
+    {
+      "name": "次要操作",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "青灰底色和描边，支持次要操作。",
+      "html": "<button class=\"ds-secondary\">刷新</button>",
+      "css": ".ds-secondary{font:13px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;cursor:pointer;transition:background 160ms ease-out,color 160ms ease-out,border-color 160ms ease-out;background:var(--bg-tertiary,#1c2e2f);color:var(--text-primary,#e5efeb);border:1px solid var(--border,#304746);border-radius:8px;padding:7px 14px}.ds-secondary:hover:not(:disabled){background:var(--bg-hover,#213333);border-color:var(--border-strong,#526f6c)}.ds-secondary:focus-visible{outline:2px solid var(--accent,#82d5ca);outline-offset:3px;}.ds-secondary:disabled{opacity:.45;cursor:not-allowed}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}"
+    },
+    {
+      "name": "当前导航",
+      "kind": "nav",
+      "refersTo": "nav-active",
+      "description": "紧凑工作区导航中的当前页。",
+      "html": "<nav aria-label=\"工作区\"><button class=\"ds-nav\" aria-current=\"page\">对话</button></nav>",
+      "css": ".ds-nav{font:13px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;cursor:pointer;transition:background 160ms ease-out,color 160ms ease-out,border-color 160ms ease-out;font-size:14px;font-weight:500;padding:10px 18px;border:0;border-radius:8px;background:var(--accent-dim,#203c39);color:var(--accent,#82d5ca)}.ds-nav:hover{background:var(--accent-dim,#203c39);color:var(--accent,#82d5ca)}.ds-nav:focus-visible{outline:2px solid var(--accent,#82d5ca);outline-offset:3px;}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}"
+    },
+    {
+      "name": "连续输入区",
+      "kind": "input",
+      "refersTo": "composer",
+      "description": "统一描边表面包含文字输入与发送操作。",
+      "html": "<div class=\"ds-composer\"><textarea aria-label=\"消息\" placeholder=\"描述你想完成的事…\" rows=\"2\"></textarea><button aria-label=\"发送消息\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M8 1.5l-6.5 6.5h4v6.5h5v-6.5h4L8 1.5z\"/></svg></button></div>",
+      "css": ".ds-composer{display:flex;align-items:flex-end;gap:16px;padding:18px;background:var(--composer,#1a2b29);border:1px solid #3a5953;border-radius:12px;transition:border-color 160ms ease-out}.ds-composer:focus-within{border-color:var(--accent,#82d5ca)}.ds-composer textarea{flex:1;min-width:0;resize:none;background:none;border:0;outline:none;font:14px/1.8 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--text-primary,#e5efeb)}.ds-composer textarea::placeholder{color:var(--text-tertiary,#8fa79b);opacity:1}.ds-composer button{display:flex;align-items:center;justify-content:center;width:36px;height:36px;flex-shrink:0;border:0;border-radius:8px;background:var(--accent,#82d5ca);color:var(--text-inverse,#0c2421);cursor:pointer}.ds-composer button:hover{background:var(--accent-hover,#a3e5dc)}.ds-composer button:focus-visible{outline:2px solid var(--accent,#82d5ca);outline-offset:3px;}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}"
+    },
+    {
+      "name": "工具执行",
+      "kind": "custom",
+      "description": "原生 details 提供键盘可操作的渐进披露。",
+      "html": "<details class=\"ds-tool\"><summary>工具执行 · 1 项</summary><pre>工具结果示例</pre></details>",
+      "css": ".ds-tool{border:1px solid var(--border,#304746);border-radius:8px;background:#142420;color:var(--text-secondary,#acbeb6)}.ds-tool summary{cursor:pointer;padding:10px 14px;font:12px/1.6 -apple-system,BlinkMacSystemFont,sans-serif}.ds-tool summary:focus-visible{outline:2px solid var(--accent,#82d5ca);outline-offset:3px;}.ds-tool pre{padding:14px;border-top:1px solid var(--border-subtle,#253a39);font:12px/1.7 \"SF Mono\",Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "青夜",
+    "overview": "沿用用户明确指定的青夜身份：深青底色、青绿色操作强调、带绿调的浅色正文。界面服务于持续对话、阅读结果与查看执行过程；密度集中在导航、历史和工具信息，阅读区域保留宽松行距。\n\n本文记录当前 `internal/web/static` 的 HTML、CSS 和 JavaScript，结合 `.impeccable/review/` 中的桌面与手机截图核对。令牌为实现值，文字描述用于延续现有系统，不代表新增的用户审批、无障碍认证或服务部署结果。正式入口在迷你主机、Mac 用于开发预览的产品边界见 `PRODUCT.md`。",
+    "keyCharacteristics": [
+      "深色同色系表面与实线边界组成层次。",
+      "紧凑导航和可搜索历史围绕连续可用的输入区。",
+      "回复以正文呈现，工具过程通过原生展开控件渐进披露。",
+      "同一套视觉语言覆盖对话、独立流水线和会话管理。"
+    ],
+    "rules": [
+      {
+        "name": "State With Words",
+        "body": "状态色同时配合“已完成”“执行失败”“等待连接”等文字；不靠颜色单独说明结果。",
+        "section": "colors"
+      },
+      {
+        "name": "Tonal Depth",
+        "body": "继续用表面与边界组织层次；新增普通面板继承现有无阴影语言。",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** 延续用户确定的青夜配色与系统字体。",
+      "**Do** 让对话输入、历史搜索、模型和独立工作区入口保持明确。",
+      "**Do** 通过状态文字、聚焦样式和原生展开控件解释交互。",
+      "**Do** 为手机表单提供完整行宽，为长代码与表格提供局部滚动。",
+      "**Do** 将工具错误展开供阅读，并保留用户正在阅读的位置。"
+    ],
+    "donts": [
+      "**Don't** 用另一套配色替换青夜身份，或给普通面板添加悬浮阴影。",
+      "**Don't** 将回复正文包装成一组装饰卡片，削弱连续阅读。",
+      "**Don't** 在窄屏依赖悬停才显示必要操作。",
+      "**Don't** 只用颜色表示连接、运行或失败状态。",
+      "**Don't** 将截图中的模拟验收内容、界面属性或本地预览当成真实运行与认证证明。"
+    ]
+  }
+}

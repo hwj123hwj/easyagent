@@ -25,7 +25,10 @@ export function authHeaders(extra = {}) {
 
 // authFetch 保持原生 fetch 的 Response 接口，仅自动附带鉴权头
 export function authFetch(path, opts = {}) {
-  return fetch(path, { ...opts, headers: authHeaders(opts.headers) });
+  return fetch(path, { ...opts, headers: authHeaders(opts.headers) }).then(response => {
+    if (response.status === 401) showLogin();
+    return response;
+  });
 }
 
 // wsURL 为 WebSocket 连接附加 ?token=（浏览器 WS 无法自定义 header）
@@ -87,6 +90,7 @@ export function showLogin() {
   if (overlayEl) {
     overlayEl.hidden = false;
     document.getElementById('nav-auth').textContent = '未登录';
+    document.getElementById('login-token').focus();
     return;
   }
   overlayEl = document.getElementById('login-overlay');
@@ -112,6 +116,15 @@ export function showLogin() {
     overlayEl.hidden = true;
     window.location.reload();
   };
+  overlayEl.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && event.target === input) { event.preventDefault(); document.getElementById('login-save-btn').click(); }
+    if (event.key === 'Escape') { overlayEl.hidden = true; document.getElementById('nav-auth').focus(); }
+    if (event.key === 'Tab') {
+      const nodes = [...overlayEl.querySelectorAll('input,button')].filter(n => !n.disabled);
+      if (event.shiftKey && document.activeElement === nodes[0]) { event.preventDefault(); nodes.at(-1).focus(); }
+      else if (!event.shiftKey && document.activeElement === nodes.at(-1)) { event.preventDefault(); nodes[0].focus(); }
+    }
+  });
   overlayEl.hidden = false;
   input.focus();
 }

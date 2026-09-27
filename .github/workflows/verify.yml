@@ -1,0 +1,25 @@
+name: Verify
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go test ./...
+        working-directory: third_party/bubbletea
+      - run: node --test scripts/web-test.mjs
+      - run: python3 scripts/test_update_mini.py
+      - run: git diff --check

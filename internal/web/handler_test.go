@@ -19,6 +19,7 @@ func TestWebUI_ServesConsolePages(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "no-cache", w.Header().Get("Cache-Control"))
 	body := w.Body.String()
 	for _, want := range []string{"page-workflows", "page-sessions", "page-chat", "login-overlay"} {
 		assert.Contains(t, body, want)
@@ -30,6 +31,7 @@ func TestWebUI_ServesConsolePages(t *testing.T) {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusOK, w.Code, path)
+		assert.Equal(t, "no-cache", w.Header().Get("Cache-Control"), path)
 	}
 
 	// SPA 回退仍工作

@@ -31,7 +31,7 @@ steps:
 // 内置模板：一键载入，改几个字就能跑
 const TEMPLATES = [
   {
-    label: '📄 研究报告',
+    label: '研究报告',
     form: {
       name: '研究报告',
       autoLink: true,
@@ -44,7 +44,7 @@ const TEMPLATES = [
     },
   },
   {
-    label: '🌐 批量翻译',
+    label: '批量翻译',
     form: {
       name: '批量翻译',
       autoLink: true,
@@ -55,7 +55,7 @@ const TEMPLATES = [
     },
   },
   {
-    label: '✍️ 内容创作',
+    label: '内容创作',
     form: {
       name: '内容创作',
       autoLink: true,

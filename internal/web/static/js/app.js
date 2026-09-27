@@ -35,15 +35,28 @@ sidebar.loadModels();
 refreshAuthBadge();
 
 // Handle session change
-function onSessionChange(sessionId) {
-  if (sessionId) {
-    chat.show();
-    chat.clear();
-    chat.loadHistory(sessionId);
-  } else {
-    chat.hide();
-  }
+async function onSessionChange(sessionId) {
+  const session = state.sessions.find(s => s.id === sessionId);
+  document.getElementById('chat-title').textContent = session?.title || '新对话';
+  setSidebar(false);
+  await chat.selectSession(sessionId);
 }
+state.createSession = () => sidebar.createSession({select:false});
+state.selectSession = id => sidebar.selectSession(id);
+state.onSessionUpdated = () => sidebar.loadSessions();
+state.onPromptSent = (text) => {
+  const s = state.sessions.find(s => s.id === state.currentSessionId);
+  if (s && !s.title) { s.title = text; sidebar._renderSessions(); document.getElementById('chat-title').textContent = text; }
+};
+function setSidebar(open) {
+  document.getElementById('app').classList.toggle('sidebar-open', open);
+  document.getElementById('sidebar-backdrop').hidden = !open;
+  document.getElementById('sidebar-toggle').setAttribute('aria-expanded', String(open));
+}
+document.getElementById('sidebar-toggle').onclick = () => setSidebar(!document.getElementById('app').classList.contains('sidebar-open'));
+document.getElementById('sidebar-backdrop').onclick = () => setSidebar(false);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') setSidebar(false); });
+fetch('/health').then(r => r.json()).then(data => { document.getElementById('build-version').textContent = data.version || 'dev'; }).catch(() => {});
 
 // Periodic ping to keep connection alive
 setInterval(() => {
@@ -74,7 +87,8 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
 });
 
 function switchPage(pageID) {
-  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.page === pageID));
+  document.querySelectorAll('.nav-tab').forEach(t => { t.classList.toggle('active', t.dataset.page === pageID); t.setAttribute('aria-current', t.dataset.page === pageID ? 'page' : 'false'); });
+  setSidebar(false);
   document.querySelectorAll('.page').forEach(p => {
     const active = p.id === pageID;
     p.hidden = !active;

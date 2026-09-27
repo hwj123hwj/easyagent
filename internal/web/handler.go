@@ -24,6 +24,7 @@ func RegisterRoutes(mux *http.ServeMux) {
 			return
 		}
 
+		w.Header().Set("Cache-Control", "no-cache")
 		path := r.URL.Path
 
 		// Try to serve the file directly

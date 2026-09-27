@@ -3,29 +3,7 @@
 
 const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// Language keywords for minimal syntax highlighting
-const KEYWORDS = {
-  go: /\b(func|package|import|return|if|else|for|range|var|const|type|struct|interface|map|chan|go|defer|select|case|switch|default|break|continue|nil|true|false)\b/g,
-  js: /\b(const|let|var|function|return|if|else|for|while|switch|case|break|continue|class|import|export|from|async|await|try|catch|throw|new|this|null|undefined|true|false)\b/g,
-  python: /\b(def|class|import|from|return|if|elif|else|for|while|try|except|finally|with|as|lambda|yield|pass|break|continue|True|False|None|and|or|not|in|is)\b/g,
-  bash: /\b(if|then|else|elif|fi|for|while|do|done|case|esac|function|echo|exit|return|local|export|source|cd|ls|grep|sed|awk|cat|rm|mv|cp|mkdir|chmod|chown)\b/g,
-  sql: /\b(SELECT|FROM|WHERE|AND|OR|NOT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TABLE|INDEX|JOIN|INNER|LEFT|RIGHT|OUTER|ON|GROUP|BY|ORDER|HAVING|LIMIT|OFFSET|UNION|AS|SET|VALUES|INTO)\b/gi,
-};
-
-function highlightCode(code, lang) {
-  let escaped = escapeHtml(code);
-  const kw = KEYWORDS[lang] || KEYWORDS[lang?.split('-')[0]];
-  if (kw) {
-    escaped = escaped.replace(kw, '<span class="keyword">$&</span>');
-  }
-  // Highlight strings
-  escaped = escaped.replace(/(["'`])(?:(?!\1|\\).|\\.)*\1/g, '<span class="string">$&</span>');
-  // Highlight comments (// and #)
-  escaped = escaped.replace(/(\/\/.*$|#.*$)/gm, '<span class="comment">$&</span>');
-  // Highlight numbers
-  escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="number">$1</span>');
-  return escaped;
-}
+function highlightCode(code) { return escapeHtml(code); }
 
 export function renderMarkdown(text) {
   if (!text) return '';
@@ -46,7 +24,7 @@ export function renderMarkdown(text) {
       const end = src.indexOf('\n```', start);
       if (end !== -1) {
         const code = src.slice(start, end);
-        blocks.push(`<pre><code class="lang-${escapeHtml(lang)}">${highlightCode(code, lang.toLowerCase())}</code></pre>`);
+        blocks.push(`<pre><code class="lang-${escapeHtml(lang.replace(/[^a-zA-Z0-9_-]/g, ''))}">${highlightCode(code, lang.toLowerCase())}</code></pre>`);
         i = end + 4;
         continue;
       }
@@ -67,7 +45,7 @@ export function renderMarkdown(text) {
     }
 
     // Heading
-    const headingMatch = src.slice(i).match(/^(#{1,6})\s+(.+)\n/);
+    const headingMatch = src.slice(i).match(/^(#{1,6})\s+(.+)(?:\n|$)/);
     if (headingMatch) {
       const level = headingMatch[1].length;
       blocks.push(`<h${level}>${renderInline(headingMatch[2])}</h${level}>`);
@@ -139,30 +117,31 @@ export function renderMarkdown(text) {
   return blocks.join('\n');
 }
 
+function safeURL(raw, image = false) {
+  try {
+    const url = new URL(raw, 'https://local.invalid');
+    if (!['http:', 'https:'].includes(url.protocol) && !(url.protocol === 'mailto:' && !image)) return null;
+    return raw.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  } catch { return null; }
+}
 function renderInline(text) {
-  if (!text) return '';
-
-  let result = escapeHtml(text);
-
-  // Inline code (must be first to prevent inner processing)
-  result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-  // Bold + italic
-  result = result.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-  // Bold
-  result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Italic
-  result = result.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  // Strikethrough
-  result = result.replace(/~~(.+?)~~/g, '<del>$1</del>');
-
-  // Links [text](url)
-  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // Auto-link URLs
-  result = result.replace(/(^|[^"=])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
-
-  // Images ![alt](url)
-  result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:var(--radius-sm);">');
-
-  return result;
+  const format = value => escapeHtml(value)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/~~(.+?)~~/g, '<del>$1</del>');
+  const pattern = /`([^`]+)`|(!?)\[([^\]]*)\]\(([^)]+)\)|(https?:\/\/[^\s<>]+)/g;
+  let output = '', last = 0;
+  for (const match of text.matchAll(pattern)) {
+    output += format(text.slice(last, match.index));
+    const [raw, code, image, label, target, autoURL] = match;
+    if (code !== undefined) output += '<code>' + escapeHtml(code) + '</code>';
+    else {
+      const url = safeURL(target || autoURL, !!image);
+      if (!url) output += format(label || raw);
+      else if (image) output += '<img src="' + url + '" alt="' + escapeHtml(label).replace(/"/g, '&quot;') + '" loading="lazy">';
+      else output += '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + format(label || autoURL) + '</a>';
+    }
+    last = match.index + raw.length;
+  }
+  return output + format(text.slice(last));
 }
