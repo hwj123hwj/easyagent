@@ -186,6 +186,8 @@ func (s *Server) Handler() http.Handler {
 	// Workflow orchestration endpoints
 	s.registerWorkflowRoutes(restMux)
 
+	s.registerFeishuSettings(restMux)
+
 	// User profile endpoints
 	s.registerProfileRoutes(restMux)
 
@@ -219,6 +221,7 @@ func (s *Server) Handler() http.Handler {
 	topMux.Handle("/workflows", restHandler)
 	topMux.Handle("/workflows/", restHandler)
 	topMux.Handle("/profile", restHandler)
+	topMux.Handle("/settings/", restHandler)
 	topMux.Handle("/asr/", restHandler)
 
 	// Register web UI routes (serves embedded static files at /)

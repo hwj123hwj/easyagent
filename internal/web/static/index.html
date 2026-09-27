@@ -18,6 +18,7 @@
         <button class="nav-tab active" data-page="page-chat">对话</button>
         <button class="nav-tab" data-page="page-workflows">流水线</button>
         <button class="nav-tab" data-page="page-sessions">会话</button>
+        <button class="nav-tab" data-page="page-settings">设置</button>
       </div>
       <div class="nav-right">
         <span class="workspace-label">个人工作区</span><button id="nav-auth" class="nav-auth" title="管理访问令牌">连接中</button>
@@ -177,6 +178,35 @@
         </div>
       </div>
     </div>
+
+    <!-- Feishu settings inherit Qingye: status first, credentials next, owner pairing last. -->
+    <main id="page-settings" class="page" hidden>
+      <div class="settings-layout">
+        <header class="settings-heading"><div><h1>飞书连接</h1><p>让你的个人工作区在飞书里继续。</p></div><button id="settings-refresh" class="btn btn-ghost">刷新状态</button></header>
+        <div id="feishu-notice" class="settings-notice" role="status" aria-live="polite"></div>
+        <p id="feishu-unmanaged" hidden>此服务器尚未启用网页飞书管理。部署时配置 EA_FEISHU_ENV_FILE 和 FEISHU_OWNER_STATE_FILE，并启用 API 认证后，即可在这里管理。</p>
+        <section id="service-status" class="settings-section" aria-labelledby="service-title" hidden>
+          <h2 id="service-title">服务与开机启动</h2>
+          <table class="service-table"><thead><tr><th>服务</th><th>进程状态</th><th>开机启动</th></tr></thead><tbody>
+            <tr><th>EasyAgent 核心</th><td id="service-core">—</td><td id="autostart-core">—</td></tr>
+            <tr><th>飞书桥接</th><td id="service-bridge">—</td><td id="autostart-bridge">—</td></tr>
+          </tbody></table><p id="service-boot-note" class="settings-hint"></p>
+          <p class="settings-hint">进程运行不代表飞书已接通；应用发布及事件订阅需在飞书开放平台完成。</p>
+        </section>
+        <form id="feishu-form" class="settings-section" hidden>
+          <h2>应用凭据</h2><p class="settings-hint">使用飞书自建应用的凭据，并在开放平台开启机器人能力与长连接事件订阅。</p>
+          <label for="feishu-app-id">App ID</label><input id="feishu-app-id" class="settings-input" placeholder="cli_…" autocomplete="off" spellcheck="false" maxlength="256" required>
+          <label for="feishu-app-secret">App Secret</label><input id="feishu-app-secret" class="settings-input" type="password" placeholder="输入应用密钥" autocomplete="new-password" maxlength="256">
+          <p class="settings-hint">已保存的密钥不会回显。首次配置后 App ID 固定，可在此更新密钥；更换机器人需要重新配置使用者绑定。</p>
+          <div class="settings-actions"><button type="submit" class="btn btn-primary">保存并重启桥接</button><span>对话服务保持运行</span></div>
+        </form>
+        <section id="feishu-access" class="settings-section" aria-labelledby="access-title" hidden>
+          <h2 id="access-title">使用者配对</h2><p id="feishu-owner-status" class="settings-hint"></p>
+          <button id="feishu-show-pairing" class="btn btn-ghost">查看私聊配对指令</button>
+          <div id="feishu-pairing" hidden><label for="feishu-pair-command">私聊机器人发送以下指令</label><div class="pair-command-row"><input id="feishu-pair-command" class="settings-input" readonly autocomplete="off"><button id="feishu-copy-pairing" class="btn">复制</button></div><p id="feishu-pair-expiry" class="settings-hint"></p></div>
+        </section>
+      </div>
+    </main>
 
     <!-- Login Overlay -->
     <div id="login-overlay" class="login-overlay" hidden>

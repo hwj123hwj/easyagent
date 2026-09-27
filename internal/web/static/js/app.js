@@ -5,6 +5,7 @@ import { ChatPanel } from './chat.js';
 import { Sidebar } from './sidebar.js';
 import { WorkflowsPage } from './workflows.js';
 import { SessionsPage } from './sessions.js';
+import { SettingsPage } from './settings.js';
 import { api, getToken, showLogin } from './api.js';
 
 // Determine base URL (same host serving this page)
@@ -25,6 +26,7 @@ const chat = new ChatPanel(ws, state);
 const sidebar = new Sidebar(ws, state, onSessionChange);
 const workflowsPage = new WorkflowsPage(state);
 const sessionsPage = new SessionsPage(state);
+const settingsPage = new SettingsPage();
 
 // Connect WebSocket
 ws.connect();
@@ -81,7 +83,7 @@ if (hashSession) {
 
 // ─── 页面导航 ────────────────────────────────────────────────────────────────
 
-const pages = { 'page-chat': null, 'page-workflows': workflowsPage, 'page-sessions': sessionsPage };
+const pages = { 'page-chat': null, 'page-workflows': workflowsPage, 'page-sessions': sessionsPage, 'page-settings': settingsPage };
 
 document.querySelectorAll('.nav-tab').forEach(tab => {
   tab.onclick = () => switchPage(tab.dataset.page);
@@ -99,6 +101,7 @@ function switchPage(pageID) {
   if (page && page.activate) page.activate();
   // 离开工作流页时停掉详情轮询由 deactivate 控制；此处简化：仅聊天页外的页不处理
   if (pageID !== 'page-workflows') workflowsPage.deactivate();
+  if (pageID !== 'page-settings') settingsPage.deactivate();
 }
 
 // 深链接：?page=page-workflows 直达指定页签
