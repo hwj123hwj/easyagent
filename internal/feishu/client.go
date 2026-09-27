@@ -20,9 +20,10 @@ import (
 
 // Client wraps the Feishu SDK REST client for messaging operations.
 type Client struct {
-	sdk       *lark.Client
-	appID     string
-	appSecret string
+	sdk        *lark.Client
+	cardClient *http.Client
+	appID      string
+	appSecret  string
 
 	// Token cache
 	cachedToken    string
@@ -454,4 +455,12 @@ func createMultipartBody(file *os.File, fileName, fieldName, fieldValue string) 
 	}()
 
 	return pr, writer.FormDataContentType(), nil
+}
+
+// Card requests are bounded even if a remote connection stalls.
+func (c *Client) cardHTTPClient() *http.Client {
+	if c.cardClient != nil {
+		return c.cardClient
+	}
+	return &http.Client{Timeout: 10 * time.Second}
 }

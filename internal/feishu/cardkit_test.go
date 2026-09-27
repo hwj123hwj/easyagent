@@ -3,7 +3,6 @@ package feishu
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestTruncateCardText_Short(t *testing.T) {
@@ -161,8 +160,8 @@ func TestBuildStreamingCard_Structure(t *testing.T) {
 	if !ok {
 		t.Fatal("missing config")
 	}
-	if config["streaming_mode"] != true {
-		t.Error("streaming_mode should be true")
+	if config["streaming_mode"] != false {
+		t.Error("native typewriter should be disabled")
 	}
 
 	body, ok := card["body"].(map[string]any)
@@ -275,25 +274,5 @@ func TestBuildWorktreeCard_NoActionsWithoutWorktree(t *testing.T) {
 	elements := body["elements"].([]any)
 	if len(elements) != 1 {
 		t.Fatalf("expected only status element, got %d", len(elements))
-	}
-}
-
-func TestPushContent_Throttle(t *testing.T) {
-	h := &StreamingCardHandle{
-		client:      nil, // won't actually call API
-		minInterval: 1 * time.Second,
-	}
-
-	// Simulate a recent push
-	h.lastPush = time.Now()
-
-	// This should be throttled (returns nil silently)
-	err := h.PushContent("should be throttled")
-	if err != nil {
-		t.Errorf("expected nil error for throttled push, got %v", err)
-	}
-	// sequence should not increment when throttled
-	if h.sequence != 0 {
-		t.Errorf("sequence should be 0 when throttled, got %d", h.sequence)
 	}
 }

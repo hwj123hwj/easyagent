@@ -40,8 +40,6 @@ type StreamingCardHandle struct {
 	client    *Client
 	sequence  int
 	mu        sync.Mutex
-	lastPush  time.Time
-	minInterval time.Duration
 }
 
 // HasCard reports whether the card was successfully created and sent.
@@ -49,53 +47,22 @@ func (h *StreamingCardHandle) HasCard() bool {
 	return h.MessageID != "" && h.CardID != ""
 }
 
-// PushContent pushes cumulative content to the streaming card with throttling.
-func (h *StreamingCardHandle) PushContent(content string) error {
+// PushUpdate replaces the latest body and status together. Native typewriter
+// playback is disabled: already-generated text should appear immediately.
+func (h *StreamingCardHandle) PushUpdate(ctx context.Context, content string, metrics FooterMetrics) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-
-	now := time.Now()
-	if now.Sub(h.lastPush) < h.minInterval {
-		return nil // throttled
-	}
-
 	h.sequence++
-	truncated := truncateCardText(content)
-	if err := h.client.streamCardKitElement(context.Background(), h.CardID, CardKitStreamingElementID, truncated, h.sequence); err != nil {
-		h.sequence--
-		return err
-	}
-	h.lastPush = now
-	return nil
+	card := BuildStreamingCard(content, RenderFooterMarkdown(metrics))
+	return h.client.updateCardKitCard(ctx, h.CardID, card, h.sequence)
 }
 
-// PushFooter updates the footer metrics.
-func (h *StreamingCardHandle) PushFooter(metrics FooterMetrics) error {
+// Finalize writes the complete response after the update worker has stopped.
+func (h *StreamingCardHandle) Finalize(ctx context.Context, content string, metrics *FooterMetrics) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-
 	h.sequence++
-	footer := RenderFooterMarkdown(metrics)
-	if err := h.client.streamCardKitElement(context.Background(), h.CardID, CardKitFooterElementID, footer, h.sequence); err != nil {
-		h.sequence--
-		return err
-	}
-	return nil
-}
-
-// Finalize closes streaming mode and writes the final card state.
-func (h *StreamingCardHandle) Finalize(content string, metrics *FooterMetrics) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	// Disable streaming mode
-	h.sequence++
-	_ = h.client.setCardKitStreamingMode(context.Background(), h.CardID, false, h.sequence)
-
-	// Final card update
-	h.sequence++
-	finalCard := BuildFinalCard(content, metrics)
-	return h.client.updateCardKitCard(context.Background(), h.CardID, finalCard, h.sequence)
+	return h.client.updateCardKitCard(ctx, h.CardID, BuildFinalCard(content, metrics), h.sequence)
 }
 
 // RenderFooterMarkdown renders footer metrics as a single markdown line.
@@ -109,7 +76,7 @@ func RenderFooterMarkdown(metrics FooterMetrics) string {
 		case strings.Contains(lower, "error") || strings.Contains(lower, "failed"):
 			parts = append(parts, fmt.Sprintf("<font color='red'>%s</font>", metrics.Status))
 			isError = true
-		case strings.Contains(lower, "processing") || strings.Contains(lower, "thinking"):
+		case strings.Contains(lower, "processing") || strings.Contains(lower, "thinking") || strings.Contains(lower, "正在"):
 			parts = append(parts, fmt.Sprintf("<font color='grey'>%s</font>", metrics.Status))
 		default:
 			parts = append(parts, fmt.Sprintf("<font color='green'>%s</font>", metrics.Status))
@@ -155,24 +122,27 @@ func RenderFooterMarkdown(metrics FooterMetrics) string {
 	return text
 }
 
-// BuildStreamingCard builds a CardKit 2.0 streaming initial card.
+// BuildStreamingCard builds a progress card without client-side typewriter playback.
 func BuildStreamingCard(initialContent, initialFooter string) map[string]any {
+	if strings.TrimSpace(initialContent) == "" {
+		initialContent = "正在处理…"
+	}
 	elements := []any{
 		map[string]any{
-			"tag":         "markdown",
-			"element_id":  CardKitStreamingElementID,
-			"content":     truncateCardText(initialContent),
-			"text_align":  "left",
-			"text_size":   "normal_v2",
+			"tag":        "markdown",
+			"element_id": CardKitStreamingElementID,
+			"content":    truncateCardText(initialContent),
+			"text_align": "left",
+			"text_size":  "normal_v2",
 		},
 		map[string]any{
 			"tag":        "markdown",
 			"element_id": CardKitLoadingElementID,
 			"content":    " ",
 			"icon": map[string]any{
-				"tag":    "custom_icon",
+				"tag":     "custom_icon",
 				"img_key": CardKitLoadingImgKey,
-				"size":   "16px 16px",
+				"size":    "16px 16px",
 			},
 		},
 	}
@@ -191,9 +161,9 @@ func BuildStreamingCard(initialContent, initialFooter string) map[string]any {
 	return map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{
-			"streaming_mode": true,
+			"streaming_mode": false,
 			"summary": map[string]any{
-				"content":     "Processing...",
+				"content":      "Processing...",
 				"i18n_content": map[string]string{"zh_cn": "处理中...", "en_us": "Processing..."},
 			},
 		},
@@ -273,7 +243,7 @@ func (c *Client) createCardKitCard(ctx context.Context, card map[string]any) (st
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.cardHTTPClient().Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -323,7 +293,7 @@ func (c *Client) sendCardKitMessage(ctx context.Context, chatID, cardID, replyTo
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.cardHTTPClient().Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -346,68 +316,7 @@ func (c *Client) sendCardKitMessage(ctx context.Context, chatID, cardID, replyTo
 	return result.Data.MessageID, nil
 }
 
-// streamCardKitElement pushes content to a specific card element.
-func (c *Client) streamCardKitElement(ctx context.Context, cardID, elementID, content string, sequence int) error {
-	token, err := c.getTenantToken(ctx)
-	if err != nil {
-		return err
-	}
-
-	url := fmt.Sprintf("https://open.feishu.cn/open-apis/cardkit/v1/cards/%s/elements/%s/content",
-		cardID, elementID)
-	body := fmt.Sprintf(`{"content":%s,"sequence":%d}`, jsonString(content), sequence)
-
-	req, err := http.NewRequestWithContext(ctx, "PUT", url, strings.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("stream element failed (HTTP %d): %s", resp.StatusCode, string(data[:min(len(data), 200)]))
-	}
-	return nil
-}
-
-// setCardKitStreamingMode enables or disables streaming mode on a card.
-func (c *Client) setCardKitStreamingMode(ctx context.Context, cardID string, enabled bool, sequence int) error {
-	token, err := c.getTenantToken(ctx)
-	if err != nil {
-		return err
-	}
-
-	url := fmt.Sprintf("https://open.feishu.cn/open-apis/cardkit/v1/cards/%s/settings", cardID)
-	body := fmt.Sprintf(`{"settings":{"streaming_mode":%v},"sequence":%d}`, enabled, sequence)
-
-	req, err := http.NewRequestWithContext(ctx, "PUT", url, strings.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("set streaming mode failed (HTTP %d): %s", resp.StatusCode, string(data[:min(len(data), 200)]))
-	}
-	return nil
-}
-
-// updateCardKitCard fully updates a card (used for final state).
+// updateCardKitCard updates body and status atomically for progress and completion.
 func (c *Client) updateCardKitCard(ctx context.Context, cardID string, card map[string]any, sequence int) error {
 	token, err := c.getTenantToken(ctx)
 	if err != nil {
@@ -425,7 +334,7 @@ func (c *Client) updateCardKitCard(ctx context.Context, cardID string, card map[
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.cardHTTPClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -435,12 +344,24 @@ func (c *Client) updateCardKitCard(ctx context.Context, cardID string, card map[
 		data, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("update card failed (HTTP %d): %s", resp.StatusCode, string(data[:min(len(data), 200)]))
 	}
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode card update: %w", err)
+	}
+	if result.Code != 0 {
+		return fmt.Errorf("update card failed (code %d): %s", result.Code, result.Msg)
+	}
 	return nil
 }
 
 // SendStreamingCard creates a CardKit streaming card and returns a handle.
 // Returns a handle with nil MessageID if CardKit creation fails (caller should fall back).
 func (c *Client) SendStreamingCard(ctx context.Context, chatID, initialContent, replyTo string) *StreamingCardHandle {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	card := BuildStreamingCard(initialContent, "")
 	cardID, err := c.createCardKitCard(ctx, card)
 	if err != nil {
@@ -455,12 +376,10 @@ func (c *Client) SendStreamingCard(ctx context.Context, chatID, initialContent, 
 	}
 
 	return &StreamingCardHandle{
-		MessageID:   messageID,
-		CardID:      cardID,
-		client:      c,
-		sequence:    1,
-		lastPush:    time.Now(),
-		minInterval: 1500 * time.Millisecond,
+		MessageID: messageID,
+		CardID:    cardID,
+		client:    c,
+		sequence:  1,
 	}
 }
 
