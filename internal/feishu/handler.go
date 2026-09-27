@@ -496,26 +496,23 @@ func (h *Handler) handleWithCard(ctx context.Context, chatKey, messageID, sessio
 
 	fullText, err := h.streamChat(ctx, sessionID, text, card)
 	elapsed := time.Since(startTime)
+	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 
+	metrics := &FooterMetrics{Status: "已完成", ElapsedMs: elapsed.Milliseconds()}
 	if err != nil {
 		slog.Error("stream chat failed", "error", err)
-		_ = card.Finalize("❌ 处理出错，请重试", &FooterMetrics{
-			Status:    "Error",
-			ElapsedMs: elapsed.Milliseconds(),
-		})
-		return
+		metrics.Status = "Error"
+		fullText = strings.TrimSpace(fullText + "\n\n❌ 处理出错，请重试")
+	}
+	if finalizeErr := card.Finalize(finalCtx, fullText, metrics); finalizeErr != nil {
+		slog.Warn("card finalize failed", "error", finalizeErr)
+		fallbackCtx, cancelFallback := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancelFallback()
+		_, _ = h.client.SendMarkdown(fallbackCtx, chatKey, fullText, messageID)
 	}
 
-	// Finalize card with result
-	metrics := &FooterMetrics{
-		Status:    "已完成",
-		ElapsedMs: elapsed.Milliseconds(),
-	}
-	if err := card.Finalize(fullText, metrics); err != nil {
-		slog.Warn("card finalize failed", "error", err)
-	}
-
-	if fullText != "" {
+	if err == nil && fullText != "" {
 		h.sendDetectedFiles(ctx, chatKey, fullText, h.workspaceFor(chatKey))
 	}
 }
@@ -546,8 +543,9 @@ func (h *Handler) handleWithTextFallback(ctx context.Context, chatKey, messageID
 }
 
 // streamChat calls POST /chat/stream and collects the full response text.
-// When card is non-nil, pushes content to the streaming card; otherwise uses periodic UpdateMessage.
+// Card updates are coalesced asynchronously so Feishu latency cannot block SSE reads.
 func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card *StreamingCardHandle) (string, error) {
+	startTime := time.Now()
 	body, _ := json.Marshal(map[string]string{
 		"prompt":     prompt,
 		"session_id": sessionID,
@@ -578,7 +576,12 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 	}
 
 	var buf strings.Builder
-	startTime := time.Now()
+	var updates *cardUpdater
+	if card != nil {
+		updates = newCardUpdater(ctx, card, 500*time.Millisecond)
+		defer updates.stop()
+	}
+	firstText := true
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -603,7 +606,13 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 				}
 				if err := json.Unmarshal([]byte(data), &ev); err == nil && ev.TextDelta != "" {
 					buf.WriteString(ev.TextDelta)
-					h.pushContentToCard(card, buf.String(), startTime)
+					if firstText {
+						slog.Info("agent stream first text", "sessionID", sessionID, "elapsedMs", time.Since(startTime).Milliseconds())
+						firstText = false
+					}
+					if updates != nil {
+						updates.update(buf.String(), FooterMetrics{Status: "正在生成回复", ElapsedMs: time.Since(startTime).Milliseconds()})
+					}
 				}
 
 			case "tool_start":
@@ -612,14 +621,18 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 				}
 				if err := json.Unmarshal([]byte(data), &ev); err == nil && ev.ToolName != "" {
 					slog.Debug("tool started", "tool", ev.ToolName)
-					if card != nil {
-						card.PushFooter(FooterMetrics{
-							Status:    fmt.Sprintf("🔧 %s", ev.ToolName),
+					if updates != nil {
+						updates.update(buf.String(), FooterMetrics{
+							Status:    fmt.Sprintf("正在执行 %s", ev.ToolName),
 							ElapsedMs: time.Since(startTime).Milliseconds(),
 						})
 					}
 				}
 
+			case "tool_end":
+				if updates != nil {
+					updates.update(buf.String(), FooterMetrics{Status: "正在思考", ElapsedMs: time.Since(startTime).Milliseconds()})
+				}
 			case "done":
 				var ev struct {
 					FinalMessage struct {
@@ -636,7 +649,7 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 				if strings.TrimSpace(buf.String()) == "" {
 					return "", errors.New("agent completed without reply text")
 				}
-				slog.Debug("SSE stream done", "textLen", buf.Len())
+				slog.Info("agent stream done", "sessionID", sessionID, "textLen", buf.Len(), "elapsedMs", time.Since(startTime).Milliseconds())
 				return buf.String(), nil
 
 			case "error":
@@ -651,18 +664,6 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 	}
 
 	return buf.String(), fmt.Errorf("agent stream ended before completion: %w", io.ErrUnexpectedEOF)
-}
-
-// pushContentToCard pushes content to the streaming card (no-op if card is nil).
-func (h *Handler) pushContentToCard(card *StreamingCardHandle, content string, startTime time.Time) {
-	if card == nil {
-		return
-	}
-	card.PushContent(content)
-	card.PushFooter(FooterMetrics{
-		Status:    "思考中...",
-		ElapsedMs: time.Since(startTime).Milliseconds(),
-	})
 }
 
 // filePathRegex matches file paths in LLM replies.
