@@ -18,6 +18,12 @@ const responseHeaderTimeout = 120 * time.Second
 // 变量化以便测试缩短等待。
 var streamIdleTimeout = 120 * time.Second
 
+// 空流重试（断流重发）的次数上限与基础退避间隔，实际退避 = attempt * 基础间隔。
+// 变量化以便测试缩短等待。
+const streamRetryAttempts = 3
+
+var streamRetryDelay = time.Second
+
 func newStreamHTTPClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = responseHeaderTimeout
@@ -26,8 +32,8 @@ func newStreamHTTPClient() *http.Client {
 
 // streamWatchdog 监视流式 body 的读取进度。
 type streamWatchdog struct {
-	Kick    func()        // 每读到一行数据调用
-	Tripped func() bool   // 看门狗是否已因空闲超时触发
+	Kick    func()      // 每读到一行数据调用
+	Tripped func() bool // 看门狗是否已因空闲超时触发
 }
 
 // startStreamWatchdog 启动看门狗：超过 idle 未 Kick 则 cancel（中止停滞的流）。

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
 )
@@ -57,15 +58,15 @@ type anthropicImageSource struct {
 }
 
 type anthropicContentBlock struct {
-	Type      string               `json:"type"`
-	Text      string               `json:"text,omitempty"`
-	Source    *anthropicImageSource `json:"source,omitempty"` // image content source
-	ID        string               `json:"id,omitempty"`               // tool_use 的 id
-	ToolUseID string               `json:"tool_use_id,omitempty"`      // tool_result 引用的 tool_use id
-	Name      string               `json:"name,omitempty"`
-	Input     json.RawMessage      `json:"input,omitempty"`
-	Content   any                  `json:"content,omitempty"` // tool_result 的嵌套内容
-	IsError   bool                 `json:"is_error,omitempty"` // tool_result 是否为错误
+	Type      string                `json:"type"`
+	Text      string                `json:"text,omitempty"`
+	Source    *anthropicImageSource `json:"source,omitempty"`      // image content source
+	ID        string                `json:"id,omitempty"`          // tool_use 的 id
+	ToolUseID string                `json:"tool_use_id,omitempty"` // tool_result 引用的 tool_use id
+	Name      string                `json:"name,omitempty"`
+	Input     json.RawMessage       `json:"input,omitempty"`
+	Content   any                   `json:"content,omitempty"`  // tool_result 的嵌套内容
+	IsError   bool                  `json:"is_error,omitempty"` // tool_result 是否为错误
 }
 
 type anthropicMessage struct {
@@ -103,43 +104,68 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req ai.StreamRequest) (*
 	// 流式请求绑定可取消的派生 context：空闲看门狗超时触发 cancel，
 	// 中止停滞的上游连接（总时长不受 http.Client.Timeout 限制）
 	streamCtx, cancel := context.WithCancel(ctx)
-	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, p.baseURL+"v1/messages", bytes.NewReader(body))
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
-
 	go func() {
 		defer stream.Close()
 		defer cancel()
 
 		partial := ai.StreamAssistantMessage{}
+		_ = stream.Push(ctx, ai.EventStart{Partial: partial})
 
-		resp, err := p.client.Do(httpReq)
-		if err != nil {
+		fail := func(err error) {
 			partial.StopReason = ai.StopReasonError
 			partial.ErrorMsg = err.Error()
-			_ = stream.Push(ctx, ai.EventError{Reason: "error", Error: err.Error()})
+			// ctx 可能已被看门狗取消，终止事件用独立 context 保证送达
+			_ = stream.Push(context.Background(), ai.EventError{Reason: "error", Error: err.Error()})
 			stream.SetResult(partial, err)
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			respBody, _ := io.ReadAll(resp.Body)
-			errMsg := fmt.Sprintf("API error %d: %s", resp.StatusCode, string(respBody))
-			partial.StopReason = ai.StopReasonError
-			partial.ErrorMsg = errMsg
-			_ = stream.Push(ctx, ai.EventError{Reason: "error", Error: errMsg})
-			stream.SetResult(partial, errors.New(errMsg))
-			return
 		}
 
-		wd := startStreamWatchdog(streamCtx, streamIdleTimeout, cancel)
-		p.handleSSE(streamCtx, stream, resp.Body, &partial, wd)
+		// 断流重试：上游长思考静默期会被前置 LB 掐断，客户端读到 unexpected EOF。
+		// 只要一个内容块都没收到，原样重发是安全的（内容尚未开始）。
+		for attempt := 1; ; attempt++ {
+			httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost,
+				p.baseURL+"v1/messages", bytes.NewReader(body))
+			if err != nil {
+				fail(fmt.Errorf("create request: %w", err))
+				return
+			}
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+			httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+			resp, err := p.client.Do(httpReq)
+			if err != nil {
+				fail(err)
+				return
+			}
+			if resp.StatusCode != http.StatusOK {
+				respBody, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				fail(fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody)))
+				return
+			}
+
+			wd := startStreamWatchdog(streamCtx, streamIdleTimeout, cancel)
+			received, err := p.handleSSE(streamCtx, stream, resp.Body, &partial, wd)
+			resp.Body.Close()
+
+			if err == nil && received {
+				return // 正常完成，handleSSE 已收尾
+			}
+			// 空流（EOF 断流）且未被取消 → 退避后重试
+			if !received && err == nil && attempt < streamRetryAttempts &&
+				ctx.Err() == nil && streamCtx.Err() == nil {
+				select {
+				case <-time.After(time.Duration(attempt) * streamRetryDelay):
+					continue
+				case <-ctx.Done():
+				}
+			}
+			if err == nil {
+				err = errors.New("upstream returned an empty stream")
+			}
+			fail(err)
+			return
+		}
 	}()
 
 	return stream, nil
@@ -147,9 +173,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req ai.StreamRequest) (*
 
 // ─── SSE 解析 ────────────────────────────────────────────────────────────────────
 
-func (p *AnthropicProvider) handleSSE(ctx context.Context, stream *ai.EventStream, body io.Reader, partial *ai.StreamAssistantMessage, wd *streamWatchdog) {
-	_ = stream.Push(ctx, ai.EventStart{Partial: *partial})
-
+func (p *AnthropicProvider) handleSSE(ctx context.Context, stream *ai.EventStream, body io.Reader, partial *ai.StreamAssistantMessage, wd *streamWatchdog) (received bool, err error) {
 	scanner := bufio.NewScanner(body)
 	// 超长单行真实存在（长思考/长参数），初始小、按需增长到大上限
 	scanner.Buffer(make([]byte, 64*1024), 16<<20)
@@ -175,24 +199,29 @@ func (p *AnthropicProvider) handleSSE(ctx context.Context, stream *ai.EventStrea
 		}
 	}
 
+	// 是否收到过任何内容块（文本 / 工具调用 / 思考）
+	received = len(partial.ToolCalls) > 0 || partial.Text != "" || partial.Thinking != ""
+
 	// 兜底：流结束时未收到 message_stop。异常结束（含空闲超时）必须报错，
-	// 不能把已收到的部分内容伪装成正常完成
+	// 不能把已收到的部分内容伪装成正常完成。
+	// 终止事件与结果由调用方统一处理（可能先重试）。
 	if err := scanner.Err(); err != nil {
 		if wd.Tripped() {
 			err = idleTimeoutError(streamIdleTimeout)
 		}
-		partial.StopReason = ai.StopReasonError
-		partial.ErrorMsg = err.Error()
-		// ctx 可能已被看门狗取消，终止事件用独立 context 保证送达
-		_ = stream.Push(context.Background(), ai.EventError{Reason: "error", Error: err.Error()})
-		stream.SetResult(*partial, err)
-		return
+		return received, err
 	}
 	if partial.StopReason == "" {
+		// 空流：上游可能被 LB 掐断（连 message_stop 都没发），
+		// 不装作正常完成（空消息会污染会话），交给调用方重试/报错
+		if !received {
+			return false, nil
+		}
 		partial.StopReason = ai.StopReasonStop
 		_ = stream.Push(ctx, ai.EventDone{Reason: partial.StopReason, Message: *partial})
 		stream.SetResult(*partial, nil)
 	}
+	return received, nil
 }
 
 func (p *AnthropicProvider) handleSSEEvent(
