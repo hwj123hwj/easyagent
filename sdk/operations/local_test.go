@@ -37,7 +37,7 @@ func TestLocalBashOperations_Run(t *testing.T) {
 
 	t.Run("with timeout", func(t *testing.T) {
 		result, err := ops.Run(ctx, RunRequest{Command: "sleep 10", Timeout: 1})
-		require.NoError(t, err)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
 		assert.NotEqual(t, 0, result.ExitCode) // should timeout
 	})
 }

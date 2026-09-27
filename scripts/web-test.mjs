@@ -149,3 +149,21 @@ test('workflow task sends through the agent and empty workflow opens the run dir
   await panel._send();assert.equal(sent,'/workflow 研究方案');assert.equal(panel.input.value,'/workflow 研究方案');
   panel.input.value='/workflow';await panel._send();assert.equal(page,'page-dynamic-workflows');assert.equal(panel.input.value,'');
 });
+
+test('history never marks a tool with no result as successful', async () => {
+  const oldFetch=globalThis.fetch, oldStorage=globalThis.localStorage;
+  globalThis.localStorage={getItem:()=>''};
+  globalThis.fetch=async()=>({ok:true,json:async()=>[
+    {role:'assistant',tool_calls:[{id:'ok',name:'bash'},{id:'failed',name:'bash'},{id:'missing',name:'bash'}]},
+    {role:'toolResult',tool_call_id:'ok',content:'output'},
+    {role:'toolResult',tool_call_id:'failed',content:'timed out',is_error:true},
+  ]});
+  const states=new Map(),panel=Object.create(ChatPanel.prototype);
+  Object.assign(panel,{state:{currentSessionId:'test',baseUrl:''},messageList:{children:[{}]},
+    _updateButtons(){},clear(){},_startAssistantStream(){},_finishTools(){},_scrollToBottom(){},
+    _addToolCall(id,name,status){states.set(id,status);},_updateToolCall(id,status){states.set(id,status);},
+    _notice(message){throw Error(message);},
+  });
+  try {await panel.loadHistory('test');assert.equal(states.get('ok'),'done');assert.equal(states.get('failed'),'error');assert.equal(states.get('missing'),'unknown');}
+  finally {globalThis.fetch=oldFetch;globalThis.localStorage=oldStorage;}
+});

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -106,30 +107,39 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, onUpdate fu
 		WorkDir: t.workspace,
 	}
 
-	result, err := t.ops.Run(ctx, req)
-	if err != nil {
-		return agent.ToolResult{IsError: true}, err
-	}
+	result, runErr := t.ops.Run(ctx, req)
 
 	output := string(result.Output)
 
-	// Detect binary output
+	// Keep output and failure together so the model sees both the cause and progress.
 	if isBinaryOutput(output) {
-		return agent.ToolResult{
-			Content: fmt.Sprintf("Command produced binary output (%d bytes). Use file redirection to save output.", len(result.Output)),
-			IsError: false,
-		}, nil
+		output = fmt.Sprintf("Command produced binary output (%d bytes). Use file redirection to save output.", len(result.Output))
+	} else {
+		output = TruncateOutput(stripANSI(output), t.maxOutputLen)
+	}
+	var failure error
+	switch {
+	case errors.Is(runErr, context.DeadlineExceeded):
+		if ctx.Err() != nil {
+			failure = fmt.Errorf("command interrupted: request deadline exceeded: %w", runErr)
+		} else {
+			failure = fmt.Errorf("command timed out after %s: %w", req.Timeout, runErr)
+		}
+	case errors.Is(runErr, context.Canceled):
+		failure = fmt.Errorf("command canceled: %w", runErr)
+	case runErr != nil:
+		failure = runErr
+	case result.ExitCode != 0:
+		failure = fmt.Errorf("command exited with code %d", result.ExitCode)
+	}
+	if failure != nil {
+		if output != "" {
+			output += "\n\n"
+		}
+		output += failure.Error()
+		return agent.ToolResult{Content: output, IsError: true}, failure
 	}
 
-	// Clean ANSI escape sequences
-	output = stripANSI(output)
-
-	// Truncate output
-	output = TruncateOutput(output, t.maxOutputLen)
-
-	if result.ExitCode != 0 {
-		return agent.ToolResult{Content: output, IsError: true}, fmt.Errorf("command exited with code %d", result.ExitCode)
-	}
 	return agent.ToolResult{Content: output}, nil
 }
 

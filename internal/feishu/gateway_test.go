@@ -1,8 +1,12 @@
 package feishu
 
 import (
+	"context"
 	"fmt"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestExtractText(t *testing.T) {
@@ -247,5 +251,59 @@ func TestTryResolveChoice_NoMatch(t *testing.T) {
 	case v := <-ch:
 		t.Errorf("channel should be empty, got %q", v)
 	default:
+	}
+}
+
+func TestPostMessageFormats(t *testing.T) {
+	tests := []struct{ name, content, want string }{
+		{"event body", `{"title":"分析","content":[[{"tag":"text","text":"看看 "},{"tag":"a","text":"项目","href":"https://example.com"}],[{"tag":"text","text":"第二行"}]]}`, "**分析**\n看看 [项目](https://example.com)\n第二行"},
+		{"localized", `{"zh_cn":{"title":"中文","content":[[{"tag":"text","text":"你好"}]]},"en_us":{"title":"English","content":[[{"tag":"text","text":"hello"}]]}}`, "**中文**\n你好"},
+		{"code and markdown", `{"content":[[{"tag":"md","text":"**任务**"}],[{"tag":"code_block","language":"go","text":"hello()"}]]}`, "**任务**\n\n```go\nhello()\n```\n"},
+		{"title only", `{"title":"任务","content":[]}`, "**任务**"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := (&Gateway{}).handlePostMessage(context.Background(), &larkim.EventMessage{Content: &tt.content})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("got %q; want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInvalidPostDoesNotReachAgent(t *testing.T) {
+	access, err := OpenOwnerAccess(filepath.Join(t.TempDir(), "owner.json"), "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan Message, 1)
+	g := NewGateway("", "", nil, func(_ context.Context, msg Message) { got <- msg })
+	g.SetOwnerAccess(access)
+	kind, content, actor, senderType, chat, id := "post", `{"broken":true}`, "owner", "user", "private", "invalid-post"
+	event := &larkim.P2MessageReceiveV1{Event: &larkim.P2MessageReceiveV1Data{
+		Sender:  &larkim.EventSender{SenderType: &senderType, SenderId: &larkim.UserId{OpenId: &actor}},
+		Message: &larkim.EventMessage{MessageType: &kind, Content: &content, ChatId: &chat, MessageId: &id},
+	}}
+	g.handleEvent(context.Background(), event)
+	content = `{"title":"","content":[[{"tag":"text","text":"正常消息"}]]}`
+	id = "valid-post"
+	g.handleEvent(context.Background(), event)
+	select {
+	case msg := <-got:
+		if msg.Text != "正常消息" {
+			t.Fatalf("invalid post reached agent: %q", msg.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("valid post was not dispatched")
+	}
+}
+func TestInvalidPostFormats(t *testing.T) {
+	for _, content := range []string{`not JSON`, `null`, `{"content":"broken"}`, `{"title":"","content":[]}`} {
+		if _, err := (&Gateway{}).handlePostMessage(context.Background(), &larkim.EventMessage{Content: &content}); err == nil {
+			t.Fatalf("accepted %s", content)
+		}
 	}
 }

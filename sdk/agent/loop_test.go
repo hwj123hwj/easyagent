@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"github.com/hwj123hwj/easyagent/sdk/session"
+	"path/filepath"
 	"testing"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
@@ -174,4 +176,63 @@ func TestRunLoop_ToolNotFound(t *testing.T) {
 	result, err := ag.Prompt(ctx, ai.NewTextUserMessage("test"))
 	require.NoError(t, err)
 	assert.Equal(t, "Tool not found, handled gracefully.", result.Text)
+}
+
+type cancelTestTool struct {
+	echoTool
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (t *cancelTestTool) Execute(ctx context.Context, raw json.RawMessage, update func(PartialResult)) (ToolResult, error) {
+	t.calls++
+	t.cancel()
+	return ToolResult{Content: "partial result", IsError: true}, context.Canceled
+}
+func TestCanceledToolResultsSurviveReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	storage := session.NewJSONLStorage(path)
+	require.NoError(t, storage.Init())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tool := &cancelTestTool{cancel: cancel}
+	ag := newTestAgentWithProvider([]mockTestResponse{{stop: ai.StopReasonToolUse, toolCalls: []ai.ToolCall{
+		{ID: "first", Name: "echo", Args: `{"message":"one"}`}, {ID: "second", Name: "echo", Args: `{"message":"two"}`},
+	}}})
+	ag.session = session.New(storage)
+	ag.tools["echo"] = tool
+	_, err := ag.Prompt(ctx, ai.NewTextUserMessage("run"))
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, tool.calls, "must not start remaining tools after cancellation")
+	require.NoError(t, storage.Close())
+	restored := session.NewJSONLStorage(path)
+	require.NoError(t, restored.Init())
+	defer restored.Close()
+	sess := session.New(restored)
+	require.NoError(t, sess.InitFromStorage(context.Background()))
+	messages, err := sess.BuildContext(context.Background())
+	require.NoError(t, err)
+	require.Len(t, messages, 4)
+	first := messages[2].(ai.ToolResultMessage)
+	second := messages[3].(ai.ToolResultMessage)
+	assert.Equal(t, "first", first.ToolCallID)
+	assert.Contains(t, first.Content, "partial result")
+	assert.True(t, first.IsError)
+	assert.Equal(t, "second", second.ToolCallID)
+	assert.Contains(t, second.Content, "not started")
+	assert.True(t, second.IsError)
+}
+
+func TestRecoverPendingToolResults(t *testing.T) {
+	history := []ai.Message{ai.NewTextUserMessage("old"), ai.AssistantMessage{ToolCalls: []ai.ToolCall{{ID: "done"}, {ID: "missing"}}}, ai.ToolResultMessage{ToolCallID: "done", Content: "ok"}}
+	recovered, err := recoverPendingToolResults(context.Background(), &Agent{}, history)
+	require.NoError(t, err)
+	require.Len(t, recovered, 4)
+	result := recovered[3].(ai.ToolResultMessage)
+	assert.Equal(t, "missing", result.ToolCallID)
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.Content, "side effects")
+	again, err := recoverPendingToolResults(context.Background(), &Agent{}, recovered)
+	require.NoError(t, err)
+	assert.Len(t, again, 4)
 }
