@@ -16,6 +16,23 @@ import (
 // handleKeyPress processes all keyboard input, routing to the appropriate
 // context handler based on what overlay/popup is active.
 func (m *TuiModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyCtrlC && len(m.selection.lines) > 0 {
+		return m, m.copyText(m.selection.selectedText())
+	}
+	if msg.Type == tea.KeyEsc && len(m.selection.lines) > 0 {
+		m.clearSelection()
+		m.copyNotice = ""
+		return m, nil
+	}
+	m.clearSelection()
+	m.copyNotice = ""
+	if msg.Type == tea.KeyF2 {
+		return m, m.copyLastReply()
+	}
+	if msg.Type == tea.KeyF3 {
+		return m, m.copyConversation()
+	}
+
 	// ── Priority 1: Confirmation dialog ──
 	if m.confirmation.IsActive() {
 		approved, _, resolved := m.confirmation.HandleKey(msg)
@@ -27,6 +44,16 @@ func (m *TuiModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Model selection owns its keys before generic completion.
+	if m.modelSelect || m.completion.IsActive() {
+		if msg.Type == tea.KeyCtrlC || msg.Type == tea.KeyCtrlD {
+			m.modelSelect = false
+			m.completion.Close()
+			if msg.Type == tea.KeyCtrlC && !m.agentBusy {
+				return m, nil
+			}
+			return m.handleInputKey(msg)
+		}
+	}
 	if m.modelSelect {
 		return m.handleModelSelectKey(msg)
 	}
@@ -46,11 +73,13 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case ActionCancel: // Ctrl+C
 		if m.agentBusy {
+			m.streamID++ // discard late events from the cancelled run
 			m.streaming = false
 			m.agentBusy = false
 			m.spinnerOn = false
 			// 真正中断底层 LLM 流/工具执行（否则 token 会烧到本轮结束）
 			m.cancelStream()
+			m.finishToolGroups(true)
 			// Save partial response and clear stream buffer
 			if m.streamBuf != "" {
 				m.messages = append(m.messages, ChatMessage{
@@ -76,22 +105,20 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ActionClearScreen: // Ctrl+L
-		m.viewport.Clear()
-		return m, nil
+		return m, tea.ClearScreen
 
 	case ActionToggleToolPanel: // Ctrl+O
-		if len(m.messages) > 0 && len(m.messages[len(m.messages)-1].Tools) > 0 {
-			idx := len(m.messages) - 1
-			lastTool := len(m.messages[idx].Tools) - 1
-			m.messages[idx].Tools[lastTool].Collapsed = !m.messages[idx].Tools[lastTool].Collapsed
-			m.viewport.SetMessages(m.messages)
-		}
+		m.toggleLatestToolGroup()
 		return m, nil
 
 	case ActionOpenModelSelect: // Ctrl+P
 		return m.openModelSelector()
 
 	case ActionSubmit: // Enter
+		if m.agentBusy {
+			m.copyNotice = "Working | Ctrl+C: cancel; draft kept"
+			return m, nil
+		}
 		input := m.input.Text()
 		if input == "" {
 			return m, nil
@@ -120,7 +147,7 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ActionNewline: // Ctrl+J
 		m.input.newLine()
 		// Resize viewport to account for new input line
-		m.viewport.Resize(m.width, m.height-m.inputHeight()-m.statusBarHeight())
+		m.viewport.Resize(m.width, maxInt(1, m.height-m.inputHeight()-m.statusBarHeight()))
 		return m, nil
 
 	case ActionSearchHistory: // Ctrl+R
@@ -191,6 +218,10 @@ func (m *TuiModel) handleCompletionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // openModelSelector shares the same catalog and behavior for /models and Ctrl+P.
 func (m *TuiModel) openModelSelector() (tea.Model, tea.Cmd) {
+	if m.agentBusy {
+		m.copyNotice = "Working | Ctrl+C: cancel before switching model"
+		return m, nil
+	}
 	if !m.completion.TriggerModel(m.getAvailableModels()) {
 		m.modelSelect = false
 		m.messages = append(m.messages, ChatMessage{Role: "system", Content: "No models available from the configured catalog."})
@@ -262,14 +293,16 @@ func (m *TuiModel) checkTriggerCompletion() {
 		m.completion.Close()
 		return
 	}
-	input := m.input.Text()
+	input := m.input.lines[m.input.cursorY]
 	cursorX := m.input.cursorX
 
-	if m.completion.TriggerSlash(input, cursorX, m.slashCmds) {
-		return
-	}
-	if m.completion.TriggerSub(input, cursorX, m.slashCmds) {
-		return
+	if m.input.cursorY == 0 {
+		if m.completion.TriggerSlash(input, cursorX, m.slashCmds) {
+			return
+		}
+		if m.completion.TriggerSub(input, cursorX, m.slashCmds) {
+			return
+		}
 	}
 	if m.completion.TriggerFile(input, cursorX, m.workspace) {
 		return
@@ -279,47 +312,37 @@ func (m *TuiModel) checkTriggerCompletion() {
 
 // acceptCompletion replaces the trigger text in the input with the completion.
 func (m *TuiModel) acceptCompletion(insertText string) {
+	line := []rune(m.input.lines[m.input.cursorY])
+	beforeCursor := string(line[:m.input.cursorX])
+	start := 0
 	switch m.completion.Kind() {
 	case CompletionSlash:
-		fullText := m.input.Text()
-		beforeCursor := substringBefore(fullText, m.input.cursorX)
 		slashIdx := strings.LastIndex(beforeCursor, "/")
 		if slashIdx < 0 {
 			return
 		}
-		afterCursor := string([]rune(fullText)[m.input.cursorX:])
-		newText := beforeCursor[:slashIdx] + insertText + " " + afterCursor
-		m.input.lines = []string{newText}
-		m.input.cursorX = slashIdx + len(insertText) + 1
-		m.input.cursorY = 0
+		start = utf8.RuneCountInString(beforeCursor[:slashIdx])
+		insertText += " "
 
 	case CompletionFile:
-		fullText := m.input.Text()
-		beforeCursor := substringBefore(fullText, m.input.cursorX)
 		atIdx := strings.LastIndex(beforeCursor, "@")
 		if atIdx < 0 {
 			return
 		}
-		afterCursor := string([]rune(fullText)[m.input.cursorX:])
-		newText := beforeCursor[:atIdx] + insertText + afterCursor
-		m.input.lines = []string{newText}
-		m.input.cursorX = atIdx + len(insertText)
-		m.input.cursorY = 0
+		start = utf8.RuneCountInString(beforeCursor[:atIdx])
 
 	case CompletionSub:
-		fullText := m.input.Text()
-		beforeCursor := substringBefore(fullText, m.input.cursorX)
-		runes := []rune(beforeCursor)
-		qs := m.completion.queryStart
-		if qs > len(runes) {
+		start = m.completion.queryStart
+		if start < 0 || start > m.input.cursorX {
 			return
 		}
-		afterCursor := string([]rune(fullText)[m.input.cursorX:])
-		newText := string(runes[:qs]) + insertText + " " + afterCursor
-		m.input.lines = []string{newText}
-		m.input.cursorX = qs + utf8.RuneCountInString(insertText) + 1
-		m.input.cursorY = 0
+		insertText += " "
+	default:
+		return
 	}
+	m.input.saveUndo()
+	m.input.lines[m.input.cursorY] = string(line[:start]) + insertText + string(line[m.input.cursorX:])
+	m.input.cursorX = start + utf8.RuneCountInString(insertText)
 }
 
 // sendMessage dispatches user input to the agent and starts streaming.
@@ -349,16 +372,24 @@ func (m *TuiModel) sendMessage(input string) (tea.Model, tea.Cmd) {
 // CRITICAL: We must NOT mutate model fields from inside this goroutine.
 // Instead, we send each event to the Bubble Tea program via program.Send(),
 // which safely delivers it to the Update() function on the main goroutine.
+type streamEventMsg struct {
+	id  uint64
+	msg tea.Msg
+}
+
 func (m *TuiModel) startAgentStream(input string) tea.Cmd {
+	m.streamID++
+	id := m.streamID
+	ctx, cancel := context.WithCancel(context.Background())
+	m.registerStreamCancel(cancel)
 	program := m.program // capture before goroutine starts
+	session := m.session
 	return func() tea.Msg {
 		// 可取消 ctx：Ctrl+C 中断时真正掐断底层 LLM 流与工具执行
-		ctx, cancel := context.WithCancel(context.Background())
-		m.registerStreamCancel(cancel)
 		defer cancel()
-		stream, err := m.session.PromptStream(ctx, input)
+		stream, err := session.PromptStream(ctx, input)
 		if err != nil {
-			return AgentErrorMsg{Err: err}
+			return streamEventMsg{id, AgentErrorMsg{Err: err}}
 		}
 
 		done := false
@@ -416,7 +447,7 @@ func (m *TuiModel) startAgentStream(input string) tea.Cmd {
 
 			// Send each event immediately to the TUI for live updates.
 			if program != nil && msg != nil {
-				program.Send(msg)
+				program.Send(streamEventMsg{id, msg})
 			}
 		}
 
@@ -426,7 +457,7 @@ func (m *TuiModel) startAgentStream(input string) tea.Cmd {
 			return nil
 		}
 		// Fallback: stream closed without a Done event
-		return StreamDoneMsg{}
+		return streamEventMsg{id, StreamDoneMsg{}}
 	}
 }
 
@@ -464,7 +495,10 @@ func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		if result.SessionSwitchTo != nil {
 			// Convert SessionContext to AgentSession
 			if as, ok := result.SessionSwitchTo.(*runtime.AgentSession); ok {
+				confirmEnabled := m.session.ConfirmEnabled()
 				m.session = as
+				m.wireConfirmationCallback()
+				m.session.SetConfirmEnabled(confirmEnabled)
 				m.provider, m.modelID = as.ModelInfo()
 				m.messages = []ChatMessage{} // clear conversation display
 				m.inputTokens = 0

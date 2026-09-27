@@ -21,13 +21,11 @@ func Run(session *runtime.AgentSession, cmds *slashcmd.Registry, app slashcmd.Ap
 		m.SetWorkspace(cwd)
 	}
 
-	// Use AltScreen for clean full-screen rendering.
-	// Capture wheel events so scrolling stays inside the full-screen UI.
-	// Terminal-native selection uses the terminal's mouse-reporting override.
-	p := tea.NewProgram(m,
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
+	// Keep wheel events inside the alternate screen. Drag selection is handled
+	// by the TUI, so copying never requires releasing terminal mouse capture.
+	p := newProgram(m)
+	defer m.cancelStream()
+	defer tea.SetCursorColumn(0)
 
 	// Wire program reference so callbacks can send messages
 	m.SetProgram(p)
@@ -51,7 +49,7 @@ func BannerText() string {
 	b.WriteString("║  Enter: Send  │  Ctrl+J: Newline          ║\n")
 	b.WriteString("║  Ctrl+C: Cancel/Exit  │  Ctrl+L: Clear      ║\n")
 	b.WriteString("║  ↑↓: History  │  Ctrl+P: Model select      ║\n")
-	b.WriteString("║  PgUp/PgDn: Scroll  │  Shift+Drag: Copy     ║\n")
+	b.WriteString("║  PgUp/PgDn: Scroll  │  Drag: Copy     ║\n")
 	b.WriteString("╚══════════════════════════════════════════╝\n")
 	b.WriteString("\n")
 	return b.String()
@@ -64,4 +62,9 @@ type QuitMsg struct{}
 func (m *TuiModel) String() string {
 	return fmt.Sprintf("TuiModel{msgs:%d streaming:%v busy:%v input:%q}",
 		len(m.messages), m.streaming, m.agentBusy, m.input.Text())
+}
+
+func newProgram(m *TuiModel, options ...tea.ProgramOption) *tea.Program {
+	options = append(options, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	return tea.NewProgram(m, options...)
 }

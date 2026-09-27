@@ -141,9 +141,9 @@ func (k *KeyBindingTable) ResolveCompletion(msg tea.KeyMsg) KeyAction {
 func (k *KeyBindingTable) ResolveConfirmation(msg tea.KeyMsg) KeyAction {
 	switch msg.Type {
 	case tea.KeyLeft:
-		return ActionSelectYes
+		return ActionCursorLeft
 	case tea.KeyRight:
-		return ActionSelectNo
+		return ActionCursorRight
 	case tea.KeyEnter:
 		return ActionSelectYes // accept with current selection (default: Yes)
 	case tea.KeyEsc:
@@ -174,8 +174,8 @@ func KeyHelpText() []string {
 		"Ctrl+J     New line (multi-line input)",
 		"Ctrl+C     Cancel agent / Quit",
 		"Ctrl+D     Exit",
-		"Ctrl+L     Clear screen",
-		"Ctrl+O     Toggle tool panel",
+		"Ctrl+L     Redraw screen (keep conversation)",
+		"Ctrl+O     Expand/collapse latest tool group",
 		"Ctrl+P     Select model",
 		"Ctrl+R     Search history",
 		"Ctrl+Z     Undo input",
@@ -184,6 +184,11 @@ func KeyHelpText() []string {
 		"Ctrl+A/E   Start/End of line",
 		"↑/↓        History navigation",
 		"PgUp/PgDn  Scroll messages",
+		"F2         Copy latest assistant reply",
+		"F3         Copy entire conversation (including tool results)",
+		"Click      Expand/collapse a tool group or command header",
+		"Drag       Select text and release to copy automatically",
+		"Esc        Clear selection and resume live view",
 		"Tab        Accept autocomplete",
 		"Esc        Close popup",
 		"/          Slash commands",

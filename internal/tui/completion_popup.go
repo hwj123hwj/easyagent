@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // CompletionPopup renders the autocomplete dropdown as a floating panel.
@@ -21,6 +22,21 @@ type CompletionPopup struct {
 // NewCompletionPopup creates a new popup renderer.
 func NewCompletionPopup() *CompletionPopup {
 	return &CompletionPopup{theme: DefaultTheme()}
+}
+
+// RenderHeight keeps the selected item visible even when borders will not fit.
+func (cp *CompletionPopup) RenderHeight(cm *CompletionState, width, height int) string {
+	if !cm.IsActive() || height < 1 {
+		return ""
+	}
+	overhead := 2
+	if cm.Kind() == CompletionModel {
+		overhead++
+	}
+	if height <= overhead {
+		return "\x1b[7m" + ansi.Truncate("› "+terminalText(cm.SelectedItem().Label), width, "…") + "\x1b[0m"
+	}
+	return cp.Render(cm, width, min(8, height-overhead))
 }
 
 // Render produces the popup string from a CompletionState.
@@ -54,17 +70,18 @@ func (cp *CompletionPopup) Render(cm *CompletionState, width int, maxRows ...int
 	var lines []string
 	for i := start; i < end; i++ {
 		item := items[i]
-		label := item.Label
-		desc := item.Description
+		label := terminalText(item.Label)
+		desc := terminalText(item.Description)
 
 		// Pad label to align descriptions
-		padded := label + strings.Repeat(" ", maxInt(1, maxLabel-lipgloss.Width(label)+2))
+		labelWidth := min(maxLabel, max(1, width-2))
+		label = ansi.Truncate(label, labelWidth, "…")
+		padded := label + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width(label))+2)
+		padded = ansi.Truncate(padded, max(1, width-2), "")
 
 		// Truncate description to fit width
-		availDesc := width - lipgloss.Width(padded) - 4
-		if availDesc > 0 && lipgloss.Width(desc) > availDesc {
-			desc = truncateRunes(desc, availDesc-1) + "…"
-		}
+		availDesc := max(0, width-2-lipgloss.Width(padded))
+		desc = ansi.Truncate(desc, availDesc, "…")
 
 		var line string
 		if i == selected {
@@ -87,7 +104,7 @@ func (cp *CompletionPopup) Render(cm *CompletionState, width int, maxRows ...int
 	}
 
 	if cm.Kind() == CompletionModel {
-		lines = append(lines, fmt.Sprintf("%d/%d  ↑↓ Select · Enter Switch · Esc Cancel", selected+1, len(items)))
+		lines = append(lines, ansi.Truncate(fmt.Sprintf("%d/%d  ↑↓ Select · Enter Switch · Esc Cancel", selected+1, len(items)), max(1, width-2), ""))
 	}
 
 	// Wrap in border

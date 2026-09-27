@@ -78,10 +78,12 @@ type ResizeMsg struct {
 
 // ChatMessage represents a single message in the conversation.
 type ChatMessage struct {
-	Role      string    // "user", "assistant", "system"
-	Content   string    // raw text
-	Timestamp time.Time
-	Tools     []ToolCallInfo
+	Role          string // "user", "assistant", "system"
+	Content       string // raw text
+	Timestamp     time.Time
+	Tools         []ToolCallInfo
+	ToolsExpanded bool
+	ToolsManual   bool
 }
 
 // ToolCallInfo represents a tool call within a message.
@@ -94,4 +96,6 @@ type ToolCallInfo struct {
 	Collapsed bool
 	Streaming bool
 	StartTime time.Time
+	EndTime   time.Time
+	Manual    bool
 }

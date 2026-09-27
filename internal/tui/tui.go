@@ -2,9 +2,9 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -24,16 +24,25 @@ type TuiModel struct {
 	height int
 
 	// Sub-components
-	input      InputModel
-	viewport   MessageViewport
-	statusBar  StatusBar
-	spinnerOn  bool
-	spinnerIdx int
+	input            InputModel
+	viewport         MessageViewport
+	statusBar        StatusBar
+	spinnerOn        bool
+	spinnerIdx       int
+	tickPending      bool
+	selection        textSelection
+	frame            []string
+	frameToolTargets map[int]toolTarget
+	frameCaret       screenPoint
+	hasFrameCaret    bool
+	copyNotice       string
+	clipboardWriter  func(string) error
 
 	// State
 	messages  []ChatMessage
-	streaming bool   // LLM is generating text
-	agentBusy bool   // agent is running tools or thinking
+	streaming bool // LLM is generating text
+	agentBusy bool // agent is running tools or thinking
+	streamID  uint64
 	streamBuf string // accumulating text from LLM
 	quitting  bool
 
@@ -106,20 +115,21 @@ func (m *TuiModel) SetProgram(p *tea.Program) {
 func New(session *runtime.AgentSession, cmds *slashcmd.Registry, autoApprove bool) *TuiModel {
 	provider, modelID := session.ModelInfo()
 	m := &TuiModel{
-		width:        80,
-		height:       24,
-		input:        NewInputModel(),
-		viewport:     NewMessageViewport(80, 20),
-		statusBar:    *NewStatusBar(),
-		messages:     []ChatMessage{},
-		session:      session,
-		slashCmds:    cmds,
-		provider:     provider,
-		modelID:      modelID,
-		confirmCh:    make(chan ConfirmationResultMsg, 1),
-		theme:        DefaultTheme(),
-		completion:   NewCompletionState(),
-		confirmation: NewConfirmationState(),
+		width:           80,
+		height:          24,
+		input:           NewInputModel(),
+		viewport:        NewMessageViewport(80, 20),
+		statusBar:       *NewStatusBar(),
+		messages:        []ChatMessage{},
+		session:         session,
+		slashCmds:       cmds,
+		provider:        provider,
+		modelID:         modelID,
+		confirmCh:       make(chan ConfirmationResultMsg, 1),
+		theme:           DefaultTheme(),
+		clipboardWriter: writeClipboard,
+		completion:      NewCompletionState(),
+		confirmation:    NewConfirmationState(),
 	}
 
 	// Wire confirmation callback：始终安装对话框，autoApprove/-y 只决定
@@ -145,12 +155,19 @@ func (m *TuiModel) Init() tea.Cmd {
 
 // Update implements tea.Model.
 func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if event, ok := msg.(streamEventMsg); ok {
+		if event.id != m.streamID {
+			return m, nil
+		}
+		msg = event.msg
+	}
 	switch msg := msg.(type) {
 
 	// ── Terminal resize ──
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.clearSelection()
+		m.width = max(1, msg.Width)
+		m.height = max(1, msg.Height)
 		// Bugfix: 输入框此前不知道终端宽度，长行（长句/URL/中英混排）渲染成单行被截断。
 		m.input.SetWidth(msg.Width)
 		// Viewport gets: total height - input area - status bar - separators
@@ -165,22 +182,24 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
 	case tea.MouseMsg:
-		if m.confirmation.IsActive() {
-			return m, nil
+		return m.handleMouse(msg)
+	case clipboardResultMsg:
+		if msg.err != nil {
+			m.copyNotice = "Copy failed: " + msg.err.Error()
+		} else {
+			m.copyNotice = "Copied | Esc: clear selection"
 		}
-		switch msg.Button {
-		case tea.MouseButtonWheelUp:
-			if m.completion.IsActive() {
-				m.completion.Prev()
-			} else {
-				m.viewport.ScrollUp(3)
-			}
-		case tea.MouseButtonWheelDown:
-			if m.completion.IsActive() {
-				m.completion.Next()
-			} else {
-				m.viewport.ScrollDown(3)
-			}
+		return m, nil
+
+	case ConfirmationDialogMsg:
+		m.clearSelection()
+		m.confirmation.Show(msg.ToolCallID, msg.ToolName, msg.Description)
+		m.confirmation.resultChan = msg.Result
+		return m, nil
+	case confirmationCancelledMsg:
+		if m.confirmation.resultChan == msg.result {
+			m.confirmation.Hide()
+			m.clearSelection()
 		}
 		return m, nil
 
@@ -196,8 +215,8 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToolStartMsg:
 		m.agentBusy = true
 		m.spinnerOn = true
-		// Create a pending tool entry on the LAST message.
-		// If messages is empty, create a placeholder.
+		// Group tools under the current user turn, even if progress/compaction
+		// messages were appended while it was running.
 		if len(m.messages) == 0 {
 			m.messages = append(m.messages, ChatMessage{
 				Role:      "assistant",
@@ -206,6 +225,16 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		idx := len(m.messages) - 1
+		for i := idx; i >= 0; i-- {
+			if m.messages[i].Role == "user" {
+				idx = i
+				break
+			}
+		}
+		m.viewport.invalidateFrom(idx)
+		if !m.messages[idx].ToolsManual {
+			m.messages[idx].ToolsExpanded = true
+		}
 		m.messages[idx].Tools = append(m.messages[idx].Tools, ToolCallInfo{
 			ID:        msg.ID,
 			Name:      msg.Name,
@@ -229,6 +258,14 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					t.Streaming = false
 					t.Result = fmt.Sprintf("%v", msg.Result)
 					t.IsError = msg.IsError
+					t.EndTime = time.Now()
+					if msg.IsError && !t.Manual {
+						t.Collapsed = false
+					}
+					if msg.IsError && !m.messages[msgIdx].ToolsManual {
+						m.messages[msgIdx].ToolsExpanded = true
+					}
+					m.viewport.invalidateFrom(msgIdx)
 					found = true
 					break
 				}
@@ -247,6 +284,7 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				t := &m.messages[msgIdx].Tools[i]
 				if t.Streaming && ((msg.ID != "" && t.ID == msg.ID) || (msg.ID == "" && t.Name == msg.Name)) {
 					t.Result = fmt.Sprintf("%v", msg.Result)
+					m.viewport.invalidateFrom(msgIdx)
 					m.viewport.SetMessages(m.messages)
 					return m, nil
 				}
@@ -255,6 +293,7 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case StreamDoneMsg:
+		m.finishToolGroups(false)
 		if m.streamBuf != "" {
 			m.messages = append(m.messages, ChatMessage{
 				Role:      "assistant",
@@ -273,15 +312,27 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetStreaming("")
 		m.viewport.SetMessages(m.messages)
 		// 终端响铃 + 角标提醒：长任务跑完不用来回瞄（用户已滚屏时才响）
-		if m.viewport.userScrolled || m.viewport.scrollOffset > 0 {
+		if m.viewport.userScrolled {
 			return m, tea.Bell()
 		}
 		return m, nil
 
 	case AgentErrorMsg:
+		m.streamID++ // ignore completion/deltas still queued by the failed run
+		m.cancelStream()
+		m.finishToolGroups(true)
 		m.streaming = false
 		m.agentBusy = false
 		m.spinnerOn = false
+		if m.streamBuf != "" {
+			m.messages = append(m.messages, ChatMessage{
+				Role: "assistant", Content: m.streamBuf, Timestamp: time.Now(),
+			})
+		}
+		m.streamBuf = ""
+		m.appliedStreamLen = 0
+		m.viewport.SetStreaming("")
+		m.viewport.SetMessages(m.messages)
 		// 用户 Ctrl+C 主动取消导致的 context canceled 不是错误，不打扰
 		if errors.Is(msg.Err, context.Canceled) {
 			return m, nil
@@ -324,6 +375,7 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case TickMsg:
+		m.tickPending = false
 		if m.spinnerOn || m.streaming {
 			m.spinnerIdx++
 			// 节流应用流式文本：100ms 一次，替代每个 delta 全量重渲
@@ -341,47 +393,89 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model.
 func (m *TuiModel) View() string {
+	if len(m.selection.lines) > 0 && !m.quitting {
+		lines := strings.Split(m.selection.view(), "\n")
+		if len(lines) >= 3 && m.copyNotice != "" {
+			lines[len(lines)-2] = ansi.Truncate(m.copyNotice, m.width, "")
+		}
+		return strings.Join(lines, "\n")
+	}
+	view := m.renderView()
+	m.frame = strings.Split(ansi.Strip(view), "\n")
+	m.frameToolTargets = make(map[int]toolTarget)
+	if !m.confirmation.IsActive() && m.height >= 5 && !(m.height == 5 && m.completion.IsActive()) && !m.quitting {
+		for row, hit := range m.viewport.toolTargets {
+			screenRow := row - m.viewport.scrollOffset
+			limit := m.viewport.height
+			if screenRow >= 0 && screenRow < limit {
+				m.frameToolTargets[screenRow] = hit
+			}
+		}
+	}
+	// The caret is a rendering marker, not part of copied input.
+	if m.hasFrameCaret && m.input.cursorX == len([]rune(m.input.lines[m.input.cursorY])) {
+		y := m.frameCaret.y
+		if y >= 0 && y < len(m.frame) {
+			m.frame[y] = strings.TrimSuffix(m.frame[y], "│")
+		}
+	}
+
+	return view
+}
+
+func (m *TuiModel) renderView() string {
+	m.hasFrameCaret = false
 	if m.quitting {
 		return "Goodbye! 👋\n"
 	}
 
-	// ── Confirmation dialog overlays on top of normal view ──
 	if m.confirmation.IsActive() {
-		var baseBuf strings.Builder
-		baseBuf.WriteString(m.viewport.View())
-		baseBuf.WriteByte('\n')
-		baseBuf.WriteString(m.theme.Separator.Render(strings.Repeat("─", m.width)))
-		baseBuf.WriteByte('\n')
-		baseBuf.WriteString(m.statusBar.HelpHint(m.agentBusy))
-		baseBuf.WriteByte('\n')
-		baseBuf.WriteString(m.statusBar.Render(
-			m.width, "confirm", m.spinnerIdx,
-			m.provider, m.modelID, m.workspace, m.streaming,
-			m.inputTokens, m.outputTokens,
-		))
-		baseBuf.WriteByte('\n')
-		// 输入框放状态栏之后（与正常视图一致，IME 组词跟随终端光标）
-		baseBuf.WriteString(m.input.View())
-
-		// Overlay confirmation dialog centered on screen
-		dialog := m.confirmation.Render(m.width)
-		dialogLines := strings.Split(dialog, "\n")
-		dialogHeight := len(dialogLines)
-		blankLines := (m.height - dialogHeight) / 2
-		if blankLines < 0 {
-			blankLines = 0
+		lines := strings.Split(m.confirmation.Render(m.width), "\n")
+		if m.height < 5 {
+			lines = []string{"Confirm: Y yes / N no / Esc cancel"}
+		} else if len(lines) > m.height {
+			lines = append(lines[:m.height-3], lines[len(lines)-3:]...)
 		}
-		return baseBuf.String() + strings.Repeat("\n", blankLines) + dialog
+		for len(lines) < m.height {
+			lines = append(lines, "")
+		}
+		for i := range lines {
+			lines[i] = ansi.Truncate(lines[i], m.width, "")
+		}
+		tea.SetCursorPosition(0, 0)
+		return strings.Join(lines, "\n")
 	}
-
-	popupText := ""
+	if m.height <= 5 && m.completion.IsActive() {
+		tea.SetCursorPosition(0, 0)
+		return NewCompletionPopup().RenderHeight(&m.completion, m.width, m.height)
+	}
+	if m.height < 5 {
+		col, row := m.input.CursorPosition()
+		lines := strings.Split(m.input.View(), "\n")
+		start := max(0, row-m.height+1)
+		lines = lines[start:min(len(lines), start+m.height)]
+		for i := range lines {
+			lines[i] = ansi.Truncate(lines[i], m.width, "")
+		}
+		m.frameCaret = screenPoint{min(col, m.width-1), row - start}
+		m.hasFrameCaret = true
+		tea.SetCursorPosition(m.frameCaret.x, m.frameCaret.y)
+		return strings.Join(lines, "\n")
+	}
+	inputLines := strings.Split(m.input.View(), "\n")
+	col, cursorRow := m.input.CursorPosition()
+	inputLimit := maxInt(1, min(8, m.height-5))
 	if m.completion.IsActive() {
-		rows := maxInt(1, (m.height-m.inputHeight()-m.statusBarHeight())/2-3)
-		popupText = NewCompletionPopup().Render(&m.completion, m.width, rows)
+		inputLimit = max(1, min(inputLimit, m.height-6))
 	}
-	viewportHeight := maxInt(1, m.height-m.inputHeight()-m.statusBarHeight()-lipgloss.Height(popupText))
+	inputStart := maxInt(0, cursorRow-inputLimit+1)
+	inputEnd := min(len(inputLines), inputStart+inputLimit)
+	inputLines = inputLines[inputStart:inputEnd]
+	popupLimit := maxInt(0, m.height-len(inputLines)-m.statusBarHeight()-1)
+	popupText := NewCompletionPopup().RenderHeight(&m.completion, m.width, popupLimit)
+	viewportHeight := maxInt(1, m.height-len(inputLines)-m.statusBarHeight()-lipgloss.Height(popupText))
 	if popupText == "" {
-		viewportHeight = maxInt(1, m.height-m.inputHeight()-m.statusBarHeight())
+		viewportHeight = maxInt(1, m.height-len(inputLines)-m.statusBarHeight())
 	}
 	if m.viewport.height != viewportHeight {
 		m.viewport.Resize(m.width, viewportHeight)
@@ -402,8 +496,12 @@ func (m *TuiModel) View() string {
 		buf.WriteByte('\n')
 	}
 
+	inputRow := strings.Count(buf.String(), "\n")
+	buf.WriteString(strings.Join(inputLines, "\n"))
+	buf.WriteByte('\n')
+
 	// Help hint
-	buf.WriteString(m.statusBar.HelpHint(m.agentBusy))
+	buf.WriteString(m.helpHint())
 	buf.WriteByte('\n')
 
 	// Status bar
@@ -420,16 +518,9 @@ func (m *TuiModel) View() string {
 		m.provider, m.modelID, m.workspace, m.streaming,
 		m.inputTokens, m.outputTokens,
 	))
-	buf.WriteByte('\n')
-
-	// Input area（必须在帧的最底部）：bubbletea altscreen 每帧渲染完把终端
-	// 光标停在最后一行，输入法内联组词（预编辑串）跟随终端光标位置。
-	// 输入框放最后，拼音组词才能显示在输入框里而不是叠在状态栏上。
-	buf.WriteString(m.input.View())
-
-	// 告诉渲染器把终端光标停在输入光标列上（HWJ bubbletea 补丁配套），
-	// 组词串才会落在正在打字的位置而不是行首。
-	tea.SetCursorColumn(m.input.CursorColumn())
+	m.frameCaret = screenPoint{min(col, m.width-1), inputRow + cursorRow - inputStart}
+	m.hasFrameCaret = true
+	tea.SetCursorPosition(m.frameCaret.x, m.frameCaret.y)
 
 	// Prevent terminal line wrapping from pushing the footer outside the screen.
 	lines := strings.Split(buf.String(), "\n")
@@ -445,8 +536,8 @@ func (m *TuiModel) inputHeight() int {
 	// Bugfix: 长行软换行后占多个终端行，输入区高度必须按可视行算，
 	// 否则换行后输入区溢出、把状态栏挤出屏幕。
 	visual := 0
-	for i, line := range m.input.lines {
-		segs := wrapVisual(line, m.input.wrapWidth(i == 0))
+	for _, line := range m.input.lines {
+		segs := m.input.segments(line)
 		if len(segs) == 0 {
 			segs = []string{""}
 		}
@@ -459,7 +550,7 @@ func (m *TuiModel) inputHeight() int {
 }
 
 func (m *TuiModel) statusBarHeight() int {
-	return 4 // separator + help hint + status bar + blank
+	return 3 // separator + help hint + status bar
 }
 
 var spinnerChars = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -475,11 +566,18 @@ func formatArgsForDisplay(args interface{}) string {
 	case []byte:
 		return string(v)
 	default:
+		if data, err := json.MarshalIndent(v, "", "  "); err == nil {
+			return string(data)
+		}
 		return fmt.Sprintf("%v", v)
 	}
 }
 
 func (m *TuiModel) spinnerTick() tea.Cmd {
+	if m.tickPending {
+		return nil
+	}
+	m.tickPending = true
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 		return TickMsg{Time: t}
 	})
@@ -488,26 +586,32 @@ func (m *TuiModel) spinnerTick() tea.Cmd {
 // handleConfirmation is called by the agent when a dangerous tool needs user approval.
 // It shows the TUI confirmation dialog and blocks until the user responds.
 func (m *TuiModel) handleConfirmation(ctx context.Context, req agent.ConfirmationRequest) agent.ConfirmDecision {
-	slog.Info("confirmation requested", "tool", req.ToolName, "desc", req.Description)
-
-	// Show the confirmation dialog
-	m.confirmation.Show(req.ToolCallID, req.ToolName, req.Description)
-
-	// Notify the TUI to re-render
-	if m.program != nil {
-		m.program.Send(ConfirmationDialogMsg{
-			ToolCallID:  req.ToolCallID,
-			ToolName:    req.ToolName,
-			Description: req.Description,
-		})
+	if ctx.Err() != nil || m.program == nil {
+		return agent.ConfirmDecision{Approved: false, Reason: "confirmation unavailable"}
 	}
-
-	// Wait for user response
+	resultCh := make(chan ConfirmationResultMsg, 1)
+	m.program.Send(ConfirmationDialogMsg{
+		ToolCallID: req.ToolCallID, ToolName: req.ToolName, Description: req.Description, Result: resultCh,
+	})
 	select {
-	case result := <-m.confirmation.resultChan:
+	case result := <-resultCh:
 		return agent.ConfirmDecision{Approved: result.Approved}
 	case <-ctx.Done():
-		m.confirmation.Hide()
+		m.program.Send(confirmationCancelledMsg{result: resultCh})
 		return agent.ConfirmDecision{Approved: false, Reason: "context cancelled"}
 	}
+}
+
+func (m *TuiModel) helpHint() string {
+	if m.copyNotice != "" {
+		return m.theme.HelpText.Render(m.copyNotice)
+	}
+	text := "Enter: send | Ctrl+J: newline | Drag: copy | F2: reply | F3: all | Ctrl+O: tools"
+	if m.agentBusy {
+		text = "Ctrl+C: cancel | Drag: copy | F2: reply | F3: all | Ctrl+O: tools"
+	}
+	if m.viewport.userScrolled {
+		text = fmt.Sprintf("↓ %d lines below | PgDn: newer | ", m.viewport.NewLinesCount()) + text
+	}
+	return m.theme.HelpText.Render(text)
 }

@@ -8,20 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
-// ToolPanel renders a single tool execution as a collapsible bordered panel.
-//
-// Collapsed (default):
-// ┌─ 🔧 bash ────────────────────── ✓ 1.2s ▸ ─┐
-// └────────────────────────────────────────────┘
-//
-// Expanded (Ctrl+O toggle):
-// ┌─ 🔧 bash ────────────────────── ✓ 1.2s ▾ ─┐
-// │ go test ./internal/tools/                   │
-// │ ok  github.com/hwj123hwj/easyagent/...          │
-// └─────────────────────────────────────────────┘
+// ToolPanel renders a clickable command header and its optional full details.
 type ToolPanel struct {
 	info  ToolCallInfo
 	width int
@@ -31,6 +21,9 @@ type ToolPanel struct {
 
 // NewToolPanel creates a panel for a tool call.
 func NewToolPanel(info ToolCallInfo, width int) *ToolPanel {
+	info.Name = terminalText(info.Name)
+	info.Args = terminalText(info.Args)
+	info.Result = terminalText(info.Result)
 	return &ToolPanel{
 		info:  info,
 		width: width,
@@ -39,162 +32,61 @@ func NewToolPanel(info ToolCallInfo, width int) *ToolPanel {
 	}
 }
 
-// innerWidth returns the actual text content area inside the border + padding.
-func (tp *ToolPanel) innerWidth() int {
-	// Border: 2 chars (left+right), Padding: 2 chars (1 each side)
-	return tp.width - 4
-}
-
-// Render returns the rendered panel string (one or more lines).
+// Render uses one compact header per command. Expanded output is never cut at
+// an arbitrary line count; the conversation viewport handles scrolling.
 func (tp *ToolPanel) Render() []string {
-	if tp.width < 30 {
-		tp.width = 60 // safe minimum
+	arrow, status := "▸", "✓"
+	if !tp.info.Collapsed {
+		arrow = "▾"
 	}
-
-	contentWidth := tp.innerWidth()
-
-	// ── Build left side of header ──
-	icon := toolIcon(tp.info.Name)
-	name := tp.info.Name
-
-	argsDisplay := formatToolArgs(tp.info.Args)
-	args := truncateArg(argsDisplay, contentWidth-len(name)-12) // leave room for status
-
-	leftParts := []string{icon, tp.theme.ToolHeader.Render(name)}
-	if args != "" {
-		leftParts = append(leftParts, tp.theme.StatusDim.Render(args))
-	}
-	leftStr := strings.Join(leftParts, " ")
-	leftWidth := lipgloss.Width(leftStr)
-
-	// ── Build right side of header ──
-	var statusStr string
-
 	if tp.info.Streaming {
-		statusStr = tp.theme.StatusBusy.Render("● running")
+		status = "●"
 	} else if tp.info.IsError {
-		statusStr = tp.theme.StatusError.Render("✗")
-	} else {
-		// Show elapsed time if available
-		if !tp.info.StartTime.IsZero() {
-			elapsed := time.Since(tp.info.StartTime)
-			if elapsed >= time.Second {
-				statusStr = tp.theme.SuccessText.Render(fmt.Sprintf("✓ %s", formatDuration(elapsed)))
-			} else {
-				statusStr = tp.theme.SuccessText.Render("✓")
+		status = "✗"
+	}
+	duration := ""
+	if !tp.info.EndTime.IsZero() && !tp.info.StartTime.IsZero() {
+		duration = " · " + formatDuration(tp.info.EndTime.Sub(tp.info.StartTime))
+	}
+	summary := strings.Join(strings.Fields(formatToolArgs(tp.info.Args)), " ")
+	header := fmt.Sprintf("  %s %s %s%s  %s", arrow, status, tp.info.Name, duration, summary)
+	style := tp.theme.ToolHeader
+	if tp.info.IsError {
+		style = tp.theme.ErrorText
+	}
+	lines := []string{style.Render(ansi.Truncate(header, max(1, tp.width), "…"))}
+	if tp.info.Collapsed {
+		return lines
+	}
+	appendText := func(text string) {
+		for _, line := range strings.Split(text, "\n") {
+			for _, segment := range strings.Split(ansi.Hardwrap(line, max(1, tp.width-4), true), "\n") {
+				lines = append(lines, "    "+segment)
 			}
-		} else {
-			statusStr = tp.theme.SuccessText.Render("✓")
 		}
 	}
-
-	// Collapse indicator
-	collapseIcon := "▸"
-	if !tp.info.Collapsed {
-		collapseIcon = "▾"
+	appendText("Arguments:")
+	appendText(tp.info.Args)
+	appendText("Output:")
+	if tp.info.Result != "" {
+		result := tp.info.Result
+		if isEditTool(tp.info.Name) {
+			result = strings.Join(RenderDiff(result, tp.theme), "\n")
+		}
+		appendText(result)
+	} else if tp.info.Streaming {
+		appendText("Waiting for output…")
+	} else {
+		appendText("(no output)")
 	}
-	rightStr := statusStr + " " + tp.theme.StatusDim.Render(collapseIcon)
-	rightWidth := lipgloss.Width(rightStr)
-
-	// ── Assemble header with proper fill ──
-	fillWidth := contentWidth - leftWidth - rightWidth
-	if fillWidth < 1 {
-		fillWidth = 1
-	}
-
-	headerLine := leftStr + strings.Repeat(" ", fillWidth) + rightStr
-
-	if tp.info.Collapsed || tp.info.Result == "" {
-		return tp.wrapInBorder([]string{headerLine}, tp.info.Streaming, tp.info.IsError)
-	}
-
-	// Expanded view — header + body
-	bodyLines := tp.renderBody()
-	allLines := append([]string{headerLine}, bodyLines...)
-
-	return tp.wrapInBorder(allLines, tp.info.Streaming, tp.info.IsError)
-}
-
-// renderBody renders the tool result content.
-func (tp *ToolPanel) renderBody() []string {
-	result := tp.info.Result
-	if result == "" {
-		return nil
-	}
-
-	// For edit/replace tools, try diff highlighting
-	if isEditTool(tp.info.Name) {
-		return RenderDiff(result, tp.theme)
-	}
-
-	// For other tools, render as-is (truncate long output)
-	lines := strings.Split(result, "\n")
-
-	// Truncate very long outputs to maxLines
-	maxLines := 30
-	if len(lines) > maxLines {
-		lines = append(lines[:maxLines], tp.theme.StatusDim.Render(fmt.Sprintf("… (%d more lines)", len(lines)-maxLines)))
-	}
-
 	return lines
-}
-
-// wrapInBorder wraps lines in a rounded border with appropriate color.
-func (tp *ToolPanel) wrapInBorder(lines []string, active, isError bool) []string {
-	var borderStyle lipgloss.Style
-	switch {
-	case isError:
-		borderStyle = tp.theme.ToolErrorBorder
-	case active:
-		borderStyle = tp.theme.ToolActiveBorder
-	default:
-		borderStyle = tp.theme.ToolDoneBorder
-	}
-
-	content := strings.Join(lines, "\n")
-	bordered := borderStyle.Width(tp.width - 2).Render(content)
-
-	return strings.Split(bordered, "\n")
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-func toolIcon(name string) string {
-	switch {
-	case strings.Contains(name, "bash") || strings.Contains(name, "shell"):
-		return "⚡"
-	case strings.Contains(name, "edit") || strings.Contains(name, "replace") || strings.Contains(name, "write"):
-		return "✏️"
-	case strings.Contains(name, "read") || strings.Contains(name, "file"):
-		return "📄"
-	case strings.Contains(name, "search") || strings.Contains(name, "grep") || strings.Contains(name, "glob"):
-		return "🔍"
-	case strings.Contains(name, "web") || strings.Contains(name, "fetch") || strings.Contains(name, "curl"):
-		return "🌐"
-	case strings.Contains(name, "git"):
-		return "🌿"
-	case strings.Contains(name, "music") || strings.Contains(name, "play"):
-		return "🎵"
-	default:
-		return "🔧"
-	}
-}
-
 func isEditTool(name string) bool {
 	return strings.Contains(name, "edit") || strings.Contains(name, "replace") ||
 		strings.Contains(name, "write") || strings.Contains(name, "patch")
-}
-
-func truncateArg(args string, maxLen int) string {
-	args = strings.ReplaceAll(args, "\n", " ")
-	runes := []rune(args)
-	if maxLen < 10 {
-		maxLen = 10
-	}
-	if len(runes) > maxLen {
-		return string(runes[:maxLen]) + "…"
-	}
-	return args
 }
 
 // formatToolArgs parses the raw args string (which might be JSON, Go fmt "%v", or <nil>)
@@ -224,9 +116,6 @@ func formatJSONArgs(m map[string]interface{}) string {
 		switch val := v.(type) {
 		case string:
 			s := val
-			if len(s) > 40 {
-				s = s[:40] + "…"
-			}
 			parts = append(parts, k+": "+strconv.Quote(s))
 		default:
 			parts = append(parts, k+": "+fmt.Sprintf("%v", v))
