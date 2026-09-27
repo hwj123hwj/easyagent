@@ -295,3 +295,19 @@ func newRunID() string {
 	_, _ = rand.Read(b[:])
 	return fmt.Sprintf("wf-%d-%s", time.Now().Unix(), hex.EncodeToString(b[:]))
 }
+
+// ActiveCount includes runs waiting for human approval.
+func (r *Registry) ActiveCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.runs)
+}
+
+// CancelAll requests cancellation; callers can wait for ActiveCount to reach zero.
+func (r *Registry) CancelAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, run := range r.runs {
+		run.cancel()
+	}
+}

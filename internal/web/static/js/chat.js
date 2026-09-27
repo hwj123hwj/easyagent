@@ -69,6 +69,7 @@ export class ChatPanel {
         if (!this._currentStreamEl) this._startAssistantStream();
         this._addToolCall(event.tool_call_id, event.tool_name, 'running', event.tool_args);
       },
+      tool_update: event => this._updateToolProgress(event.tool_call_id, event.partial_result),
       tool_end: event => this._updateToolCall(event.tool_call_id, event.is_error ? 'error' : 'done', event.tool_result),
       done: event => this._finalizeStream(event.final_message),
       error: event => this._finalizeWithError(event.error),
@@ -85,11 +86,13 @@ export class ChatPanel {
     this.ws.on('error', data => {
       const id = data.session_id || this.state.currentSessionId;
       this.busy.delete(id);
+      if (data.retryable) this._restoreRejectedPrompt(id);
       const event = {error: data.message || data.error || '请求失败，请重试。'};
       if (id === this.state.currentSessionId) this._finalizeWithError(event.error);
       else this.views.get(id)?.events.push({type:'error', event});
     });
     this.ws.on('status', data => {
+      if (data.streaming) this.pendingSends?.delete(data.session_id);
       if (data.streaming) this.busy.add(data.session_id); else this.busy.delete(data.session_id);
       if (data.session_id === this.state.currentSessionId) this.state.streaming = !!data.streaming;
       this._updateButtons();
@@ -182,12 +185,24 @@ export class ChatPanel {
       if (this.state.currentSessionId !== sessionId || revision !== this.inputRevision) return;
     }
     if (!this.ws.sendPrompt(sessionId, text)) { this._notice('发送失败，消息已保留。'); this._updateButtons(); return; }
+    (this.pendingSends ??= new Map()).set(sessionId, draft);
     this.show(); this.messageList.querySelector('.empty-conversation')?.remove();
     this.follow = true; this._addUserMessage(text); this._startAssistantStream();
     this.commandMenu.close(); this.input.value = ''; this.drafts.delete(this.visibleSession || ''); this.drafts.delete('');
     this._resizeInput(); this.busy.add(this.state.currentSessionId); this.state.streaming = true;
     this._notice(''); this._updateButtons(); this._scrollToBottom();
     this.state.onPromptSent?.(text);
+  }
+  _restoreRejectedPrompt(id) {
+    const draft = this.pendingSends?.get(id);
+    if (!draft) return;
+    if (id === this.state.currentSessionId) {
+      if (this.input.value) return; // Never replace a newer draft.
+      this.input.value = draft;
+      this._resizeInput();
+    } else if (this.drafts.get(id)) return;
+    this.drafts.set(id, draft);
+    this.pendingSends.delete(id);
   }
   _addUserMessage(text) {
     const el = document.createElement('div'); el.className = 'user-message';
@@ -231,6 +246,14 @@ export class ChatPanel {
     group.append(el); this._currentToolCalls[id] = el;
     group.querySelector('summary').textContent = `工具执行 · ${group.querySelectorAll('.tool-call').length} 项`;
     this._scrollToBottom();
+  }
+  _updateToolProgress(id, partial) {
+    const el = this._currentToolCalls[id];
+    if (!el || !el.classList.contains('running')) return;
+    const text = partial?.content ?? partial?.Content ?? '';
+    if (!text) return;
+    el.querySelector('.tool-status').textContent = text;
+    el.querySelector('.tool-result').textContent = text;
   }
   _updateToolCall(id, status, result) {
     const el = this._currentToolCalls[id]; if (!el) return;

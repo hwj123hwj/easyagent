@@ -52,6 +52,7 @@ type wsClientMessage struct {
 
 // wsServerMessage represents a message from the server to the client.
 type wsServerMessage struct {
+	Retryable bool   `json:"retryable,omitempty"`
 	Type      string `json:"type"` // "event", "session_id", "status", "model_info", "error", "pong"
 	SessionID string `json:"session_id,omitempty"`
 	Event     any    `json:"event,omitempty"`     // AgentStreamEvent when type="event"
@@ -150,6 +151,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // handleWSPrompt processes a "prompt" message from the client.
 func (s *Server) handleWSPrompt(ws *wsConn, msg wsClientMessage, mu *sync.Mutex, cancelFuncPtr *context.CancelFunc) {
+	release, ok := s.activity.begin()
+	if !ok {
+		_ = ws.writeJSON(wsServerMessage{Type: "error", SessionID: msg.SessionID, Retryable: true, Message: "服务正在更新，请稍后重试；消息尚未执行"})
+		return
+	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			release()
+		}
+	}()
 	if s.app.DynamicWorkflows().ActiveActorSession(msg.SessionID) {
 		_ = ws.writeJSON(wsServerMessage{Type: "error", Message: "此 Actor 正由工作流管理，请在工作流页取消或等待完成"})
 		return
@@ -169,7 +181,7 @@ func (s *Server) handleWSPrompt(ws *wsConn, msg wsClientMessage, mu *sync.Mutex,
 	}
 	mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Minute)
 
 	mu.Lock()
 	*cancelFuncPtr = cancel
@@ -218,7 +230,9 @@ func (s *Server) handleWSPrompt(ws *wsConn, msg wsClientMessage, mu *sync.Mutex,
 	}
 
 	// Stream events to client in a goroutine
+	handedOff = true
 	go func() {
+		defer release()
 		defer func() {
 			cancel()
 			mu.Lock()
@@ -241,6 +255,9 @@ func (s *Server) handleWSPrompt(ws *wsConn, msg wsClientMessage, mu *sync.Mutex,
 			}
 			if err := ws.writeJSON(serverMsg); err != nil {
 				slog.Debug("websocket write failed (client disconnected?)", "error", err)
+				cancel()
+				for range stream {
+				}
 				return
 			}
 		}
@@ -260,6 +277,12 @@ func (s *Server) handleWSCancel(mu *sync.Mutex, cancelFuncPtr *context.CancelFun
 
 // handleWSSwitchModel changes the model for a session.
 func (s *Server) handleWSSwitchModel(ws *wsConn, msg wsClientMessage) {
+	release, ok := s.activity.begin()
+	if !ok {
+		_ = ws.writeJSON(wsServerMessage{Type: "error", SessionID: msg.SessionID, Message: "服务正在更新，请稍后重试"})
+		return
+	}
+	defer release()
 	if msg.Model == "" {
 		_ = ws.writeJSON(wsServerMessage{
 			Type:    "error",

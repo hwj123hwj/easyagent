@@ -13,9 +13,10 @@ import (
 )
 
 type BashTool struct {
-	workspace    string // 工作目录限制，空字符串表示不限制
-	maxOutputLen int    // 最大输出长度，0 表示使用 DefaultMaxOutputLen
-	ops          operations.BashOperations
+	workspace        string // 工作目录限制，空字符串表示不限制
+	maxOutputLen     int    // 最大输出长度，0 表示使用 DefaultMaxOutputLen
+	progressInterval time.Duration
+	ops              operations.BashOperations
 }
 
 type BashParams struct {
@@ -44,7 +45,7 @@ func WithBashOperations(ops operations.BashOperations) BashToolOption {
 // NewBashTool creates BashTool with optional configuration.
 // If no BashOperations is provided via WithBashOperations, defaults to LocalBashOperations.
 func NewBashTool(opts ...BashToolOption) *BashTool {
-	t := &BashTool{}
+	t := &BashTool{progressInterval: 5 * time.Second}
 	for _, opt := range opts {
 		opt(t)
 	}
@@ -107,6 +108,8 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, onUpdate fu
 		WorkDir: t.workspace,
 	}
 
+	stopProgress := t.reportProgress(ctx, params.Timeout, onUpdate)
+	defer stopProgress()
 	result, runErr := t.ops.Run(ctx, req)
 
 	output := string(result.Output)
@@ -164,4 +167,39 @@ func isBinaryOutput(s string) bool {
 		}
 	}
 	return false
+}
+
+// Even silent commands report that they are still waiting; this is elapsed time,
+// not invented output or a completion estimate. Stop and join before tool_end.
+func (t *BashTool) reportProgress(ctx context.Context, timeout int, update func(agent.PartialResult)) func() {
+	if update == nil {
+		return func() {}
+	}
+	interval := t.progressInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				message := fmt.Sprintf("命令仍在执行 · 已等待 %ds", int(time.Since(start).Seconds()))
+				if timeout > 0 {
+					message += fmt.Sprintf(" · 超时上限 %ds", timeout)
+				}
+				update(agent.PartialResult{Content: message})
+			}
+		}
+	}()
+	return func() { close(stop); <-done }
 }

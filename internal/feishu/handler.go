@@ -629,6 +629,18 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 					}
 				}
 
+			case "tool_update":
+				var ev struct {
+					ToolName string                   `json:"tool_name"`
+					Partial  struct{ Content string } `json:"partial_result"`
+				}
+				if json.Unmarshal([]byte(data), &ev) == nil && updates != nil {
+					status := fmt.Sprintf("正在执行 %s", ev.ToolName)
+					if ev.ToolName == "bash" && strings.HasPrefix(ev.Partial.Content, "命令仍在执行") {
+						status = ev.Partial.Content
+					}
+					updates.update(buf.String(), FooterMetrics{Status: status, ElapsedMs: time.Since(startTime).Milliseconds()})
+				}
 			case "tool_end":
 				if updates != nil {
 					updates.update(buf.String(), FooterMetrics{Status: "正在思考", ElapsedMs: time.Since(startTime).Milliseconds()})

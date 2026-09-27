@@ -115,8 +115,13 @@ func (s *JSONLStorage) load() error {
 			return err
 		}
 		s.byID[entry.ID] = entry
-		if entry.Type == EntryTypeLeaf {
+		// Replay the same cursor transitions as Append. A process may stop
+		// after the durable message write but before the following leaf record.
+		switch entry.Type {
+		case EntryTypeLeaf:
 			s.leafID = entry.TargetID
+		case EntryTypeMessage, EntryTypeCompaction:
+			s.leafID = entry.ID
 		}
 	}
 	return scanner.Err()
