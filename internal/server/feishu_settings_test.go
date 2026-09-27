@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -134,5 +135,22 @@ func TestFeishuSettingsFirstSetup(t *testing.T) {
 	values, _ := f.values()
 	if values["FEISHU_APP_ID"] != "cli_first" || values["EXTRA"] != "keep" {
 		t.Fatal("first setup failed")
+	}
+}
+
+func TestFeishuSettingsLingerUsesServiceUser(t *testing.T) {
+	f := fixtureSettings(t)
+	f.run = func(_ context.Context, name string, args ...string) (string, error) {
+		if name == "loginctl" {
+			if len(args) != 4 || args[0] != "show-user" || args[1] != strconv.Itoa(os.Getuid()) {
+				t.Fatalf("loginctl must address service user: %v", args)
+			}
+			return "yes", nil
+		}
+		return "active", nil
+	}
+	state, err := f.status(context.Background())
+	if err != nil || state["linger"] != "yes" {
+		t.Fatal(state, err)
 	}
 }

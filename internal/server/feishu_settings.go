@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -62,8 +63,8 @@ func (f *feishuSettings) status(ctx context.Context) (map[string]any, error) {
 	}
 	lingerCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	linger, err := f.run(lingerCtx, "loginctl", "show-user", "--property=Linger", "--value")
-	if err != nil {
+	linger, err := f.run(lingerCtx, "loginctl", "show-user", strconv.Itoa(os.Getuid()), "--property=Linger", "--value")
+	if err != nil || linger == "" {
 		linger = "unknown"
 	}
 	result := map[string]any{"managed": true, "app_id": v["FEISHU_APP_ID"], "secret_configured": v["FEISHU_APP_SECRET"] != "", "services": services, "linger": linger}
