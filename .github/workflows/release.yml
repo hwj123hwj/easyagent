@@ -27,6 +27,11 @@ jobs:
         with:
           go-version: '1.24.2'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm run build && npm test
+        working-directory: workflow-runtime
       - name: Run tests
         run: go test ./...
 
@@ -44,6 +49,8 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           mkdir -p dist
+          cp workflow-runtime/output/workflow-runtime.mjs dist/
+          tar -czf dist/workflow-runtime-licenses.tar.gz -C workflow-runtime/vendor ZCODE-LICENSE ZCODE-NOTICE.md ZCODE-THIRD-PARTY-NOTICES.md SOURCE.md
           LDFLAGS="-X main.version=${{ steps.ver.outputs.version }}"
           targets=(
             "linux/amd64"
@@ -67,7 +74,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum easyagent-linux-* easyagent-darwin-* easyagent-bridge-* > checksums.txt 2>/dev/null || true
+          sha256sum easyagent-linux-* easyagent-darwin-* easyagent-bridge-* workflow-runtime* > checksums.txt 2>/dev/null || true
           cat checksums.txt
 
       - name: Create GitHub Release
@@ -84,3 +91,5 @@ jobs:
             dist/easyagent-bridge-linux-amd64
             dist/easyagent-bridge-linux-arm64
             dist/checksums.txt
+            dist/workflow-runtime.mjs
+            dist/workflow-runtime-licenses.tar.gz

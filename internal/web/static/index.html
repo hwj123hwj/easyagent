@@ -16,6 +16,7 @@
       </div>
       <div class="nav-tabs">
         <button class="nav-tab active" data-page="page-chat">对话</button>
+        <button class="nav-tab" data-page="page-dynamic-workflows">工作流</button>
         <button class="nav-tab" data-page="page-workflows">流水线</button>
         <button class="nav-tab" data-page="page-sessions">会话</button>
         <button class="nav-tab" data-page="page-settings">设置</button>
@@ -107,6 +108,20 @@
 
     <section id="command-menu" class="command-menu" aria-label="斜杠命令" hidden><div class="command-menu-heading">快捷命令 <span>补全后再按 Enter 执行</span></div><div id="command-options" role="listbox" aria-label="可用命令"></div><p id="command-empty" hidden>没有匹配的命令。输入 / 查看列表；以 // 开头可发送普通文本。</p><div class="command-menu-hint">↑ ↓ 选择 · Tab / Enter 补全 · Esc 关闭</div></section>
 
+    <div id="page-dynamic-workflows" class="page" hidden>
+      <div class="dw-layout">
+        <section class="dw-list-panel" aria-labelledby="dw-heading">
+          <div class="panel-header"><h3 id="dw-heading">动态工作流</h3><button id="dw-refresh" class="btn btn-ghost">刷新</button></div>
+          <p class="dw-intro">描述目标，由 Agent 设计分工、并行任务和执行逻辑。</p>
+          <button id="dw-create" class="btn btn-primary">在对话中创建</button>
+          <p id="dw-notice" class="dw-notice" role="status"></p>
+          <div id="dw-list" class="dw-list"></div>
+        </section>
+        <section id="dw-detail" class="dw-detail" aria-label="工作流详情">
+          <p class="dw-empty">使用 <code>/workflow 任务描述</code> 开始，或选择左侧运行记录查看过程。</p>
+        </section>
+      </div>
+    </div>
     <!-- Page: Workflows -->
     <div id="page-workflows" class="page" hidden>
       <div class="wf-layout">

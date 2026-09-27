@@ -43,6 +43,14 @@ export EA_HOME="$build_dir/test-home"
 export EA_DATA_DIR="$build_dir/test-data"
 mkdir -p "$EA_HOME" "$EA_DATA_DIR"
 cd "$build_dir"
+workflow_runtime=false
+runtime_bin="$(dirname "$BIN_PATH")/workflow-runtime.mjs"
+if [[ -f workflow-runtime/package-lock.json ]]; then
+  node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)'
+  (cd workflow-runtime && npm ci --ignore-scripts && npm run build && npm test)
+  node workflow-runtime/output/workflow-runtime.mjs --check
+  workflow_runtime=true
+fi
 "$GO_BIN" test -p 2 ./...
 (cd third_party/bubbletea && "$GO_BIN" test -p 2 ./...)
 "$GO_BIN" vet -p 2 ./...
@@ -51,6 +59,10 @@ cd "$build_dir"
 release="$DEPLOY_ROOT/releases/$revision"
 mkdir -p "$release"
 install -m 755 easyagent "$release/easyagent"
+if [[ "$workflow_runtime" == true ]]; then
+  install -m 644 workflow-runtime/output/workflow-runtime.mjs "$release/workflow-runtime.mjs"
+  cp -R workflow-runtime/vendor/ZCODE-* workflow-runtime/vendor/SOURCE.md "$release/"
+fi
 if [[ -n "$BRIDGE_BIN" ]]; then install -m 755 easyagent-bridge "$release/easyagent-bridge"; fi
 if [[ -f scripts/web-test.mjs ]]; then node --test scripts/web-test.mjs; fi
 # Prevent an older branch from silently removing capabilities enabled on this host.
@@ -72,6 +84,11 @@ if [[ -n "$BRIDGE_BIN" ]]; then
   [[ -f "$BRIDGE_BIN" ]] || { echo 'Existing bridge binary is required for rollback' >&2; exit 1; }
   cp -p "$BRIDGE_BIN" "$DEPLOY_ROOT/previous-bridge-binary"
 fi
+previous_runtime=false
+if [[ "$workflow_runtime" == true && -f "$runtime_bin" ]]; then
+  cp -p "$runtime_bin" "$DEPLOY_ROOT/previous-workflow-runtime.mjs"
+  previous_runtime=true
+fi
 rollback() {
   trap - ERR TERM INT HUP
   echo "Deployment failed; restoring previous binary" >&2
@@ -81,6 +98,12 @@ rollback() {
     install -m 755 "$DEPLOY_ROOT/previous-bridge-binary" "$BRIDGE_BIN.rollback"
     mv -f "$BRIDGE_BIN.rollback" "$BRIDGE_BIN"
   fi
+  if [[ "$workflow_runtime" == true ]]; then
+    if [[ "$previous_runtime" == true ]]; then
+      cp -p "$DEPLOY_ROOT/previous-workflow-runtime.mjs" "$runtime_bin.rollback"
+      mv -f "$runtime_bin.rollback" "$runtime_bin"
+    else rm -f "$runtime_bin"; fi
+  fi
   systemctl --user restart "${services[@]}" || echo "Rollback restart failed; inspect service journal" >&2
   printf '%s\n' "$revision" > "$DEPLOY_ROOT/failed-revision"
 }
@@ -88,6 +111,10 @@ install -m 755 "$release/easyagent" "$BIN_PATH.next"
 # Any failure from this point must restore the known working executable.
 trap 'rollback; rm -rf "$build_dir"' ERR
 trap 'rollback; exit 1' TERM INT HUP
+if [[ "$workflow_runtime" == true ]]; then
+  install -m 644 "$release/workflow-runtime.mjs" "$runtime_bin.next"
+  mv -f "$runtime_bin.next" "$runtime_bin"
+fi
 mv -f "$BIN_PATH.next" "$BIN_PATH"
 if [[ -n "$BRIDGE_BIN" ]]; then
   install -m 755 "$release/easyagent-bridge" "$BRIDGE_BIN.next"

@@ -19,6 +19,9 @@ if any('/commits/' in a for a in args): print(json.dumps({'sha':rev}))
 elif any('/tarball/' in a for a in args):
  with tarfile.open(args[args.index('-o')+1], 'w:gz') as archive:
   info=tarfile.TarInfo('source/third_party/bubbletea/');info.type=tarfile.DIRTYPE;info.mode=0o755;archive.addfile(info)
+  if os.environ.get('EA_TEST_RUNTIME')=='1':
+   for name in ['package-lock.json','vendor/ZCODE-LICENSE','vendor/SOURCE.md']:
+    info=tarfile.TarInfo('source/workflow-runtime/'+name);data=b'{}';info.size=len(data);archive.addfile(info,io.BytesIO(data))
 else: print(json.dumps({'status':'ok','version':rev if os.environ.get('EA_TEST_MODE')!='bad-health' else 'wrong'}))
 ''')
         self.wrapper(fake, 'go', '''import os,pathlib,sys
@@ -32,6 +35,8 @@ if '-o' in sys.argv:
 with (pathlib.Path(os.environ['EA_TEST_ROOT'])/'service-log').open('a') as out:out.write(' '.join(sys.argv[1:])+'\\n')
 if os.environ.get('EA_TEST_MODE')=='bad-bridge' and 'is-active' in sys.argv and 'bridge.service' in sys.argv:sys.exit(1)
 ''')
+        self.wrapper(fake, 'npm', "import pathlib; p=pathlib.Path('output');p.mkdir(exist_ok=True);(p/'workflow-runtime.mjs').write_text('new runtime')")
+        self.wrapper(fake, 'node', "import os,sys; sys.exit(1 if os.environ.get('EA_TEST_MODE')=='bad-runtime' else 0)")
         self.wrapper(fake, 'sleep', '')
     def wrapper(self, directory, name, body):
         p=directory/name;p.write_text('#!/usr/bin/env python3\n'+body);p.chmod(0o755)
@@ -86,5 +91,25 @@ if os.environ.get('EA_TEST_MODE')=='bad-bridge' and 'is-active' in sys.argv and 
         self.assertEqual(self.binary.read_text(),'previous')
         self.assertEqual(bridge.read_text(),'previous bridge')
         self.assertFalse((self.root/'service-log').exists())
+
+    def test_runtime_installed_with_core(self):
+        self.env['EA_TEST_RUNTIME']='1'
+        result=self.run_update();self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual((self.binary.parent/'workflow-runtime.mjs').read_text(),'new runtime')
+    def test_runtime_check_failure_preserves_core(self):
+        self.env['EA_TEST_RUNTIME']='1'
+        self.assertNotEqual(self.run_update('bad-runtime').returncode,0)
+        self.assertEqual(self.binary.read_text(),'previous')
+        self.assertFalse((self.root/'service-log').exists())
+    def test_runtime_rolls_back_with_core(self):
+        self.env['EA_TEST_RUNTIME']='1'
+        runtime=self.binary.parent/'workflow-runtime.mjs';runtime.write_text('previous runtime')
+        self.assertNotEqual(self.run_update('bad-health').returncode,0)
+        self.assertEqual(runtime.read_text(),'previous runtime')
+        self.assertEqual(self.binary.read_text(),'previous')
+    def test_first_runtime_install_removed_on_rollback(self):
+        self.env['EA_TEST_RUNTIME']='1'
+        self.assertNotEqual(self.run_update('bad-health').returncode,0)
+        self.assertFalse((self.binary.parent/'workflow-runtime.mjs').exists())
 
 if __name__=='__main__': unittest.main()

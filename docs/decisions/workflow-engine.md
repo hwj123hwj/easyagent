@@ -3,7 +3,7 @@
 # 决策：workflow 引擎——Go 原生重设计，不移植上游 TS 栈
 
 日期：2026-09-25
-状态：已实施（`sdk/workflow` + `/workflows` API）
+状态：已实施（`sdk/workflow` + `/workflows` API）；动态工作流方向已调整，见 [动态工作流接入契约](../DYNAMIC_WORKFLOW.md)。原先否决 Node sidecar 的取舍仅描述当时决策，本轮采用固定版本的 ZCode 引擎与独立 Node 组件。
 
 ## 背景
 

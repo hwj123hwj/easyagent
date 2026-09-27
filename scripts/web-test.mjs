@@ -141,3 +141,11 @@ test('a delayed /new does not navigate away after the user switches or edits', a
     assert.equal(selected,false);assert.equal(panel.input.value,'保留新草稿');
   }
 });
+
+test('workflow task sends through the agent and empty workflow opens the run directory', async () => {
+  assert.equal(filterCommands('/work')[0].name,'workflow');
+  const panel=Object.create(ChatPanel.prototype);let sent='',page='';
+  Object.assign(panel,{state:{currentSessionId:'a',navigate:p=>{page=p;}},input:{value:'/workflow 研究方案',style:{},scrollHeight:20},drafts:new Drafts(),busy:new Set(),ws:{connected:true,sendPrompt:(_id,text)=>{sent=text;return false;}},_updateButtons(){},_notice(){},commandMenu:{close(){}},_inputChanged(){}});
+  await panel._send();assert.equal(sent,'/workflow 研究方案');assert.equal(panel.input.value,'/workflow 研究方案');
+  panel.input.value='/workflow';await panel._send();assert.equal(page,'page-dynamic-workflows');assert.equal(panel.input.value,'');
+});

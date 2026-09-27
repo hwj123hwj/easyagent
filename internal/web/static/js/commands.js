@@ -3,6 +3,7 @@ export const commands = [
   {name:'help', label:'使用帮助', description:'查看命令和输入快捷键'},
   {name:'new', label:'新对话', description:'开始新对话，保留当前历史'},
   {name:'model', label:'切换模型', description:'打开可搜索的模型列表'},
+  {name:'workflow', label:'动态工作流', description:'追加任务，由 Agent 设计并执行；留空查看运行记录', args:true},
   {name:'sessions', label:'历史会话', description:'浏览和管理全部会话'},
   {name:'context', label:'会话信息', description:'查看当前模型和工作区', session:true},
   {name:'tools', label:'可用工具', description:'查看服务提供的工具'},

@@ -183,3 +183,17 @@ GET /health
   "status": "ok"
 }
 ```
+
+
+## 动态工作流（ZCode 引擎）
+
+沿用 API 认证。创建由对话中的 `/workflow <任务>` 和 `create_workflow` 工具完成，Actor 继承父会话配置。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/dynamic-workflows` | `runs` 摘要，以及运行组件 `available` / `error` |
+| GET | `/dynamic-workflows/{id}` | 状态、脚本、父会话、Actor 会话映射、节点快照与最终结果 |
+| POST | `/dynamic-workflows/{id}/cancel` | 取消运行，成功返回 202 |
+| POST | `/dynamic-workflows/{id}/resume` | body 必须为 `{"acknowledge_incomplete_actions":true}`；成功返回 202 及运行记录 |
+
+取消/恢复状态冲突返回 409，详情不存在返回 404。恢复重复使用已完成结果，未完成 ask 的外部操作可能重复执行。运行中的 Actor 会话拒绝外部聊天、命令、删除、压缩和模型修改请求（409）。协议详情与限制见 [DYNAMIC_WORKFLOW.md](DYNAMIC_WORKFLOW.md)。

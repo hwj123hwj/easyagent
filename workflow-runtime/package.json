@@ -1,0 +1,24 @@
+{
+  "name": "easyagent-workflow-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "vendor/dynamic-workflow",
+    "vendor/dynamic-workflow-runtime"
+  ],
+  "scripts": {
+    "build": "npm run build -w @zcode/dynamic-workflow && npm run build -w @zcode/dynamic-workflow-runtime && node build.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@zcode/dynamic-workflow": "0.1.0",
+    "@zcode/dynamic-workflow-runtime": "0.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}
