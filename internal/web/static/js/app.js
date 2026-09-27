@@ -1,3 +1,4 @@
+import { copyText } from './clipboard.js';
 // Main application — initializes all modules and page navigation
 
 import { PiWebSocket } from './websocket.js';
@@ -18,6 +19,7 @@ const state = {
   sessions: [],
   models: [],
   streaming: false,
+  restoringSession: /^#s=.+/.test(location.hash),
 };
 
 // Initialize modules
@@ -43,6 +45,8 @@ async function onSessionChange(sessionId) {
   setSidebar(false);
   await chat.selectSession(sessionId);
 }
+state.navigate = switchPage;
+state.openModels = () => { setSidebar(true); sidebar.modelPicker.open(); };
 state.createSession = () => sidebar.createSession({select:false});
 state.refreshControls = () => chat._updateButtons();
 state.selectSession = id => sidebar.selectSession(id);
@@ -71,11 +75,15 @@ const hashSession = location.hash.match(/^#s=(.+)$/);
 if (hashSession) {
   const wanted = decodeURIComponent(hashSession[1]);
   let tries = 0;
-  const trySelect = () => {
+  const trySelect = async () => {
     if (state.sessions.some(s => s.id === wanted)) {
-      sidebar.selectSession(wanted);
+      await sidebar.selectSession(wanted);
+      state.restoringSession = false; chat._updateButtons();
     } else if (tries++ < 20) {
       setTimeout(trySelect, 300);
+    } else {
+      state.restoringSession = false; chat._updateButtons();
+      chat._notice('未能恢复此会话，请从历史列表重新选择。');
     }
   };
   setTimeout(trySelect, 200);
@@ -91,7 +99,7 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
 
 function switchPage(pageID) {
   document.querySelectorAll('.nav-tab').forEach(t => { t.classList.toggle('active', t.dataset.page === pageID); t.setAttribute('aria-current', t.dataset.page === pageID ? 'page' : 'false'); });
-  setSidebar(false);
+  setSidebar(false); chat.commandMenu.close();
   document.querySelectorAll('.page').forEach(p => {
     const active = p.id === pageID;
     p.hidden = !active;
@@ -126,3 +134,11 @@ async function refreshAuthBadge() {
   }
   badge.textContent = '已登录';
 }
+
+// Delegation also covers Markdown in session details and workflow results.
+document.addEventListener('click', async event => {
+  const button = event.target.closest('.copy-code'); if (!button) return;
+  try { await copyText(button.closest('.code-block').querySelector('code').textContent); button.textContent = '已复制'; }
+  catch { button.textContent = '请选中代码复制'; }
+  setTimeout(() => { button.textContent = '复制代码'; }, 1800);
+});

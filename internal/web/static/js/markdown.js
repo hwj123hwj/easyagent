@@ -24,7 +24,7 @@ export function renderMarkdown(text) {
       const end = src.indexOf('\n```', start);
       if (end !== -1) {
         const code = src.slice(start, end);
-        blocks.push(`<pre><code class="lang-${escapeHtml(lang.replace(/[^a-zA-Z0-9_-]/g, ''))}">${highlightCode(code, lang.toLowerCase())}</code></pre>`);
+        blocks.push(`<div class="code-block"><div class="code-heading"><span>${escapeHtml(lang.replace(/[^a-zA-Z0-9_+-]/g, '')) || '代码'}</span><button class="copy-code" type="button">复制代码</button></div><pre><code class="lang-${escapeHtml(lang.replace(/[^a-zA-Z0-9_-]/g, ''))}">${highlightCode(code, lang.toLowerCase())}</code></pre></div>`);
         i = end + 4;
         continue;
       }
@@ -125,23 +125,23 @@ function safeURL(raw, image = false) {
   } catch { return null; }
 }
 function renderInline(text) {
-  const format = value => escapeHtml(value)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/~~(.+?)~~/g, '<del>$1</del>');
-  const pattern = /`([^`]+)`|(!?)\[([^\]]*)\]\(([^)]+)\)|(https?:\/\/[^\s<>]+)/g;
+  // Parse emphasis around inline code/links as a unit, without formatting raw HTML.
+  const pattern = /`([^`]+)`|\*\*(.+?)\*\*|\*(?!\*)(.+?)\*|~~(.+?)~~|(!?)\[([^\]]*)\]\(([^)]+)\)|(https?:\/\/[^\s<>]+)/g;
   let output = '', last = 0;
   for (const match of text.matchAll(pattern)) {
-    output += format(text.slice(last, match.index));
-    const [raw, code, image, label, target, autoURL] = match;
+    output += escapeHtml(text.slice(last, match.index));
+    const [raw, code, bold, italic, strike, image, label, target, autoURL] = match;
     if (code !== undefined) output += '<code>' + escapeHtml(code) + '</code>';
+    else if (bold !== undefined) output += '<strong>' + renderInline(bold) + '</strong>';
+    else if (italic !== undefined) output += '<em>' + renderInline(italic) + '</em>';
+    else if (strike !== undefined) output += '<del>' + renderInline(strike) + '</del>';
     else {
       const url = safeURL(target || autoURL, !!image);
-      if (!url) output += format(label || raw);
+      if (!url) output += escapeHtml(label || raw);
       else if (image) output += '<img src="' + url + '" alt="' + escapeHtml(label).replace(/"/g, '&quot;') + '" loading="lazy">';
-      else output += '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + format(label || autoURL) + '</a>';
+      else output += '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(label || autoURL) + '</a>';
     }
     last = match.index + raw.length;
   }
-  return output + format(text.slice(last));
+  return output + escapeHtml(text.slice(last));
 }
