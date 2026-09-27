@@ -13,9 +13,6 @@ Thumbs.db
 
 # Build
 /tmp/
-/pi-agent
-/pi-feishu-bridge
-/pi-music
 
 # Easy Code
 .easycode/
