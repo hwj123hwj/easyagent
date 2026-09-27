@@ -1,0 +1,27 @@
+name: Release build check
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release*.yml'
+      - 'scripts/release.py'
+      - 'scripts/publish-release.py'
+      - 'scripts/build-release.sh'
+      - 'scripts/check-release-build.sh'
+      - 'scripts/test_release*.py'
+      - 'cmd/easyagent*/**'
+permissions:
+  contents: read
+jobs:
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bash scripts/check-release-build.sh

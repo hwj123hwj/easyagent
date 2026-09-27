@@ -1,5 +1,10 @@
 name: Verify
 on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
   pull_request:
   push:
     branches: [main]
@@ -10,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -24,4 +31,5 @@ jobs:
         working-directory: third_party/bubbletea
       - run: node --test scripts/web-test.mjs
       - run: python3 scripts/test_update_mini.py
+      - run: python3 -m unittest discover -s scripts -p "test_release*.py"
       - run: git diff --check

@@ -30,6 +30,7 @@ go vet ./...
 (cd third_party/bubbletea && go test ./...)
 node --test scripts/web-test.mjs
 python3 scripts/test_update_mini.py
+python3 -m unittest discover -s scripts -p "test_release*.py"
 git diff --check
 ```
 
@@ -50,3 +51,5 @@ git diff --check
 迷你主机更新器跟踪 `main`，使用确定 SHA 独立构建并验证核心、桥接和工作流 bundle；健康检查失败回滚。它不覆盖运行配置和会话目录。更新会重启服务，长任务期间需暂停更新 timer，详见 [部署运维](MINI_DEPLOY.md)。
 
 飞书配对、HTTP 认证、路径开关和工具确认分别验证。涉及这些功能的改动必须保持默认限制与授权检查；不得用关闭认证或跳过 owner 校验来修复接入问题。
+
+正式版本的 tag、CHANGELOG、构建与上传规范见 [版本与发布](RELEASING.md)，不使用历史一次性上传脚本或移动 tag 来重发版本。

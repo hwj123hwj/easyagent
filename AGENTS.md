@@ -37,6 +37,12 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ---
 
+### 版本发布
+
+- tag 使用带 `v` 的语义化版本和附注标签，只发布已进入 main 的确定提交。按 `docs/RELEASING.md` 和 `scripts/release.py` 操作。
+- 发布前更新 CHANGELOG 并通过完整 CI；已发布 tag 和资产不得移动、删除重打或覆盖。
+- main 的 SHA 自动部署与正式 Release 分开，不为每次合并自动打版本标签。
+
 ## 项目文档
 
 - 项目介绍 & 架构：`README.md` / `docs/ARCHITECTURE.md`
