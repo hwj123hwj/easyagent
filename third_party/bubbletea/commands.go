@@ -208,6 +208,18 @@ func SetWindowTitle(title string) Cmd {
 	}
 }
 
+// bellMsg is an internal message used to ring the terminal bell.
+type bellMsg struct{}
+
+// Bell produces a command that rings the terminal bell (BEL, \a) to notify
+// the user, e.g. a long-running task finished while they scrolled away.
+// HWJ local patch; not part of upstream bubbletea.
+func Bell() Cmd {
+	return func() Msg {
+		return bellMsg{}
+	}
+}
+
 type windowSizeMsg struct{}
 
 // WindowSize is a command that queries the terminal for its current size. It

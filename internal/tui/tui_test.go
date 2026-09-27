@@ -499,3 +499,50 @@ func TestInputModel_CursorColumn(t *testing.T) {
 		t.Errorf("cursor above last rendered line: CursorColumn() = %d, want 0", got)
 	}
 }
+
+// TestViewport_IncrementalRenderMatchesFull：增量渲染结果必须与全量重建逐行一致。
+// 同时验证 SetMessages 缩短(/new 场景)后能正确全量重建。
+func TestViewport_IncrementalRenderMatchesFull(t *testing.T) {
+	mk := func() *MessageViewport {
+		v := NewMessageViewport(80, 20)
+		return &v
+	}
+
+	// 模拟一轮对话的追加序列
+	var msgs []ChatMessage
+	v := mk()
+	seq := []ChatMessage{
+		{Role: "user", Content: "你好"},
+		{Role: "assistant", Content: "# 标题\n\n**加粗** 回复"},
+		{Role: "user", Content: "继续"},
+	}
+	for _, m := range seq {
+		msgs = append(msgs, m)
+		v.SetMessages(msgs)
+	}
+
+	// 全量重建的对照 viewport
+	full := mk()
+	full.SetMessages(msgs)
+
+	if got, want := strings.Join(v.lines, "\n"), strings.Join(full.lines, "\n"); got != want {
+		t.Fatalf("incremental render diverged from full rebuild")
+	}
+
+	// 工具事件改最后一条消息后仍一致
+	msgs[len(msgs)-1].Tools = append(msgs[len(msgs)-1].Tools, ToolCallInfo{ID: "t1", Name: "bash", Collapsed: true})
+	v.SetMessages(msgs)
+	full.SetMessages(msgs)
+	if got, want := strings.Join(v.lines, "\n"), strings.Join(full.lines, "\n"); got != want {
+		t.Fatalf("render diverged after tool mutation")
+	}
+
+	// 缩短(/new): 清空后重建
+	v.SetMessages(msgs[:1])
+	if len(v.lines) == 0 {
+		t.Fatalf("expected lines after shrink to 1 message")
+	}
+	if !strings.Contains(strings.Join(v.lines, "\n"), "你好") {
+		t.Fatalf("shrunken viewport should contain only first message")
+	}
+}
