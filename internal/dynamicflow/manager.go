@@ -321,3 +321,10 @@ func (m *Manager) ActiveActorSession(id string) bool {
 	}
 	return false
 }
+
+// ActiveCount includes runs between Actor requests and while finalizing storage.
+func (m *Manager) ActiveCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.active)
+}

@@ -27,3 +27,6 @@ bin/
 
 # Promo video workspace (large media + local .env)
 .video-promo-v011/
+
+# Python validation caches
+__pycache__/

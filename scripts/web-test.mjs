@@ -167,3 +167,22 @@ test('history never marks a tool with no result as successful', async () => {
   try {await panel.loadHistory('test');assert.equal(states.get('ok'),'done');assert.equal(states.get('failed'),'error');assert.equal(states.get('missing'),'unknown');}
   finally {globalThis.fetch=oldFetch;globalThis.localStorage=oldStorage;}
 });
+
+test('tool progress stays running and cannot overwrite a final result', () => {
+  const nodes = {'.tool-status': {textContent: ''}, '.tool-result': {textContent: ''}};
+  let running = true;
+  const panel = Object.create(ChatPanel.prototype);
+  panel._currentToolCalls = {job: {classList:{contains: name => name === 'running' && running},querySelector: name => nodes[name]}};
+  panel._updateToolProgress('job', {Content: '命令仍在执行 · 已等待 5s'});
+  assert.match(nodes['.tool-status'].textContent, /5s/);
+  running = false; nodes['.tool-result'].textContent = 'command canceled';
+  panel._updateToolProgress('job', {Content: 'late update'});
+  assert.equal(nodes['.tool-result'].textContent, 'command canceled');
+});
+
+test('deployment rejection restores unsent draft without replacing newer input', () => {
+  const panel=Object.create(ChatPanel.prototype);
+  Object.assign(panel,{pendingSends:new Map([['a','//help']]),state:{currentSessionId:'a'},input:{value:''},drafts:new Drafts(),_resizeInput(){}});
+  panel._restoreRejectedPrompt('a');assert.equal(panel.input.value,'//help');assert.equal(panel.drafts.get('a'),'//help');
+  panel.pendingSends.set('a','previous');panel.input.value='newer';panel._restoreRejectedPrompt('a');assert.equal(panel.input.value,'newer');
+});

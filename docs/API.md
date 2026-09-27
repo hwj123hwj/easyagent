@@ -228,3 +228,7 @@ GET /health
 | POST | `/asr/transcribe` | 上传音频并转写，需配置语音服务 |
 
 飞书管理接口要求 `EA_API_KEY` 和托管文件路径；使用前参见 [飞书接入](FEISHU.md)。
+
+## 部署控制
+
+`GET /admin/deploy` 返回 `active` 和 `draining`。`POST /admin/deploy` 仅在无活动任务时返回 `lease` 与 `expires_at`，忙碌时返回 409；租约期间新执行请求返回 503。`DELETE /admin/deploy` 的 body 为 `{"lease":"原租约"}`，释放该租约。三个操作均要求显式 `EA_API_KEY` 认证，详见 [部署保护](MINI_DEPLOY.md)。

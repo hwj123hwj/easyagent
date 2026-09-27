@@ -65,6 +65,7 @@ if [[ "$workflow_runtime" == true ]]; then
 fi
 if [[ -n "$BRIDGE_BIN" ]]; then install -m 755 easyagent-bridge "$release/easyagent-bridge"; fi
 if [[ -f scripts/web-test.mjs ]]; then node --test scripts/web-test.mjs; fi
+if [[ -f scripts/test_update_mini.py ]]; then python3 scripts/test_update_mini.py; fi
 # Prevent an older branch from silently removing capabilities enabled on this host.
 if [[ ${EA_DEPLOY_REQUIRE_PATH_POLICY:-false} == true ]]; then
   help_text=$("$release/easyagent" --help 2>&1)
@@ -77,6 +78,26 @@ if [[ -n "$BRIDGE_BIN" && ${EA_DEPLOY_REQUIRE_OWNER_ACCESS:-false} == true ]]; t
       echo 'Release lacks required bridge owner access checks' >&2; exit 1;
     }
 fi
+# Admit deployment only while idle, and block new work until restart. An old
+# server without this protocol fails closed; bootstrap upgrades are explicit.
+DEPLOY_URL=${EA_DEPLOY_CONTROL:-"${HEALTH_URL%/health}/admin/deploy"}
+CORE_ENV=${EA_DEPLOY_CORE_ENV:-"$HOME/.config/easyagent/core.env"}
+lease_file="$build_dir/deploy.lease"
+guard="$build_dir/scripts/deploy-guard.py"
+if python3 "$guard" prepare "$DEPLOY_URL" "$CORE_ENV" "$lease_file"; then
+  :
+else
+  guard_status=$?
+  if [[ "$guard_status" == 75 ]]; then exit 0; fi
+  exit "$guard_status"
+fi
+# Release our own lease on any pre-restart failure. After restart the old lease
+# is gone; the best-effort release is harmless. Expiry also recovers killed updaters.
+cleanup() {
+  python3 "$guard" release "$DEPLOY_URL" "$CORE_ENV" "$lease_file" >/dev/null 2>&1 || true
+  rm -rf "$build_dir"
+}
+trap cleanup EXIT
 # Keep an exact copy of the previous binary even if it predates this updater.
 previous="$DEPLOY_ROOT/previous-binary"
 if [[ -f "$BIN_PATH" ]]; then cp -p "$BIN_PATH" "$previous"; else echo 'Existing service binary is required for rollback' >&2; exit 1; fi
@@ -109,7 +130,7 @@ rollback() {
 }
 install -m 755 "$release/easyagent" "$BIN_PATH.next"
 # Any failure from this point must restore the known working executable.
-trap 'rollback; rm -rf "$build_dir"' ERR
+trap 'rollback' ERR
 trap 'rollback; exit 1' TERM INT HUP
 if [[ "$workflow_runtime" == true ]]; then
   install -m 644 "$release/workflow-runtime.mjs" "$runtime_bin.next"

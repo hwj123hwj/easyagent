@@ -38,6 +38,9 @@ func (s *Server) SetVersion(v string) {
 // Server provides HTTP REST + SSE endpoints for the agent.
 // It routes requests to AgentSessions via the App's SessionRegistry.
 type Server struct {
+	activity      activityGate
+	ctx           context.Context
+	cancel        context.CancelFunc
 	app           *app.App
 	slashCmds     *slashcmd.Registry
 	externalTools []agent.ExternalToolDef
@@ -125,7 +128,8 @@ type ErrorResponse struct {
 // New creates a new Server backed by the given App and slash command registry.
 // It also wires the LoopManager's trigger resolver so /loop can inject prompts.
 func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
-	srv := &Server{app: application, slashCmds: slashCmds}
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &Server{app: application, slashCmds: slashCmds, ctx: ctx, cancel: cancel}
 
 	// Wire loop trigger: when a /loop fires, inject the prompt into the target session
 	if application.LoopManager() != nil {
@@ -142,6 +146,15 @@ func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
 // injectLoopPrompt injects a prompt into a session as a background agent turn.
 // Used by the /loop scheduler to fire recurring prompts.
 func (s *Server) injectLoopPrompt(ctx context.Context, sessionID, prompt string) error {
+	done, ok := s.activity.begin()
+	if !ok {
+		return fmt.Errorf("服务正在更新，请稍后重试")
+	}
+	defer done()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(s.ctx, cancel)
+	defer stop()
 	sess, err := s.app.LoadSession(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load session for loop: %w", err)
@@ -157,6 +170,7 @@ func (s *Server) Handler() http.Handler {
 	// REST API routes with middleware
 	restMux := http.NewServeMux()
 	restMux.HandleFunc("GET /health", s.health)
+	restMux.HandleFunc("/admin/deploy", s.deploymentControl)
 	restMux.HandleFunc("POST /chat", s.chat)
 	restMux.HandleFunc("POST /chat/stream", s.chatStream)
 	restMux.HandleFunc("GET /sessions", s.listSessions)
@@ -195,7 +209,7 @@ func (s *Server) Handler() http.Handler {
 	// ASR (speech-to-text) endpoint
 	NewASRHandler(s.app.Config()).Register(restMux)
 
-	var restHandler http.Handler = restMux
+	var restHandler http.Handler = s.admissionMiddleware(restMux)
 	restHandler = corsMiddleware(s)(restHandler)
 	restHandler = s.authMiddleware(restHandler) // auth check after CORS, before recovery
 	restHandler = recoveryMiddleware(restHandler)
@@ -211,6 +225,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Register REST API routes (these take precedence over "/" catch-all)
 	topMux.Handle("/health", restHandler)
+	topMux.Handle("/admin/deploy", restHandler)
 	topMux.Handle("/chat", restHandler)
 	topMux.Handle("/chat/", restHandler)
 	topMux.Handle("/sessions", restHandler)
@@ -242,7 +257,7 @@ func (s *Server) Handler() http.Handler {
 // ListenAndServe starts the HTTP server on the given address.
 func (s *Server) ListenAndServe(addr string) error {
 	slog.Info("starting easyagent server", "listen", addr)
-	return http.ListenAndServe(addr, s.Handler())
+	return s.serveUntilSignal(addr)
 }
 
 // ─── GET /health ──────────────────────────────────────────────────────────────

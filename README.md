@@ -77,6 +77,7 @@ TUI 中输入 `/help` 查看命令。`Enter` 发送，`Ctrl+J` 换行，`PgUp/Pg
 | 编排多 Agent 动态任务 | [动态工作流](docs/DYNAMIC_WORKFLOW.md) |
 | 运行固定步骤 DAG | [YAML 流水线](docs/WORKFLOW.md) |
 | 开机启动、同步 main、健康检查与回滚 | [部署运维](docs/MINI_DEPLOY.md) |
+| 打 tag、发布和核验下载 | [版本与发布](docs/RELEASING.md) · [更新记录](CHANGELOG.md) |
 | 接入 HTTP / SSE / WebSocket | [API](docs/API.md) |
 | 理解源码与 SDK 边界 | [架构](docs/ARCHITECTURE.md) |
 | 开发、测试、合并和分支收尾 | [贡献指南](docs/CONTRIBUTING.md) |

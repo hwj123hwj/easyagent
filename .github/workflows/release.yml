@@ -1,95 +1,69 @@
 name: Release
-
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.10.0)'
+        description: 'Existing annotated tag, e.g. v0.12.0 or v0.12.0-rc.1'
         required: true
-
+        type: string
 permissions:
-  contents: write
-
+  contents: read
+# Serialize publication; do not cancel a run while uploading assets.
+concurrency:
+  group: release
+  cancel-in-progress: false
 jobs:
-  release:
+  validate:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.policy.outputs.version }}
+      sha: ${{ steps.policy.outputs.sha }}
+      prerelease: ${{ steps.policy.outputs.prerelease }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Require main for manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          REF: ${{ github.ref }}
+        run: test "$REF" = refs/heads/main
+      - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - id: policy
+        name: Validate exact tag, ancestry, version and release notes
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: python3 scripts/release.py validate "$TAG" --output "$GITHUB_OUTPUT"
+  verify:
+    needs: validate
+    uses: ./.github/workflows/verify.yml
+    with:
+      ref: ${{ needs.validate.outputs.sha }}
+  publish:
+    needs: [validate, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.validate.outputs.version }}
+      RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+      PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
         with:
-          go-version: '1.24.2'
-
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm ci && npm run build && npm test
-        working-directory: workflow-runtime
-      - name: Run tests
-        run: go test ./...
-
-      - name: Determine version
-        id: ver
-        run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build all platforms
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          mkdir -p dist
-          cp workflow-runtime/output/workflow-runtime.mjs dist/
-          tar -czf dist/workflow-runtime-licenses.tar.gz -C workflow-runtime/vendor ZCODE-LICENSE ZCODE-NOTICE.md ZCODE-THIRD-PARTY-NOTICES.md SOURCE.md
-          LDFLAGS="-X main.version=${{ steps.ver.outputs.version }}"
-          targets=(
-            "linux/amd64"
-            "linux/arm64"
-            "darwin/amd64"
-            "darwin/arm64"
-          )
-          for target in "${targets[@]}"; do
-            os="${target%/*}"
-            arch="${target#*/}"
-            echo "::group::Building ${os}/${arch}"
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
-              go build -ldflags "$LDFLAGS" -o "dist/easyagent-${os}-${arch}" ./cmd/easyagent
-            if [ "$os" = "linux" ]; then
-              CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
-                go build -ldflags "$LDFLAGS" -o "dist/easyagent-bridge-${os}-${arch}" ./cmd/easyagent-bridge
-            fi
-            echo "::endgroup::"
-          done
-
-      - name: Generate checksums
-        run: |
-          cd dist
-          sha256sum easyagent-linux-* easyagent-darwin-* easyagent-bridge-* workflow-runtime* > checksums.txt 2>/dev/null || true
-          cat checksums.txt
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.ver.outputs.version }}
-          name: ${{ steps.ver.outputs.version }}
-          generate_release_notes: true
-          files: |
-            dist/easyagent-linux-amd64
-            dist/easyagent-linux-arm64
-            dist/easyagent-darwin-amd64
-            dist/easyagent-darwin-arm64
-            dist/easyagent-bridge-linux-amd64
-            dist/easyagent-bridge-linux-arm64
-            dist/checksums.txt
-            dist/workflow-runtime.mjs
-            dist/workflow-runtime-licenses.tar.gz
+      - name: Build exact revision and checksum every asset
+        run: bash scripts/build-release.sh "$TAG"
+      - name: Publish complete draft without replacing published assets
+        run: python3 scripts/publish-release.py "$TAG" "$RELEASE_SHA" dist
