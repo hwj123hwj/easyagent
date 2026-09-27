@@ -122,6 +122,8 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// Bugfix: 输入框此前不知道终端宽度，长行（长句/URL/中英混排）渲染成单行被截断。
+		m.input.SetWidth(msg.Width)
 		// Viewport gets: total height - input area - status bar - separators
 		viewportHeight := msg.Height - m.inputHeight() - m.statusBarHeight()
 		if viewportHeight < 3 {
@@ -389,11 +391,20 @@ func (m *TuiModel) View() string {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func (m *TuiModel) inputHeight() int {
-	lines := len(m.input.lines)
-	if lines < 1 {
-		lines = 1
+	// Bugfix: 长行软换行后占多个终端行，输入区高度必须按可视行算，
+	// 否则换行后输入区溢出、把状态栏挤出屏幕。
+	visual := 0
+	for i, line := range m.input.lines {
+		segs := wrapVisual(line, m.input.wrapWidth(i == 0))
+		if len(segs) == 0 {
+			segs = []string{""}
+		}
+		visual += len(segs)
 	}
-	return lines // one terminal line per input line
+	if visual < 1 {
+		visual = 1
+	}
+	return visual
 }
 
 func (m *TuiModel) statusBarHeight() int {

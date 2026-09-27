@@ -232,7 +232,11 @@ func (v *MessageViewport) renderMessage(msg ChatMessage) []string {
 	case "user":
 		// User content: plain text with indentation, no markdown rendering
 		for _, line := range strings.Split(msg.Content, "\n") {
-			lines = append(lines, "  "+line)
+			// Bugfix: 长行（长句、URL、中英混排）之前不做软换行，超出终端宽度被直接截断。
+			// 这里按可视宽度换行（lipgloss 按 cell 宽计算，CJK 占 2 格），保留两格缩进。
+			for _, wl := range wrapVisual(line, v.width-2) {
+				lines = append(lines, "  "+wl)
+			}
 		}
 	case "assistant":
 		// Assistant content: full Markdown rendering via glamour
@@ -243,7 +247,9 @@ func (v *MessageViewport) renderMessage(msg ChatMessage) []string {
 	case "system":
 		// System content: italic dim text
 		for _, line := range strings.Split(msg.Content, "\n") {
-			lines = append(lines, v.theme.SystemContent.Render("  "+line))
+			for _, wl := range wrapVisual(line, v.width-2) {
+				lines = append(lines, v.theme.SystemContent.Render("  "+wl))
+			}
 		}
 	}
 
@@ -269,7 +275,20 @@ func (v *MessageViewport) renderStreaming(text string) []string {
 	// Render streaming text as plain text (no markdown until done —
 	// glamour is too slow for per-keystroke streaming)
 	for _, line := range strings.Split(text, "\n") {
-		lines = append(lines, "  "+line)
+		// Bugfix: 流式输出同样按可视宽度软换行，避免长行被终端截断。
+		for _, wl := range wrapVisual(line, v.width-2) {
+			lines = append(lines, "  "+wl)
+		}
 	}
 	return lines
+}
+
+// wrapVisual 把一行文本按终端可视宽度软换行（ANSI 感知、CJK 宽度感知）。
+// width <= 0 时原样返回，避免尺寸未初始化时丢内容。
+func wrapVisual(line string, width int) []string {
+	if width <= 0 || lipgloss.Width(line) <= width {
+		return []string{line}
+	}
+	wrapped := lipgloss.NewStyle().Width(width).MaxWidth(width).Render(line)
+	return strings.Split(wrapped, "\n")
 }

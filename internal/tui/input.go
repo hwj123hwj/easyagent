@@ -20,6 +20,7 @@ type InputModel struct {
 	draftCursorX int
 	draftCursorY int
 	prompt      string
+	width       int // terminal width for soft-wrap; 0 = unknown (no wrap)
 	theme       *Theme
 }
 
@@ -47,6 +48,24 @@ func NewInputModel() InputModel {
 // Text returns the full input text as a single string.
 func (im *InputModel) Text() string {
 	return strings.Join(im.lines, "\n")
+}
+
+// SetWidth records the terminal width used for soft-wrapping the input.
+// 首行要给 prompt "› " 让出 2 格，续行本身就有 2 格缩进。
+func (im *InputModel) SetWidth(termWidth int) {
+	im.width = termWidth
+}
+
+// wrapWidth returns the per-line visible width available for soft-wrap.
+// 宽度未知或过小时返回 0（不换行），避免把输入拆成碎片。
+func (im *InputModel) wrapWidth(firstLine bool) int {
+	if im.width <= 4 {
+		return 0
+	}
+	if firstLine {
+		return im.width - 2
+	}
+	return im.width - 2
 }
 
 // IsEmpty returns true if there's no text.
@@ -133,49 +152,80 @@ func (im *InputModel) View() string {
 	var buf strings.Builder
 
 	for i, line := range im.lines {
-		if i == 0 {
-			// First line: styled prompt
-			buf.WriteString(im.theme.InputPrompt.Render(im.prompt))
-			buf.WriteByte(' ')
-		} else {
-			// Continuation lines: align with prompt
-			buf.WriteString("  ")
-		}
+		// Bugfix: 长行按可视宽度软换行（CJK 感知），之前渲染成单行被终端截断。
+		segments := wrapVisual(line, im.wrapWidth(i == 0))
+		for j, seg := range segments {
+			if i == 0 && j == 0 {
+				// First line: styled prompt
+				buf.WriteString(im.theme.InputPrompt.Render(im.prompt))
+				buf.WriteByte(' ')
+			} else {
+				// Continuation lines: align with prompt
+				buf.WriteString("  ")
+			}
 
-		// Render line with cursor on current line
-		if i == im.cursorY {
-			buf.WriteString(im.renderLineWithCursor(line))
-		} else {
-			buf.WriteString(line)
-		}
-
-		if i < len(im.lines)-1 {
+			// Render the segment carrying the cursor with a visible cursor
+			if i == im.cursorY && segmentHoldsCursor(segments, j, im.cursorX) {
+				buf.WriteString(im.renderSegmentWithCursor(seg, segmentCursorOffset(segments, j, im.cursorX)))
+			} else {
+				buf.WriteString(seg)
+			}
 			buf.WriteByte('\n')
 		}
 	}
 
-	return buf.String()
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
-// renderLineWithCursor renders a line with a visible block cursor.
-func (im *InputModel) renderLineWithCursor(line string) string {
-	runes := []rune(line)
-	var buf strings.Builder
+// segmentCursorBounds 返回第 segIdx 段在逻辑行内的 [start, end) 逻辑列区间。
+// 每个非末段末尾的换行占一个逻辑位置（对应真实换行/折行边界）。
+func segmentCursorBounds(segments []string, segIdx int) (start, end int) {
+	for i, seg := range segments {
+		segLen := len([]rune(seg))
+		if i == segIdx {
+			return start, start + segLen
+		}
+		start += segLen + 1 // +1 for the break
+	}
+	return start, start
+}
 
+// segmentHoldsCursor 判断逻辑列 cursorX 是否落在第 segIdx 段（含段尾断行位）。
+func segmentHoldsCursor(segments []string, segIdx, cursorX int) bool {
+	start, end := segmentCursorBounds(segments, segIdx)
+	// 段尾断行位（cursorX == end 且不是最后一行的段尾）也归该段，光标画在段尾
+	if segIdx < len(segments)-1 {
+		return cursorX >= start && cursorX <= end
+	}
+	return cursorX >= start
+}
+
+// segmentCursorOffset 把逻辑列 cursorX 换算成 seg 段内的本地列。
+func segmentCursorOffset(segments []string, segIdx, cursorX int) int {
+	start, end := segmentCursorBounds(segments, segIdx)
+	if cursorX < start {
+		return 0
+	}
+	if cursorX > end {
+		return end - start
+	}
+	return cursorX - start
+}
+
+// renderSegmentWithCursor 在软换行段内渲染光标，localX 为段内本地列。
+func (im *InputModel) renderSegmentWithCursor(seg string, localX int) string {
+	runes := []rune(seg)
+	var buf strings.Builder
 	for i, r := range runes {
-		if i == im.cursorX {
-			// Render the character under cursor in inverse/reversed style
+		if i == localX {
 			buf.WriteString(im.cursorHighlight(string(r)))
 		} else {
 			buf.WriteRune(r)
 		}
 	}
-
-	// If cursor is at end of line, show block cursor
-	if im.cursorX >= len(runes) {
+	if localX >= len(runes) {
 		buf.WriteString(im.theme.InputPrompt.Render("│"))
 	}
-
 	return buf.String()
 }
 

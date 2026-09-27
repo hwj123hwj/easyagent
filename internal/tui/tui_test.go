@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
 )
@@ -320,5 +322,86 @@ func TestToolPanelToggle(t *testing.T) {
 	tp.ToggleCollapsed()
 	if tp.info.Collapsed {
 		t.Error("should be expanded after toggle")
+	}
+}
+
+func TestMessageViewport_UserLongLineWraps(t *testing.T) {
+	// Bugfix 回归：用户消息长行必须按可视宽度软换行，不能被终端截断。
+	vp := NewMessageViewport(40, 10)
+	long := "这是一段特别长的中文消息用来验证软换行行为没有问题超过可视宽度之后应当折行"
+	vp.SetMessages([]ChatMessage{{Role: "user", Content: long}})
+
+	// 40 列宽、减去 2 格缩进 ≈ 每行 19 个 CJK 字符（每字 2 格）
+	wrapped := 0
+	for _, line := range vp.lines {
+		if strings.HasPrefix(line, "  ") && strings.TrimSpace(line) != "" {
+			wrapped++
+			if w := lipgloss.Width(line); w > 40 {
+				t.Fatalf("line width %d exceeds terminal width 40: %q", w, line)
+			}
+		}
+	}
+	if wrapped < 2 {
+		t.Fatalf("long user message should wrap into multiple lines, got %d", wrapped)
+	}
+
+	// 内容不能丢：只拼内容行（跳过 header "You 00:00"），去掉缩进后应等于原文
+	var joined strings.Builder
+	for _, line := range vp.lines[1:] {
+		joined.WriteString(strings.TrimPrefix(line, "  "))
+	}
+	if strings.TrimSpace(joined.String()) != long {
+		t.Errorf("wrapped content lost characters:\n got %q\nwant %q", joined.String(), long)
+	}
+}
+
+func TestMessageViewport_UserShortLineUnchanged(t *testing.T) {
+	vp := NewMessageViewport(80, 10)
+	vp.SetMessages([]ChatMessage{{Role: "user", Content: "hello"}})
+
+	if len(vp.lines) != 3 { // header + content + blank separator
+		t.Fatalf("expected 3 lines, got %d", len(vp.lines))
+	}
+	if vp.lines[1] != "  hello" {
+		t.Errorf("short line should stay untouched, got %q", vp.lines[1])
+	}
+}
+
+func TestInputModel_SoftWrapLongLine(t *testing.T) {
+	// Bugfix 回归：输入框长行必须软换行，不能渲染成单行被终端截断。
+	im := NewInputModel()
+	im.SetWidth(40)
+	long := "这是一段特别长的中文输入用来验证输入框软换行行为超过宽度之后应当折行显示"
+	for _, r := range long {
+		im.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	view := im.View()
+	for _, line := range strings.Split(view, "\n") {
+		// 每个可视行去掉 ANSI 后不得超过终端宽度
+		if w := lipgloss.Width(line); w > 40 {
+			t.Fatalf("input visual line width %d exceeds 40: %q", w, line)
+		}
+	}
+	visualLines := strings.Count(view, "\n") + 1
+	if visualLines < 2 {
+		t.Fatalf("long input should wrap into multiple visual lines, got %d", visualLines)
+	}
+	if im.Text() != long {
+		t.Errorf("soft-wrap must not change logical text")
+	}
+}
+
+func TestInputModel_InputHeightMatchesView(t *testing.T) {
+	im := NewInputModel()
+	im.SetWidth(40)
+	im.lines = []string{"短行", "这是第二个逻辑行内容比较长同样会触发软换行的行为需要验证高度计算正确"}
+	im.cursorY = 1
+	im.cursorX = 5
+
+	m := &TuiModel{input: im, width: 40}
+	viewLines := strings.Count(im.View(), "\n") + 1
+	if m.inputHeight() != viewLines {
+		t.Errorf("inputHeight=%d but View renders %d lines", m.inputHeight(), viewLines)
 	}
 }
