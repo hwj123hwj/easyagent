@@ -42,16 +42,13 @@ func TestLoadFromEnv(t *testing.T) {
 	assert.Equal(t, 9090, cfg.Port)
 }
 
-func TestEnvPrefersNewPrefixAndFallsBackToLegacy(t *testing.T) {
+func TestEnvReadsEAPrefixOnly(t *testing.T) {
 	t.Setenv("EA_PROVIDER", "openai")
 	t.Setenv("PI_GO_PROVIDER", "anthropic")
 	assert.Equal(t, "openai", Env("EA_PROVIDER"))
 
 	t.Setenv("EA_PROVIDER", "")
 	assert.Equal(t, "", Env("EA_PROVIDER"))
-
-	_ = os.Unsetenv("EA_PROVIDER")
-	assert.Equal(t, "anthropic", Env("EA_PROVIDER"))
 }
 
 func TestLoadDotEnv(t *testing.T) {

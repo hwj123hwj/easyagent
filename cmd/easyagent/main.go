@@ -17,7 +17,6 @@ import (
 	kbapp "github.com/hwj123hwj/easyagent/internal/agents/kb"
 	musicapp "github.com/hwj123hwj/easyagent/internal/agents/music"
 	"github.com/hwj123hwj/easyagent/internal/app"
-	"github.com/hwj123hwj/easyagent/internal/appdir"
 	"github.com/hwj123hwj/easyagent/internal/mode"
 	music "github.com/hwj123hwj/easyagent/internal/music"
 	"github.com/hwj123hwj/easyagent/internal/music/bilibili"
@@ -38,10 +37,6 @@ func main() {
 		fmt.Printf("easyagent %s\n", version)
 		return
 	}
-	if err := appdir.MigrateLegacyHome(); err != nil {
-		slog.Error("cannot migrate EasyAgent data directory", "error", err)
-		os.Exit(1)
-	}
 	cfg := config.Default()
 
 	// Version flag (injectable via -ldflags "-X main.version=...")
@@ -50,8 +45,8 @@ func main() {
 	// Config file flag (YAML, loaded before .env and env vars)
 	configFile := flag.String("config", "", "Path to YAML config file (e.g. easyagent.yaml)")
 
-	// Load .env files (ignore if missing). EA_ENV_FILE (or legacy
-	// PI_GO_ENV_FILE) allows a custom path; otherwise use the CWD and home files.
+	// Load .env files (ignore if missing). EA_ENV_FILE allows a custom path;
+	// otherwise use the CWD and home files.
 	envFile := config.Env("EA_ENV_FILE")
 	if envFile != "" {
 		_ = config.LoadDotEnv(envFile)
@@ -65,11 +60,7 @@ func main() {
 
 	// Load YAML config first (lowest priority), then env vars override
 	if *configFile == "" {
-		// Prefer new names, then keep the previous config locations as fallbacks.
-		candidates := []string{"easyagent.yaml", filepath.Join(config.HomeDir(), "config.yaml"), "pi-go.yaml"}
-		if home, err := os.UserHomeDir(); err == nil {
-			candidates = append(candidates, filepath.Join(home, ".pi-go", "config.yaml"))
-		}
+		candidates := []string{"easyagent.yaml", filepath.Join(config.HomeDir(), "config.yaml")}
 		for _, candidate := range candidates {
 			if _, err := os.Stat(candidate); err == nil {
 				*configFile = candidate

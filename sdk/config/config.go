@@ -147,24 +147,12 @@ func HomeDir() string {
 	if err != nil {
 		return HomeDirName
 	}
-	if legacyDir := os.Getenv("PI_GO_HOME"); legacyDir != "" && filepath.Clean(legacyDir) != filepath.Join(home, ".pi-go") {
-		return legacyDir
-	}
 	return filepath.Join(home, HomeDirName)
 }
 
-// Env reads an EasyAgent-prefixed environment variable, preferring EA_* and
-// falling back to its PI_GO_* name for existing installations.
+// Env reads an EasyAgent-prefixed environment variable (EA_*).
 func Env(name string) string {
-	const newPrefix, legacyPrefix = "EA_", "PI_GO_"
-	if strings.HasPrefix(name, legacyPrefix) {
-		name = newPrefix + strings.TrimPrefix(name, legacyPrefix)
-	}
-	legacyName := legacyPrefix + strings.TrimPrefix(name, newPrefix)
-	if value, ok := os.LookupEnv(name); ok {
-		return value
-	}
-	return os.Getenv(legacyName)
+	return os.Getenv(name)
 }
 
 func getEnv(name, fallback string) string {
@@ -225,7 +213,7 @@ func (c *Config) LoadFromEnv() {
 	}
 
 	// OpenAI-compatible gateway
-	// EA_API_KEY is preferred; PI_GO_API_KEY and OPENAI_API_KEY remain accepted.
+	// EA_API_KEY is preferred; OPENAI_API_KEY remains accepted.
 	if v := getEnv("EA_API_KEY", ""); v != "" {
 		c.OpenAIAPIKey = sanitizeConfigString(v)
 	} else if v := os.Getenv("OPENAI_API_KEY"); v != "" {
