@@ -175,3 +175,21 @@ func TestServer_SessionMessages_NotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+func TestChatStreamRouteIsAuthenticated(t *testing.T) {
+	srv := New(newTestApp(t), nil)
+	srv.SetAPIKey("test-key")
+	for _, key := range []string{"", "test-key"} {
+		req := httptest.NewRequest(http.MethodPost, "/chat/stream", bytes.NewBufferString(`{"prompt":""}`))
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		want := http.StatusUnauthorized
+		if key != "" {
+			want = http.StatusBadRequest
+		}
+		assert.Equal(t, want, w.Code, w.Body.String())
+	}
+}
