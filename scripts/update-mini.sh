@@ -30,7 +30,7 @@ if [[ -f "$DEPLOY_ROOT/failed-revision" ]] && [[ $(cat "$DEPLOY_ROOT/failed-revi
 fi
 build_dir=$(mktemp -d "$DEPLOY_ROOT/build.XXXXXX")
 trap 'rm -rf "$build_dir"' EXIT
-curl --fail --silent --show-error --location --retry 2 --connect-timeout 10 --max-time 180 "$API_URL/tarball/$revision" -o "$build_dir/source.tar.gz"
+curl --fail --silent --show-error --location --retry 2 --connect-timeout 10 --max-time 600 "$API_URL/tarball/$revision" -o "$build_dir/source.tar.gz"
 tar -xzf "$build_dir/source.tar.gz" --strip-components=1 -C "$build_dir"
 rm "$build_dir/source.tar.gz"
 # Ignore inherited GOROOT; Go resolves the root belonging to the selected executable.
