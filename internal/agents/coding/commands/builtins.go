@@ -11,6 +11,7 @@ import (
 
 // RegisterBuiltins registers coding-agent slash commands into the shared framework registry.
 func RegisterBuiltins(registry *slashcmd.Registry) {
+	registerWorkflow(registry)
 	registry.Register(slashcmd.Command{
 		Name:        "confirm",
 		Description: "Show or toggle dangerous-tool confirmation (/confirm on|off)",

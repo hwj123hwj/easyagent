@@ -474,6 +474,9 @@ func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		App:     m.app,
 	}
 	result, err := m.slashCmds.Execute(cmdCtx, input)
+	if err == nil && result.ShouldQuery && result.QueryPrompt != "" {
+		return m.sendMessage(result.QueryPrompt)
+	}
 	if err != nil {
 		m.messages = append(m.messages, ChatMessage{
 			Role:    "system",

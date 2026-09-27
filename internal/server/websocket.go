@@ -150,6 +150,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // handleWSPrompt processes a "prompt" message from the client.
 func (s *Server) handleWSPrompt(ws *wsConn, msg wsClientMessage, mu *sync.Mutex, cancelFuncPtr *context.CancelFunc) {
+	if s.app.DynamicWorkflows().ActiveActorSession(msg.SessionID) {
+		_ = ws.writeJSON(wsServerMessage{Type: "error", Message: "此 Actor 正由工作流管理，请在工作流页取消或等待完成"})
+		return
+	}
 	if msg.Prompt == "" {
 		_ = ws.writeJSON(wsServerMessage{
 			Type:    "error",
@@ -165,7 +169,7 @@ func (s *Server) handleWSPrompt(ws *wsConn, msg wsClientMessage, mu *sync.Mutex,
 	}
 	mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 	mu.Lock()
 	*cancelFuncPtr = cancel

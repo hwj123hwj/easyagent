@@ -4,6 +4,7 @@ import { copyText } from './clipboard.js';
 import { PiWebSocket } from './websocket.js';
 import { ChatPanel } from './chat.js';
 import { Sidebar } from './sidebar.js';
+import { DynamicWorkflowsPage } from './dynamic-workflows.js';
 import { WorkflowsPage } from './workflows.js';
 import { SessionsPage } from './sessions.js';
 import { SettingsPage } from './settings.js';
@@ -27,6 +28,7 @@ const ws = new PiWebSocket(baseUrl);
 const chat = new ChatPanel(ws, state);
 const sidebar = new Sidebar(ws, state, onSessionChange);
 const workflowsPage = new WorkflowsPage(state);
+const dynamicPage = new DynamicWorkflowsPage(state);
 const sessionsPage = new SessionsPage(state);
 const settingsPage = new SettingsPage();
 
@@ -46,6 +48,12 @@ async function onSessionChange(sessionId) {
   await chat.selectSession(sessionId);
 }
 state.navigate = switchPage;
+state.composeWorkflow = () => {
+  switchPage('page-chat');
+  if (!chat.input.value.trim()) { chat.input.value = '/workflow '; chat._inputChanged(); }
+  chat.input.focus();
+  if (!chat.input.value.startsWith('/workflow ')) chat._notice('当前草稿已保留。输入 /workflow 加任务描述可创建动态工作流。');
+};
 state.openModels = () => { setSidebar(true); sidebar.modelPicker.open(); };
 state.createSession = () => sidebar.createSession({select:false});
 state.refreshControls = () => chat._updateButtons();
@@ -91,7 +99,7 @@ if (hashSession) {
 
 // ─── 页面导航 ────────────────────────────────────────────────────────────────
 
-const pages = { 'page-chat': null, 'page-workflows': workflowsPage, 'page-sessions': sessionsPage, 'page-settings': settingsPage };
+const pages = { 'page-dynamic-workflows': dynamicPage, 'page-chat': null, 'page-workflows': workflowsPage, 'page-sessions': sessionsPage, 'page-settings': settingsPage };
 
 document.querySelectorAll('.nav-tab').forEach(tab => {
   tab.onclick = () => switchPage(tab.dataset.page);
@@ -109,6 +117,7 @@ function switchPage(pageID) {
   if (page && page.activate) page.activate();
   // 离开工作流页时停掉详情轮询由 deactivate 控制；此处简化：仅聊天页外的页不处理
   if (pageID !== 'page-workflows') workflowsPage.deactivate();
+  if (pageID !== 'page-dynamic-workflows') dynamicPage.deactivate();
   if (pageID !== 'page-settings') settingsPage.deactivate();
   if (pageID !== 'page-sessions') sessionsPage.deactivate();
 }

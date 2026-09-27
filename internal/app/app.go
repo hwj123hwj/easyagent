@@ -3,17 +3,20 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/hwj123hwj/easyagent/internal/dynamicflow"
 	"log/slog"
+	"path/filepath"
+	"sync"
 
-	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/internal/agents/coding"
+	"github.com/hwj123hwj/easyagent/internal/profile"
+	"github.com/hwj123hwj/easyagent/internal/scheduler"
+	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/ai/providers"
 	"github.com/hwj123hwj/easyagent/sdk/config"
 	"github.com/hwj123hwj/easyagent/sdk/extensions"
 	"github.com/hwj123hwj/easyagent/sdk/operations"
-	"github.com/hwj123hwj/easyagent/internal/profile"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
-	"github.com/hwj123hwj/easyagent/internal/scheduler"
 	"github.com/hwj123hwj/easyagent/sdk/sessionmgr"
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
 )
@@ -22,17 +25,19 @@ import (
 // It assembles dependencies (providers, session manager, runtime registry, etc.)
 // but does NOT carry session-specific behavior — that belongs to AgentSession.
 type App struct {
-	cfg          config.Config
-	skillDirs    []string
-	sessionMgr   *sessionmgr.Manager
-	registry     *providers.Registry
-	sessionStore *runtime.SessionRegistry
-	extRegistry  *extensions.Registry
-	application  runtime.Application            // default application (backward compat)
-	applications map[string]runtime.Application // named applications for per-session selection
-	extraTools   []agent.ExternalToolDef
-	profile      *profile.Store // unified user profile (shared across agents)
-	loopMgr      *scheduler.LoopManager
+	workflowConfirmMu sync.Mutex
+	flows             *dynamicflow.Manager
+	cfg               config.Config
+	skillDirs         []string
+	sessionMgr        *sessionmgr.Manager
+	registry          *providers.Registry
+	sessionStore      *runtime.SessionRegistry
+	extRegistry       *extensions.Registry
+	application       runtime.Application            // default application (backward compat)
+	applications      map[string]runtime.Application // named applications for per-session selection
+	extraTools        []agent.ExternalToolDef
+	profile           *profile.Store // unified user profile (shared across agents)
+	loopMgr           *scheduler.LoopManager
 }
 
 // AppOptions holds the options for creating a new App.
@@ -88,7 +93,7 @@ func New(opts AppOptions) (*App, error) {
 		apps["coding"] = application
 	}
 
-	return &App{
+	result := &App{
 		cfg:          cfg,
 		skillDirs:    opts.SkillDirs,
 		sessionMgr:   mgr,
@@ -99,7 +104,13 @@ func New(opts AppOptions) (*App, error) {
 		applications: apps,
 		profile:      opts.Profile,
 		loopMgr:      scheduler.NewLoopManager(),
-	}, nil
+	}
+	flows, err := dynamicflow.New(filepath.Join(cfg.DataDir, "dynamic-workflows"), dynamicflow.RuntimePath(), workflowHost{app: result})
+	if err != nil {
+		return nil, err
+	}
+	result.flows = flows
+	return result, nil
 }
 
 // ApplicationNames returns the names of all registered applications.
@@ -140,6 +151,9 @@ func (a *App) NewSession(ctx context.Context) (*runtime.AgentSession, error) {
 // LoadSession loads an existing AgentSession by ID.
 // If already loaded in the registry, returns the cached instance.
 func (a *App) LoadSession(ctx context.Context, sessionID string) (*runtime.AgentSession, error) {
+	if a.flows != nil && a.flows.ActorSession(sessionID) {
+		return a.loadWorkflowActor(ctx, sessionID)
+	}
 	deps := a.deps()
 	opts := runtime.AgentSessionOptions{
 		Config:    a.cfg,
@@ -178,6 +192,9 @@ func (a *App) SessionDepsWithApp(appName string) runtime.Dependencies {
 	d := a.deps()
 	if appName != "" {
 		d.Application = a.ResolveApplication(appName)
+		if appName == "coding" {
+			d.Application = workflowApplication{Application: d.Application, app: a}
+		}
 	}
 	return d
 }
@@ -199,6 +216,9 @@ func (a *App) LoopManager() *scheduler.LoopManager {
 
 // Close cleans up all resources.
 func (a *App) Close() error {
+	if a.flows != nil {
+		a.flows.Close()
+	}
 	if a.loopMgr != nil {
 		a.loopMgr.StopAll()
 	}
@@ -213,11 +233,11 @@ func (a *App) SetExternalTools(tools []agent.ExternalToolDef) {
 // deps constructs the Dependencies struct for AgentSession creation.
 func (a *App) deps() runtime.Dependencies {
 	return runtime.Dependencies{
-		Registry:       a.registry,
-		SessionMgr:     a.sessionMgr,
-		ExtRegistry:    a.extRegistry,
-		Application:    a.application,
-		ExternalTools:  a.extraTools,
+		Registry:      a.registry,
+		SessionMgr:    a.sessionMgr,
+		ExtRegistry:   a.extRegistry,
+		Application:   workflowApplication{Application: a.application, app: a},
+		ExternalTools: a.extraTools,
 		BuildOperations: func(cfg config.Config, workspace string) *operations.Operations {
 			switch cfg.ExecutionMode {
 			case "ssh":
@@ -261,6 +281,7 @@ func (a *App) ToolNames() []string {
 		baseNames = append(baseNames, def.Name)
 	}
 
+	baseNames = append(baseNames, "create_workflow", "get_workflow", "resume_workflow")
 	// Apply filtering
 	if len(cfg.AllowedTools) == 0 && len(cfg.BlockedTools) == 0 {
 		return baseNames

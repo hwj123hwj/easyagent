@@ -185,6 +185,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Workflow orchestration endpoints
 	s.registerWorkflowRoutes(restMux)
+	s.registerDynamicWorkflowRoutes(restMux)
 
 	s.registerFeishuSettings(restMux)
 
@@ -219,6 +220,8 @@ func (s *Server) Handler() http.Handler {
 	topMux.Handle("/applications", restHandler)
 	topMux.Handle("/workspace/", restHandler)
 	topMux.Handle("/kb/", restHandler)
+	topMux.Handle("/dynamic-workflows", restHandler)
+	topMux.Handle("/dynamic-workflows/", restHandler)
 	topMux.Handle("/workflows", restHandler)
 	topMux.Handle("/workflows/", restHandler)
 	topMux.Handle("/profile", restHandler)
@@ -265,7 +268,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	if s.rejectActiveWorkflowActor(w, req.SessionID) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
 	defer cancel()
 
 	sess, err := s.resolveSession(ctx, req.SessionID)
@@ -311,7 +317,10 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	if s.rejectActiveWorkflowActor(w, req.SessionID) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
 	defer cancel()
 
 	sess, err := s.resolveSession(ctx, req.SessionID)
@@ -491,6 +500,9 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 // ─── DELETE /sessions/{id} ────────────────────────────────────────────────────
 
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
+	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
+		return
+	}
 	sessionID := r.PathValue("id")
 	mgr := s.app.SessionManager()
 	if err := mgr.Delete(sessionID); err != nil {
@@ -676,6 +688,9 @@ type SwitchModelRequest struct {
 }
 
 func (s *Server) switchModel(w http.ResponseWriter, r *http.Request) {
+	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
+		return
+	}
 	sessionID := r.PathValue("id")
 
 	var req SwitchModelRequest
@@ -722,6 +737,9 @@ type CompactResponse struct {
 }
 
 func (s *Server) compactSession(w http.ResponseWriter, r *http.Request) {
+	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
+		return
+	}
 	sessionID := r.PathValue("id")
 
 	var req CompactRequest
@@ -768,6 +786,9 @@ type CommandResponse struct {
 }
 
 func (s *Server) executeCommand(w http.ResponseWriter, r *http.Request) {
+	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
+		return
+	}
 	sessionID := r.PathValue("id")
 
 	var req CommandRequest
@@ -811,7 +832,10 @@ func (s *Server) executeCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	if result.ShouldQuery {
 		resp.ShouldQuery = true
-		resp.QueryPrompt = "Start working..."
+		resp.QueryPrompt = result.QueryPrompt
+		if resp.QueryPrompt == "" {
+			resp.QueryPrompt = "Start working..."
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

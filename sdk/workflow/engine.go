@@ -389,22 +389,30 @@ func (r *run) runItem(st Step, stepCtx context.Context, i int, item any, results
 
 // awaitGate 请求人工审批；审批到达前 run/step 标记 waiting_approval。
 func (r *run) awaitGate(st Step) (bool, error) {
-	r.setStep(st.ID, StatusWaiting)
-	_ = r.j.updateMeta(func(m *RunMeta) {
-		sm := m.Steps[st.ID]
-		sm.Status = StatusWaiting
-		m.Steps[st.ID] = sm
-		m.Status = StatusWaiting
-	})
-	r.j.emit(Event{Ts: time.Now(), Event: EventGateWait, Step: st.ID})
-
+	ready := func() {
+		r.setStep(st.ID, StatusWaiting)
+		_ = r.j.updateMeta(func(m *RunMeta) {
+			sm := m.Steps[st.ID]
+			sm.Status = StatusWaiting
+			m.Steps[st.ID] = sm
+			m.Status = StatusWaiting
+		})
+		r.j.emit(Event{Ts: time.Now(), Event: EventGateWait, Step: st.ID})
+	}
 	approved := true
 	var err error
-	if r.eng.Gates != nil {
-		approved, err = r.eng.Gates.WaitApproval(r.ctx, r.id, st.ID)
-		if err != nil {
-			return false, err
+	if gate, ok := r.eng.Gates.(interface {
+		WaitApprovalReady(context.Context, string, string, func()) (bool, error)
+	}); ok {
+		approved, err = gate.WaitApprovalReady(r.ctx, r.id, st.ID, ready)
+	} else {
+		ready()
+		if r.eng.Gates != nil {
+			approved, err = r.eng.Gates.WaitApproval(r.ctx, r.id, st.ID)
 		}
+	}
+	if err != nil {
+		return false, err
 	}
 	r.j.emit(Event{Ts: time.Now(), Event: EventGateResult, Step: st.ID,
 		Status: map[bool]string{true: "approved", false: "rejected"}[approved]})

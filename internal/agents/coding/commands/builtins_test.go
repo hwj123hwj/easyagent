@@ -659,3 +659,16 @@ func TestConfirmCommand_TogglesAndStatus(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "用法")
 }
+
+func TestWorkflowCommandProducesExplicitAgentPrompt(t *testing.T) {
+	registry := slashcmd.NewRegistry()
+	RegisterBuiltins(registry)
+	result, err := registry.Execute(slashcmd.Context{}, "/workflow 研究方案")
+	require.NoError(t, err)
+	assert.True(t, result.ShouldQuery)
+	assert.Equal(t, "/workflow 研究方案", result.QueryPrompt)
+	result, err = registry.Execute(slashcmd.Context{}, "/workflow")
+	require.NoError(t, err)
+	assert.False(t, result.ShouldQuery)
+	assert.Contains(t, result.Output, "Actor")
+}

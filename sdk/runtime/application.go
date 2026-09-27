@@ -48,6 +48,7 @@ type SessionExt interface {
 
 // ToolBuildOptions contains the context needed by an Application to build its tool list.
 type ToolBuildOptions struct {
+	SessionID      string
 	Workspace      string
 	MaxOutputLen   int
 	BashOps        operations.BashOperations

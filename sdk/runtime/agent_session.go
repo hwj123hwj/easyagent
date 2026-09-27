@@ -500,6 +500,7 @@ func (s *AgentSession) toolBuildOptions(cwd string) ToolBuildOptions {
 	}
 
 	return ToolBuildOptions{
+		SessionID:      s.sessionID,
 		Workspace:      workspace,
 		MaxOutputLen:   cfg.MaxOutputLen,
 		BashOps:        ops.Bash,
@@ -520,3 +521,6 @@ func (r *toolListRegistry) GetTool(name string) (agent.Tool, bool) {
 	t, ok := r.tools[name]
 	return t, ok
 }
+
+// ConfirmationCallback returns the live parent confirmation policy for child sessions.
+func (s *AgentSession) ConfirmationCallback() agent.ConfirmFunc { return s.wrapConfirm(s.confirmFunc) }

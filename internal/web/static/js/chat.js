@@ -157,7 +157,8 @@ export class ChatPanel {
     if (this.state.restoringSession) return;
     const draft = this.input.value;
     let text = draft.trim();
-    if (text.startsWith('/') && !text.startsWith('//')) { await this._command(text); return; }
+    const workflow = parseCommand(text);
+    if (text.startsWith('/') && !text.startsWith('//') && !(workflow?.name === 'workflow' && workflow.args)) { await this._command(text); return; }
     if (text.startsWith('//')) text = text.slice(1);
     if (!text || this.commandRunning || this.state.streaming || this.creating || this.loading || this.state.modelChanging || this.state.modelInfoLoading) return;
     if (this.busy.size) { this._notice('另一个对话正在执行，请等待完成或返回该对话停止。'); return; }
@@ -281,6 +282,7 @@ export class ChatPanel {
         case 'help': output = commands.map(c => '/' + c.name + ' — ' + c.description).join('\n') + '\n\nEnter 发送 · Shift Enter 换行\n命令菜单：↑ ↓ 选择，Tab / Enter 补全，Esc 关闭\n// 开头按普通文本发送；草稿在当前标签页刷新后恢复。'; break;
         case 'new': { const next = await this.state.createSession?.(); if (!next) throw new Error('新建对话失败，请重试'); if (id !== this.state.currentSessionId || revision !== this.inputRevision) { this._notice('新对话已创建，可从历史列表打开；当前输入已保留。'); break; } consume(); await this.state.selectSession(next); this.input.focus(); break; }
         case 'model': if (document.getElementById('model-select').disabled) throw new Error('当前无法切换模型，请等待连接或任务完成'); consume(); this.state.openModels?.(); break;
+        case 'workflow': consume(); this.state.navigate?.('page-dynamic-workflows'); break;
         case 'sessions': case 'settings': consume(); this.state.navigate?.('page-' + command.name); break;
         case 'stop': if (!this.ws.sendCancel(id)) throw new Error('连接已断开，重连后可停止任务'); output = '已请求停止当前任务。'; break;
         case 'tools': { const data = await api.get('/tools'); output = data.tools?.length ? data.tools.join('\n') : '当前没有可用工具。'; break; }
