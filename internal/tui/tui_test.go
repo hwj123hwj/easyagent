@@ -442,3 +442,60 @@ func TestView_InputIsLastLine(t *testing.T) {
 		t.Fatalf("status bar (line %d) must render above input (line %d)", statusIdx, inputIdx)
 	}
 }
+
+// TestInputModel_CursorColumn：IME 组词串跟随终端光标位置渲染，
+// CursorColumn 必须给出光标在 View 最后一行上的准确可视列。
+// 配套 HWJ bubbletea 补丁（tea.SetCursorColumn）。
+func TestInputModel_CursorColumn(t *testing.T) {
+	im := NewInputModel()
+	im.SetWidth(80)
+
+	// 空输入：光标在 "› " 之后 = 第 2 列
+	if got := im.CursorColumn(); got != 2 {
+		t.Errorf("empty input: CursorColumn() = %d, want 2", got)
+	}
+
+	// 中文后：2 格 prompt + 4 格（两个全角字）
+	im.insertString("你好")
+	if got := im.CursorColumn(); got != 6 {
+		t.Errorf(`input "你好": CursorColumn() = %d, want 6`, got)
+	}
+
+	// 光标移到行首（在 "你" 上）：prompt 后第 0 列内容位 = 2
+	im.cursorX = 0
+	if got := im.CursorColumn(); got != 2 {
+		t.Errorf("cursor at home: CursorColumn() = %d, want 2", got)
+	}
+
+	// 长行软换行：光标在第一段末尾（断行位）——逻辑光标归第一段，
+	// 终端光标却停在最后一行（第二段），行不一致只能退 0（旧行为）
+	im.Reset()
+	im.cursorX = 0
+	im.insertString(strings.Repeat("a", 78) + "中文")
+	im.cursorX = 78
+	if got := im.CursorColumn(); got != 0 {
+		t.Errorf("cursor at wrap boundary (segment mismatch): CursorColumn() = %d, want 0", got)
+	}
+
+	// 软换行且光标真在最后一段：列 = 前段内容宽 + 段内偏移
+	im.cursorX = 79 // "中" 上（第二段第 0 列）
+	if got := im.CursorColumn(); got != 2 {
+		t.Errorf("cursor on wrapped last segment: CursorColumn() = %d, want 2", got)
+	}
+	im.cursorX = 81 // "文" 之后（第二段段尾）
+	if got := im.CursorColumn(); got != 6 {
+		t.Errorf("cursor at end of wrapped last segment: CursorColumn() = %d, want 6", got)
+	}
+
+	// 多行输入：光标在第一行、后面还有空行（View 最后一行不是光标行）→ 退回 0
+	im.Reset()
+	im.insertString("hi")
+	im.newLine() // cursorY=1（空行），光标在此行 → 最后一行就是光标行
+	if got := im.CursorColumn(); got != 2 {
+		t.Errorf("cursor on trailing empty line: CursorColumn() = %d, want 2", got)
+	}
+	im.cursorUp() // 光标移回第一行 "hi|"，最后一行是空行 → 0
+	if got := im.CursorColumn(); got != 0 {
+		t.Errorf("cursor above last rendered line: CursorColumn() = %d, want 0", got)
+	}
+}

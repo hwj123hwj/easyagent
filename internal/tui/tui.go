@@ -379,9 +379,13 @@ func (m *TuiModel) View() string {
 	buf.WriteByte('\n')
 
 	// Input area（必须在帧的最底部）：bubbletea altscreen 每帧渲染完把终端
-	// 光标停在最后一行第 0 列，输入法内联组词（预编辑串）跟随终端光标位置。
+	// 光标停在最后一行，输入法内联组词（预编辑串）跟随终端光标位置。
 	// 输入框放最后，拼音组词才能显示在输入框里而不是叠在状态栏上。
 	buf.WriteString(m.input.View())
+
+	// 告诉渲染器把终端光标停在输入光标列上（HWJ bubbletea 补丁配套），
+	// 组词串才会落在正在打字的位置而不是行首。
+	tea.SetCursorColumn(m.input.CursorColumn())
 
 	// Prevent terminal line wrapping from pushing the footer outside the screen.
 	lines := strings.Split(buf.String(), "\n")
