@@ -9,17 +9,12 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/hwj123hwj/easyagent/internal/appdir"
 	"github.com/hwj123hwj/easyagent/internal/feishu"
 	"github.com/hwj123hwj/easyagent/sdk/config"
 	"github.com/joho/godotenv"
 )
 
 func main() {
-	if err := appdir.MigrateLegacyHome(); err != nil {
-		slog.Error("cannot migrate EasyAgent data directory", "error", err)
-		os.Exit(1)
-	}
 	// Load the configured or standard .env file (ignore missing files).
 	envFile := config.Env("EA_ENV_FILE")
 	if envFile != "" {

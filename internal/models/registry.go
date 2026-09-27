@@ -155,7 +155,7 @@ func NewDefaultRegistry(configPath string) *Registry {
 }
 
 // ResolveConfigPath returns the default path for the models config file.
-// Checks: EA_MODELS_FILE (legacy PI_GO_MODELS_FILE) → config.HomeDir()/models.json → data dir
+// Checks: EA_MODELS_FILE → config.HomeDir()/models.json → data dir
 func ResolveConfigPath(dataDir string) string {
 	if env := config.Env("EA_MODELS_FILE"); env != "" {
 		return env
