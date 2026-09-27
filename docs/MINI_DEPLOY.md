@@ -40,3 +40,18 @@ systemctl --user stop easyagent-update.timer     # 暂停自动更新
 手工回滚：先停 timer，复制选定 release 到 `~/.easyagent/bin/easyagent.next`，再 `mv` 到 `easyagent`，重启 core 并检查健康；保留 timer 停止状态直到问题解决。没有自动清理发布备份，定期按磁盘空间人工保留需要的版本。
 
 部署会短暂断开 WebSocket，进行中的请求可能中断；网页保留当前输入草稿，完成后重新连接。需要避免打断长任务时先暂停 timer，任务结束再开启。构建或测试失败不重启线上服务，网络暂时不可用时保持现有版本。
+
+### 网页飞书设置
+
+在核心服务的 `core.env` 中显式配置以下两个绝对路径（同时必须设置 `EA_API_KEY`）：
+
+```dotenv
+EA_FEISHU_ENV_FILE=/home/q/.config/easyagent/feishu.env
+FEISHU_OWNER_STATE_FILE=/home/q/.config/easyagent/feishu-owner.json
+```
+
+`EA_FEISHU_ENV_FILE` 必须与 `easyagent-bridge.service` 的 `EnvironmentFile` 相同；owner 路径也必须与桥接一致。网页「设置」可查看核心/桥接进程及开机启动状态、保存 App ID/Secret 并重启桥接、按需读取未过期的私聊配对指令。Secret 不回传；留空保留旧密钥；首次配置后 App ID 固定，网页可更新密钥，更换机器人需另行重新配置使用者绑定（不同应用的 open_id 不可复用）。配置原子保存为 0600，保留无关环境项；重启命令失败恢复旧文件。网页不会修改已有 owner 绑定，也不自动发送飞书消息。进程运行不等于飞书凭据有效或 WebSocket 已连接，须完成飞书侧机器人发布与长连接订阅。
+
+管理接口要求 Bearer 认证，即使本机无令牌模式也拒绝管理；未配置路径的其他部署只显示未托管说明。配置和配对响应使用 `Cache-Control: no-store`。生产部署使用 HTTPS 或可信内网访问；配对指令只私聊目标机器人。
+
+开机启动需要同时满足 `systemctl --user enable easyagent-core.service easyagent-bridge.service easyagent-update.timer` 和 `loginctl enable-linger <user>`；linger 让用户无需登录即可启动用户服务。设置页读取实际状态，未进行物理断电重启测试时不要宣称已验证该过程。
