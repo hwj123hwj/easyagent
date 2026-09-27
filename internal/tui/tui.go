@@ -308,8 +308,6 @@ func (m *TuiModel) View() string {
 		baseBuf.WriteByte('\n')
 		baseBuf.WriteString(m.theme.Separator.Render(strings.Repeat("─", m.width)))
 		baseBuf.WriteByte('\n')
-		baseBuf.WriteString(m.input.View())
-		baseBuf.WriteByte('\n')
 		baseBuf.WriteString(m.statusBar.HelpHint(m.agentBusy))
 		baseBuf.WriteByte('\n')
 		baseBuf.WriteString(m.statusBar.Render(
@@ -317,6 +315,9 @@ func (m *TuiModel) View() string {
 			m.provider, m.modelID, m.workspace, m.streaming,
 			m.inputTokens, m.outputTokens,
 		))
+		baseBuf.WriteByte('\n')
+		// 输入框放状态栏之后（与正常视图一致，IME 组词跟随终端光标）
+		baseBuf.WriteString(m.input.View())
 
 		// Overlay confirmation dialog centered on screen
 		dialog := m.confirmation.Render(m.width)
@@ -357,10 +358,6 @@ func (m *TuiModel) View() string {
 		buf.WriteByte('\n')
 	}
 
-	// Input area
-	buf.WriteString(m.input.View())
-	buf.WriteByte('\n')
-
 	// Help hint
 	buf.WriteString(m.statusBar.HelpHint(m.agentBusy))
 	buf.WriteByte('\n')
@@ -379,6 +376,12 @@ func (m *TuiModel) View() string {
 		m.provider, m.modelID, m.workspace, m.streaming,
 		m.inputTokens, m.outputTokens,
 	))
+	buf.WriteByte('\n')
+
+	// Input area（必须在帧的最底部）：bubbletea altscreen 每帧渲染完把终端
+	// 光标停在最后一行第 0 列，输入法内联组词（预编辑串）跟随终端光标位置。
+	// 输入框放最后，拼音组词才能显示在输入框里而不是叠在状态栏上。
+	buf.WriteString(m.input.View())
 
 	// Prevent terminal line wrapping from pushing the footer outside the screen.
 	lines := strings.Split(buf.String(), "\n")

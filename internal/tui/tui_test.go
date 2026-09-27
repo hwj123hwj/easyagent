@@ -405,3 +405,40 @@ func TestInputModel_InputHeightMatchesView(t *testing.T) {
 		t.Errorf("inputHeight=%d but View renders %d lines", m.inputHeight(), viewLines)
 	}
 }
+
+// TestView_InputIsLastLine：输入框必须是帧的最后一个非空行。
+// bubbletea altscreen 每帧渲染完把终端光标停在最后一行第 0 列，
+// 输入法内联组词（预编辑串）跟随终端光标位置——输入框不在最后，
+// 拼音就叠在状态栏上（2026-09-27 踩坑）。
+func TestView_InputIsLastLine(t *testing.T) {
+	m := New(&runtime.AgentSession{}, slashcmd.NewRegistry(), false)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.input.insertString("你好")
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	// 从后往前找第一个非空行，必须是输入框内容
+	last := ""
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			last = lines[i]
+			break
+		}
+	}
+	if !strings.Contains(last, "你好") {
+		t.Fatalf("input content should be the last non-empty line, got %q", last)
+	}
+	// 状态栏不能在输入框之后
+	statusIdx, inputIdx := -1, -1
+	for i, l := range lines {
+		if strings.Contains(l, "ready") && statusIdx < 0 {
+			statusIdx = i
+		}
+		if strings.Contains(l, "你好") && inputIdx < 0 {
+			inputIdx = i
+		}
+	}
+	if statusIdx < 0 || inputIdx < 0 || statusIdx > inputIdx {
+		t.Fatalf("status bar (line %d) must render above input (line %d)", statusIdx, inputIdx)
+	}
+}
