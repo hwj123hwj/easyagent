@@ -1,3 +1,5 @@
+> 历史参考：本文仅反映记录时的外部项目或接口版本，不代表 EasyAgent 当前实现。旧路径与建议仅供追溯；当前使用方式见 [文档索引](../README.md)。
+
 # cc-haha 调研报告 — 架构与功能全景分析
 
 > 调研日期：2026-05-24
@@ -342,4 +344,4 @@ Agent 定义存储在 `~/.claude/agents/` 目录下，支持内置和自定义�
 
 - [cc-haha GitHub 仓库](https://github.com/NanmiCoder/cc-haha)
 - [cc-haha 文档站点](https://claudecode-haha.relakkesyang.org)
-- [cc-haha 英文 README](./README.en.md)
+- cc-haha 英文 README：原调研仓库中的 `README.en.md`（未复制到本仓库）。

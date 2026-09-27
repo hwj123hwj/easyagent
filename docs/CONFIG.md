@@ -1,131 +1,72 @@
-# 配置参考
+# 配置
 
-> EasyAgent 的完整配置项说明。配置优先级：**环境变量 > .env 文件 > YAML > 默认值**。
+环境变量示例见 [`.env.example`](../.env.example)，配置实现见 [`sdk/config/config.go`](../sdk/config/config.go)。当前只读取 `EA_*` 名称，不再回退到 `PI_GO_*`；飞书桥接地址 `PI_AGENT_URL` 是仍在使用的独立变量。
 
-新配置使用 `EA_*` 环境变量；已有的 `PI_GO_*` 环境变量和 `PI_GO_ENV_FILE` 仍会作为兼容回退读取。
+## 加载顺序
 
----
+核心入口先查找当前目录 `easyagent.yaml`，否则查找 `~/.easyagent/config.yaml`，再应用环境变量，最后应用已解析的命令行运行选项。
 
-## 快速配置
+环境加载会补充 `.env` → `.env.local` → `~/.easyagent/.env` → `~/.easyagent/.env.local`，已有的非空环境值不会被覆盖。因此 `.env.local` **不是覆盖层**。设置 `EA_ENV_FILE` 时仅加载指定文件及其 `.local` 文件。`EA_HOME` 可改变默认用户配置目录。
 
-安装后编辑配置文件：
+桥接的 dotenv 加载与核心不同：指定 `EA_ENV_FILE` 时只加载该文件，否则加载当前目录和用户配置目录中的 `.env`；另可读取 `/feishu setup` 保存的凭据。systemd 部署建议使用显式 EnvironmentFile，见 [部署文档](MINI_DEPLOY.md)。
 
-```bash
-nano ~/.easyagent/.env
-```
+## 模型与认证
 
-最简配置（OpenAI 兼容）：
-```env
+OpenAI 兼容服务：
+
+```dotenv
 EA_PROVIDER=openai
-EA_API_KEY=your-api-key
 EA_BASE_URL=http://localhost:4001
-EA_MODEL=longcat-opus
+EA_MODEL=your-model-id
+EA_API_KEY=your-api-key
 ```
 
-网关模式（`EA_PROVIDER=openai`）启动时从网关的 `/v1/models` 加载模型，`/models` 只显示该目录中的模型；本地模型文件用于补充元数据。加载失败时会输出警告并回退到本地目录。修改地址或凭据后需重启 EasyAgent，再执行 `/models` 验证，并从列表选择 `EA_MODEL`，不要沿用网关已移除的模型。
+应显式填写自己的模型与地址。`EA_MODEL`、`EA_BASE_URL`、`EA_API_KEY` 分别优先于 `OPENAI_MODEL`、`OPENAI_BASE_URL`、`OPENAI_API_KEY`。
 
-本地网关使用 `EA_BASE_URL=http://localhost:4001`，`EA_API_KEY` 填该网关的认证密钥。安装器中的 Base URL 提示需要输入完整地址或回车使用默认值，不能填菜单序号。
+Anthropic 使用 `EA_PROVIDER=anthropic` 和 `ANTHROPIC_API_KEY`、`ANTHROPIC_MODEL`、`ANTHROPIC_BASE_URL`。CLI 当前支持 `openai` / `anthropic`；开发测试注入 mock 或使用本地模拟接口，`EA_PROVIDER=mock` 不是有效的 CLI 配置。Provider 默认为空，正常使用需配置。
 
-TUI 中输入 `/models` 后回车（或按 `Ctrl+P`）打开模型选择器，使用上下键选择、回车切换、`Esc` 取消。选择器默认定位当前模型，长列表随选中项滚动。旧的 `--legacy` 命令行模式仍输出文本列表。
+**当前 `EA_API_KEY` 同时设置 HTTP API Bearer 令牌和 OpenAI 兼容上游密钥**，不是两个独立配置。使用 Anthropic 时，上游密钥来自 `ANTHROPIC_API_KEY`，API 认证仍由 `EA_API_KEY` 控制。
 
-TUI 使用独立全屏缓冲区，鼠标滚轮用于滚动会话或选择模型，不再滚动到启动前的终端历史。也可用 PageUp/PageDown 滚动会话；原生文本划选需使用终端提供的鼠标报告绕过修饰键。退出后恢复原终端内容。
+| 服务配置 | 默认 / 行为 |
+|---|---|
+| `EA_HOST` / `EA_PORT` | `127.0.0.1` / `8080`；`serve --listen` 可指定监听地址 |
+| `EA_API_KEY` | 设置后 API 请求要求同一令牌；`/health` 公开 |
+| 未设置 API Key | 默认仅接受 loopback 来源的 API 请求 |
+| `EA_ALLOW_NO_AUTH=1` | 显式放开普通 API；不能用于绕过飞书设置管理接口的认证 |
+| `EA_ALLOWED_ORIGINS` | 逗号分隔的允许来源，按部署需求配置 |
 
+Web 页面可加载不代表 API 已获授权。远程使用需要登录；WebSocket 的认证细节见 [API](API.md)。
 
-使用 Anthropic Claude：
-```env
-EA_PROVIDER=anthropic
-ANTHROPIC_API_KEY=your-key
-ANTHROPIC_MODEL=claude-sonnet-4-20250514
-```
+## 工具和文件路径
 
----
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `EA_WORKSPACE` | 当前工作目录 | 会话工作目录 |
+| `EA_DATA_DIR` | `./data` | 会话与工作流运行数据 |
+| `EA_HOME` | `~/.easyagent` | 用户配置与凭据目录 |
+| `EA_ENABLE_BASH` | `false` | 启用命令执行工具 |
+| `EA_AUTO_APPROVE` | `false` | 跳过交互工具确认，对应 `-y` |
+| `EA_ALLOW_OUTSIDE_WORKSPACE` | `false` | 允许文件工具访问工作区外路径 |
+| `EA_ENABLE_WEB` | `false` | 启用网页抓取工具 |
+| `EA_ENABLE_WEB_SEARCH` | `false` | 启用搜索工具 |
+| `EA_WEB_TIMEOUT_SECONDS` | `30` | 网页请求超时 |
+| `EA_MAX_OUTPUT_LEN` | `30000` | 工具输出长度上限 |
+| `EA_ALLOWED_TOOLS` / `EA_BLOCKED_TOOLS` | 空 | 逗号分隔的工具过滤名单 |
+| `EA_PROMPT_TEMPLATE` | 空 | 自定义系统提示模板 |
 
-## 环境变量
+`easyagent serve --allow-outside-workspace` 与环境开关等效。默认检查绝对路径、相对路径及符号链接，防止文件工具逃出工作区；放开后仍受运行用户的系统权限限制。此开关与 `-y`、API 认证独立。HTTP 工作区文件接口仍有自己的路径检查，不能把文件工具开关理解为所有 API 的任意路径访问许可。
 
-### Provider 与模型
+Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。serve 模式没有终端交互确认入口，不能依赖 TUI 的确认提示保护远程服务。
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_PROVIDER` | _(必填)_ | LLM Provider：`anthropic` / `openai` |
-| `EA_API_KEY` | - | Provider API Key（优先） |
-| `OPENAI_API_KEY` | - | OpenAI API Key（后备） |
-| `EA_MODEL` | - | 模型名称（优先） |
-| `OPENAI_MODEL` | - | OpenAI 模型名称（后备） |
-| `EA_BASE_URL` | - | API 地址（优先） |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI API 地址（后备） |
-| `ANTHROPIC_API_KEY` | - | Anthropic API Key |
-| `ANTHROPIC_MODEL` | - | Anthropic 模型名称 |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic API 地址 |
+## 可选能力
 
-### 服务器
+| 配置 | 用途 |
+|---|---|
+| `EA_EXECUTION_MODE=ssh`、`EA_SSH_HOST`、`EA_SSH_PORT`、`EA_SSH_WORKDIR` | SSH 执行后端；端口默认 22 |
+| `EA_WORKFLOW_RUNTIME` | 动态工作流 bundle 绝对路径，见 [构建说明](DYNAMIC_WORKFLOW.md) |
+| `EA_KB_REPO_PATH` | 知识库目录；未设置时运行入口使用 `~/agent-lessons` |
+| `SILICONFLOW_API_KEY`、`SILICONFLOW_EMBEDDING_MODEL`、`SILICONFLOW_BASE_URL` | 可选知识库向量搜索 |
+| `ASR_API_KEY`、`ASR_MODEL`、`ASR_BASE_URL` | 语音识别；未设置 ASR Key 时可回退到 SiliconFlow Key |
+| `EA_FEISHU_ENV_FILE`、`FEISHU_OWNER_STATE_FILE` | 托管飞书配置与配对状态，见 [飞书](FEISHU.md) |
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_HOST` | `127.0.0.1` | HTTP 监听地址 |
-| `EA_PORT` | `8080` | HTTP 监听端口 |
-| `EA_DATA_DIR` | `./data` | 数据目录 |
-
-### 工具
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_ENABLE_BASH` | `false` | 是否启用 Bash 工具 |
-| `EA_ENABLE_WEB` | `false` | 是否启用 Web Fetch 工具 |
-| `EA_WEB_TIMEOUT_SECONDS` | `30` | Web Fetch 超时（秒） |
-| `EA_MAX_OUTPUT_LEN` | `30000` | 工具输出最大字符数 |
-| `EA_WORKSPACE` | 当前目录 | 工作目录 |
-| `EA_ALLOWED_TOOLS` | - | 工具白名单（逗号分隔） |
-| `EA_ALLOW_NO_AUTH` | - | `1` 时未配置 API key 也完全开放（仅限本机调试） |
-| `EA_ALLOWED_ORIGINS` | - | CORS 白名单（逗号分隔 Origin；默认不返回跨域头） |
-| `EA_BLOCKED_TOOLS` | - | 工具黑名单（逗号分隔） |
-
-### 执行后端
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_EXECUTION_MODE` | `local` | 执行后端：`local` 或 `ssh` |
-| `EA_SSH_HOST` | - | SSH 模式目标主机 |
-| `EA_SSH_PORT` | `22` | SSH 端口 |
-| `EA_SSH_WORKDIR` | - | SSH 模式远程工作目录 |
-
-### 个人助手
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_KB_REPO_PATH` | `~/agent-lessons` | 知识库仓库路径 |
-| `SILICONFLOW_API_KEY` | - | KB 向量搜索 API Key |
-| `SILICONFLOW_EMBEDDING_MODEL` | `bge-m3` | KB Embedding 模型 |
-| `SILICONFLOW_BASE_URL` | - | Embedding API 地址 |
-
-### 提示与历史
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_PROMPT_TEMPLATE` | - | 自定义提示模板路径 |
-
----
-
-## YAML 配置
-
-除了环境变量和 .env 文件，你也可以用 YAML 配置文件（优先级低于环境变量）：
-
-```yaml
-provider: openai
-openai_api_key: your-key
-openai_base_url: http://localhost:4001
-openai_model: longcat-opus
-host: 127.0.0.1
-port: 8080
-enable_bash: true
-workspace: /home/user/project
-max_turns: 200
-```
-
----
-
-## 安全提示
-
-- ✅ v0.10.3+ 会自动清洗配置值中的 ANSI 转义码
-- ✅ `.env` 文件应设置权限：`chmod 600 ~/.easyagent/.env`
-- ✅ 不要把 API Key 提交到 Git
-- ✅ 生产环境使用 `EA_API_KEY` 环境变量做 HTTP API 认证
+不要将运行 `.env`、访问令牌或配对状态提交到 Git。部署更新保留这些独立文件。

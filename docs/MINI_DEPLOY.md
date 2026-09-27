@@ -2,7 +2,7 @@
 
 正式网页由 `q@192.168.5.16` 的用户级 `easyagent-core.service` 提供，入口 `http://192.168.5.16:8080`。Mac 用于开发预览。
 
-合并到 GitHub `main` 后，用户级 `easyagent-update.timer` 每 5 分钟检查一次（加 0–30 秒随机延迟）。更新器按 SHA 获取源码，在独立构建目录测试根模块和 Bubble Tea、运行 vet 与网页脚本测试、构建 CLI 和 bridge；成功后原子替换服务程序并重启。健康检查必须返回对应提交版本，失败自动恢复旧程序并重启，失败版本不重复部署，后续新提交仍可更新。源码开发副本、运行配置、会话数据不被覆盖。
+合并到 GitHub `main` 后，用户级 `easyagent-update.timer` 每 5 分钟检查一次（加 0–30 秒随机延迟）。更新器按 SHA 获取源码，在独立构建目录测试根模块和 Bubble Tea、运行 vet 与网页脚本测试、构建 CLI、bridge 和动态工作流 bundle；成功后原子替换服务程序并重启。健康检查必须返回对应提交版本，失败自动恢复旧程序并重启，失败版本不重复部署，后续新提交仍可更新。源码开发副本、运行配置、会话数据不被覆盖。
 
 ## 安装（以运行服务的用户执行）
 
@@ -21,7 +21,7 @@ systemctl --user enable --now easyagent-update.timer
 
 按实际主机修改 deploy.env 中 Go 路径和健康检查地址。配置 `EA_DEPLOY_BRIDGE_BIN` 后，桥接程序与主程序一起替换、重启和回滚，并检查桥接服务处于 active；没有桥接服务的主机省略该变量。桥接使用长连接，现有服务退出最多可能等待 90 秒。保持用户 linger 开启，使服务在 SSH 退出后继续运行。更新器无需 GitHub Runner；不执行 PR 分支，不开放远程命令入口。生产服务已有的工具权限和网络监听设置保持不变。
 
-主服务与桥接的路径策略、身份配对代码统一合并后再开启双程序发布。迷你主机配置 `EA_DEPLOY_REQUIRE_PATH_POLICY=true` 和 `EA_DEPLOY_REQUIRE_OWNER_ACCESS=true`，更新器在替换前检查核心二进制的路径开关及桥接身份校验符号，避免旧分支覆盖已启用的能力；这些兼容性检查不能代替权限行为测试。现有配对状态和 API 令牌保持在运行配置目录，不随发布重建。
+主服务、桥接和动态工作流 bundle 应来自同一发布 SHA。迷你主机配置 `EA_DEPLOY_REQUIRE_PATH_POLICY=true` 和 `EA_DEPLOY_REQUIRE_OWNER_ACCESS=true`，更新器在替换前检查核心二进制的路径开关及桥接身份校验符号，避免旧分支覆盖已启用的能力；这些兼容性检查不能代替权限行为测试。现有配对状态和 API 令牌保持在运行配置目录，不随发布重建。
 
 开发权限在 `core.env` 中独立设置 `EA_ALLOW_OUTSIDE_WORKSPACE=true`。默认仍限制文件工具在工作区内；开关与 `EA_AUTO_APPROVE`、API 认证独立，仍受运行用户的操作系统权限限制。可通过认证后的 `/sessions/{id}/info` 的 `allow_outside_workspace` 字段核验实际会话策略。
 
@@ -37,7 +37,7 @@ systemctl --user stop easyagent-update.timer     # 暂停自动更新
 
 `~/.local/share/easyagent-deploy/current-revision` 记录健康版本；`previous-binary` 是最近部署前的可执行文件；`releases/<SHA>/easyagent` 保存已构建版本。健康失败的 SHA 记在 `failed-revision`，修复环境后删除该标记再手动启动更新服务即可重试。
 
-手工回滚：先停 timer，复制选定 release 到 `~/.easyagent/bin/easyagent.next`，再 `mv` 到 `easyagent`，重启 core 并检查健康；保留 timer 停止状态直到问题解决。没有自动清理发布备份，定期按磁盘空间人工保留需要的版本。
+手工回滚：先停 timer，停止相关服务，从同一已验证 SHA 的 release 同时恢复 core、已配置的 bridge 和 `workflow-runtime.mjs`，保留同版来源与许可文件；然后重启服务，检查健康版本与桥接连接。不能只替换 core 而留下不兼容的桥接或 bundle。保留 timer 停止状态直到问题解决。没有自动清理发布备份，定期按磁盘空间人工保留需要的版本。
 
 部署会短暂断开 WebSocket，进行中的请求可能中断；网页保留当前输入草稿，完成后重新连接。需要避免打断长任务时先暂停 timer，任务结束再开启。构建或测试失败不重启线上服务，网络暂时不可用时保持现有版本。
 

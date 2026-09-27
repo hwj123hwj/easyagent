@@ -39,7 +39,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## 项目文档
 
-- 项目介绍 & 架构：`README.md` / `docs/PROJECT_CONTEXT.md`
+- 项目介绍 & 架构：`README.md` / `docs/ARCHITECTURE.md`
 - 开发流程 & 编码规范（分支命名、commit 格式等）：`docs/CONTRIBUTING.md`
 - 架构决策：`docs/decisions/`
 - 竞品调研：`docs/research/`
@@ -82,7 +82,7 @@ sdk/agent/ sdk/ai/ sdk/session/ …      ← 核心层（零领域知识）
 
 ### Provider 注册
 
-`sdk/ai/providers/register.go` 注册 builtins，`internal/app/app.go` 组装注入。新增 Provider：实现接口 → `registerProvider()` 注册 → 添加配置 env。
+Provider 接口与实现位于 `sdk/ai/providers/`，应用入口组装注入。新增 Provider 必须同时接入实际配置选择逻辑并覆盖测试；不要仅添加实现后假定 CLI 会自动发现。
 
 ### 会话持久化
 
@@ -102,15 +102,15 @@ go test ./sdk/tools/ -v                # 单包测试
 ./easyagent serve --listen :8080             # HTTP 服务
 ```
 
-Provider 开发用 `mock`（`EA_PROVIDER=mock`），不调真实 LLM。
-`EA_*` 为当前环境变量前缀；程序仍兼容读取旧的 `PI_GO_*` 变量。
+Provider 开发使用测试中注入的 mock 或本地模拟 HTTP 服务，不调真实 LLM。CLI 当前不接受 `EA_PROVIDER=mock`。
+`EA_*` 为当前环境变量前缀；旧的 `PI_GO_*` 配置需要迁移，不会自动回退读取。
 
 ## 环境变量
 
-核心变量（完整列表见 `docs/CONTRIBUTING.md`）：
+核心变量（配置说明见 `docs/CONFIG.md`）：
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `EA_PROVIDER` | `mock` | `anthropic` / `openai` / `deepv` / `mock` |
+| `EA_PROVIDER` | 空，需显式配置 | `anthropic` / `openai` |
 | `EA_ENABLE_BASH` | `false` | 启用 Bash 工具 |
 | `EA_DATA_DIR` | `./data` | 会话数据目录 |

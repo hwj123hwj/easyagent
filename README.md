@@ -1,218 +1,88 @@
-<div align="center">
-
 # EasyAgent
 
-**你的 AI 编程搭档，也是你的个人 AI 助手。**
+**Go 驱动的 AI 编程助手与 Agent 工作台，支持 Web、TUI、飞书和动态工作流。**
 
-Go 实现的智能 Agent 框架 — 写代码、搜知识、放音乐，一个终端全搞定。
+在对话中阅读与修改代码、执行工具、查看过程与结果，并保留可继续的历史会话。日常使用以浏览器工作区为中心，也可以从终端或已配对的飞书账号发起任务。底层 Agent 能力通过公共 Go SDK 复用。
 
-[快速开始](#快速开始) · [功能一览](#核心功能) · [桌面端](#桌面客户端) · [技术文档](#技术文档)
+## 能做什么
 
-</div>
+- **Web 工作区**：流式对话、Slash 命令提示、模型切换、工具结果展开与复制、历史会话，以及飞书设置。
+- **终端 TUI**：独立全屏界面、Markdown 渲染、多行输入、工具分组折叠、鼠标选区复制。输入框位于快捷键和状态栏上方。
+- **飞书对话**：长连接接收消息，支持文本与富文本，卡片随生成过程更新；首次配对后只接受已授权账号的操作。
+- **动态工作流**：`/workflow` 将任务交给 Agent 编写 TypeScript 流程，支持多个 Actor、分支、循环、并行执行和受控恢复。复用固定版本的 ZCode 引擎。
+- **YAML 流水线**：为预先确定的步骤声明依赖、并发、重试与人工确认门，与动态工作流分别管理。
+- **可复用 SDK**：模型 Provider、工具、会话、上下文压缩、Skills、本地/SSH 执行和 AgentSession。
 
----
+仓库也保留知识库、音乐应用及 Electron/React 客户端；对应配置与构建独立于主要 Web 界面。
 
-## 它能做什么
+## 从源码开始
 
-**写代码** — 读文件、改代码、跑命令、搜代码库，一个对话窗口搞定。不用切终端。
-
-**记知识** — 自动学习你的习惯和偏好，越用越懂你。个人知识库帮你沉淀经验。
-
-**放音乐** — 内置音乐助手，支持网易云 / B站 / 本地音乐，边写代码边听歌。
-
-**多端使用** — 终端 TUI、桌面客户端、飞书群聊、HTTP API，随时随地用。
-
----
-
-## 核心功能
-
-| 🤖 智能 Agent | 📝 编程助手 | 🎵 个人助手 |
-|---|---|---|
-| 多模型自由切换 | 8 个内置工具 | 音乐播放器 |
-| 流式实时输出 | Markdown 渲染 | 网易云 / B站 / 本地 |
-| 自动上下文压缩 | Git diff 集成 | 用户画像记忆 |
-| 循环检测防卡死 | 文件自动补全 | 个人知识库 |
-
-<details>
-<summary>📖 展开看完整功能列表</summary>
-
-### Agent 引擎
-- **多 Provider**：Anthropic Claude、OpenAI、本地网关，随时切换
-- **流式输出**：实时看到 AI 的思考和回复，不用等
-- **自动压缩**：长对话自动总结，不会因为太长而"失忆"
-- **循环检测**：AI 卡在重复操作时会自动提醒换思路
-- **安全确认**：执行危险操作前会先问你
-
-### 编程能力
-- **文件读写**：读取、创建、编辑项目文件
-- **代码搜索**：按内容或文件名快速定位
-- **Shell 命令**：执行 bash 命令（需开启）
-- **网页抓取**：获取网页内容用于分析
-- **Slash 命令**：`/help`、`/model`、`/compact` 等 16 个快捷命令
-- **自动补全**：`/` 补全命令，`@` 补全文件路径
-
-### 个人助手
-- **音乐播放**：搜歌、播放、收藏，支持多源混合
-- **用户画像**：自动学习你的偏好和习惯
-- **知识库**：个人经验沉淀，支持语义搜索
-- **飞书集成**：在飞书群里直接和 AI 对话
-
-### 多端支持
-- **终端 TUI**：Markdown 渲染、语法高亮；输入框位于快捷键提示和状态栏上方。滚轮始终在 TUI 内翻页；鼠标拖选后松开自动复制（无需按 `Cmd+C`），`Esc` 清除选区并恢复实时画面。`F2` 复制最近回复原文，`F3` 复制完整对话及工具结果，`PgUp/PgDn` 翻页。`Ctrl+J` 换行，多行粘贴不会自动发送。 工具调用按组展示：点击组标题展开命令列表，点击命令标题展开完整参数和输出；成功完成后自动收起，错误和手动展开状态保留。`Ctrl+O` 切换最近工具组。macOS 使用系统 `pbcopy`；Linux 需 `wl-copy` / `xclip` / `xsel`，复制失败会显示提示。
-- **桌面客户端**：Electron + React，全局音乐播放器
-- **HTTP API**：RESTful + WebSocket，方便二次开发
-- **飞书桥接**：独立服务，接入飞书群聊
-
-</details>
-
----
-
-## 快速开始
-
-### 动态工作流
-
-在对话中输入 `/workflow <任务>`，由 Agent 编排有上下文的 Actor、并行任务与条件分支；Web“工作流”页可查看节点、产出、取消与恢复。复用固定版本的 ZCode 引擎，需要 Node.js 22+ 与运行组件，详见 [动态工作流使用与构建](docs/DYNAMIC_WORKFLOW.md)。
-
-### 安装
+需要 Go（版本以 [go.mod](go.mod) 为准，当前为 1.24.2）。动态工作流还需要 Node.js 22+。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hwj123hwj/easyagent/main/scripts/install.sh | bash
+git clone https://github.com/hwj123hwj/easyagent.git
+cd easyagent
+make build
+cp .env.example .env
+# 编辑 .env，填写自己的 Provider、模型、网关地址和密钥
+./bin/easyagent
 ```
 
-安装脚本会自动完成一切：下载二进制 → 配置 PATH → 创建配置 → 引导填入 API Key。
+当前环境变量使用 `EA_*`，旧的 `PI_GO_*` 配置需要迁移。OpenAI 兼容服务的最小配置：
 
-### 使用
-
-```bash
-easyagent                   # 💬 交互式聊天
-easyagent -y                # 💬 交互式聊天并启用全权模式
-easyagent chat              # 💬 交互式聊天（推荐）
-easyagent run -p "你好"      # ⚡ 单次提问
-easyagent serve             # 🌐 HTTP 服务模式
-```
-
-### 终端界面快捷键
-
-| 按键 | 功能 | | 按键 | 功能 |
-|------|------|-|------|------|
-| `Enter` | 发送消息 | | `Ctrl+C` | 中断 / 退出 |
-| `Ctrl+J` | 换行 | | `Ctrl+D` | 退出 |
-| `Ctrl+L` | 重绘屏幕，保留对话 | | `Ctrl+P` | 空闲时切换模型 |
-| `Ctrl+R` | 搜索历史 | | `↑` `↓` | 浏览历史 |
-| `Tab` | 自动补全 | | `/` | Slash 命令 |
-
-### 配置
-
-安装时如果没有填 API Key，或者想修改配置：
-
-```bash
-nano ~/.easyagent/.env
-```
-
-最简配置：
-```env
+```dotenv
 EA_PROVIDER=openai
-EA_API_KEY=your-api-key
 EA_BASE_URL=http://localhost:4001
-EA_MODEL=longcat-opus
+EA_MODEL=your-model-id
+EA_API_KEY=your-api-key
 ```
 
-<details>
-<summary>⚙️ 其他安装方式</summary>
+`EA_API_KEY` 当前同时用于 OpenAI 兼容上游鉴权与 EasyAgent HTTP API 的 Bearer 认证。其他 Provider、工具权限、文件路径和运行目录见 [配置说明](docs/CONFIG.md)。
 
-**go install**
-```bash
-go install github.com/hwj123hwj/easyagent/cmd/easyagent@latest
-```
-
-**从源码构建**
-```bash
-git clone https://github.com/hwj123hwj/easyagent.git
-cd easyagent
-make build && make install
-```
-
-</details>
-
----
-
-## 桌面客户端
-
-EasyAgent 提供了基于 Electron + React 的桌面客户端，含全局音乐播放器、文件浏览器、知识库面板：
+启动网页：
 
 ```bash
-cd desktop
-npm install
-npm run electron:dev      # 开发模式
-npm run electron:build    # 打包
+./bin/easyagent serve --listen 127.0.0.1:8080
 ```
 
----
+打开 `http://127.0.0.1:8080`，配置了 API Key 时使用同一令牌登录。局域网部署、开机启动与自动更新见 [迷你主机部署](docs/MINI_DEPLOY.md)。
 
-## 飞书集成
-
-通过 `easyagent-bridge` 桥接服务，可以将 AI Agent 接入飞书群聊，在群里直接和 AI 对话、执行 Slash 命令。
-
-运行 `/feishu start` 会真正启动飞书长连接；连接就绪后，机器人会私聊完成扫码注册的账号，发送欢迎语、默认工作目录、`/help` 用法和权限体检结果。手动配置凭据时，可设置 `FEISHU_OWNER_OPEN_ID` 指定接收欢迎语的飞书用户。部署到 systemd 时，`/feishu stop`、`/feishu status` 和 `/feishu logout` 也会控制桥接服务。
-
-详见 [飞书集成文档](docs/references/feishu-integration-ref.md)。
-
----
-
----
-
-## 作为 SDK 嵌入你的 Go 服务
-
-EasyAgent 不只是命令行工具——核心 Agent 能力以 `sdk/` 包对外提供，任何 Go 后端服务都能 import 拿到原子能力（Agent 循环、工具系统、会话持久化、上下文压缩、Provider 注册制）：
-
-```go
-import (
-    "github.com/hwj123hwj/easyagent/sdk/agent"
-    "github.com/hwj123hwj/easyagent/sdk/ai"
-    "github.com/hwj123hwj/easyagent/sdk/ai/providers"
-)
-
-registry := providers.NewRegistry()
-registry.Register(myProvider{}) // 实现 providers.Provider 接口
-
-ag := agent.New(agent.Options{
-    Model:    ai.Model{ID: "glm-4.7", Name: "GLM", Provider: "my"},
-    Registry: registry,
-    System:   "你是嵌入在业务服务里的助手",
-    Tools:    []agent.Tool{myTool{}}, // 实现 agent.Tool 接口
-})
-reply, err := ag.Prompt(ctx, ai.NewTextUserMessage("..."))
-```
-
-完整可运行示例见 [`sdk/example_test.go`](sdk/example_test.go)。架构约束：`sdk/` 零领域知识、不依赖 `internal/`（测试强制）；音乐/飞书等领域能力属于应用层，通过实现 `runtime.Application` 接口构建，参考 `internal/agents/`。
-
-## 技术文档
-
-> 以下文档面向开发者和贡献者，普通用户不需要看。
-
-| 文档 | 说明 |
-|------|------|
-| [架构设计](docs/ARCHITECTURE.md) | 四层架构、模块划分、依赖规则 |
-| [环境变量](docs/CONFIG.md) | 完整配置项说明 |
-| [HTTP API](docs/API.md) | RESTful + WebSocket 接口文档 |
-| [贡献指南](docs/CONTRIBUTING.md) | 项目结构、开发流程、代码规范 |
-| [项目上下文](docs/PROJECT_CONTEXT.md) | 高层架构快照 |
-| [产品路线图](docs/PRODUCT_ROADMAP.md) | 未来规划 |
-| 部署 | 服务器自动部署已下线（2026-09），现以本机/Mini PC 运行为主 |
-
----
-
-## 参与贡献
-
-欢迎 Issue 和 PR！开发流程详见 [贡献指南](docs/CONTRIBUTING.md)。
+构建动态工作流组件：
 
 ```bash
-git clone https://github.com/hwj123hwj/easyagent.git
-cd easyagent
-make test    # 跑测试
-make build   # 编译
+(cd workflow-runtime && npm ci --ignore-scripts && npm run build)
+export EA_WORKFLOW_RUNTIME="$PWD/workflow-runtime/output/workflow-runtime.mjs"
+./bin/easyagent serve --listen 127.0.0.1:8080
 ```
 
-## License
+随后在对话输入 `/workflow 分别检查代码质量、测试覆盖和文档，再汇总建议`。构建产物、执行限制与恢复语义见 [动态工作流](docs/DYNAMIC_WORKFLOW.md)。普通对话不要求 Node 组件。
 
-MIT
+## 终端使用
+
+```bash
+./bin/easyagent                       # TUI
+./bin/easyagent chat                  # 交互式对话
+./bin/easyagent run -p "分析这个项目"   # 单次任务
+./bin/easyagent -y                    # 跳过交互确认，不改变文件路径限制
+```
+
+TUI 中输入 `/help` 查看命令。`Enter` 发送，`Ctrl+J` 换行，`PgUp/PgDn` 翻页；鼠标拖选后松开复制，`F2` 复制最近回复，`F3` 复制完整对话及工具结果，`Esc` 清除选区。点击工具组或命令标题展开详情，`Ctrl+O` 切换最近工具组。macOS 使用 `pbcopy`，Linux 使用 `wl-copy`、`xclip` 或 `xsel`；复制失败会显示提示。
+
+## 文档
+
+| 需要做什么 | 文档 |
+|---|---|
+| 配置模型、权限、路径与认证 | [配置](docs/CONFIG.md) |
+| 接入飞书、配对与排错 | [飞书](docs/FEISHU.md) |
+| 编排多 Agent 动态任务 | [动态工作流](docs/DYNAMIC_WORKFLOW.md) |
+| 运行固定步骤 DAG | [YAML 流水线](docs/WORKFLOW.md) |
+| 开机启动、同步 main、健康检查与回滚 | [部署运维](docs/MINI_DEPLOY.md) |
+| 接入 HTTP / SSE / WebSocket | [API](docs/API.md) |
+| 理解源码与 SDK 边界 | [架构](docs/ARCHITECTURE.md) |
+| 开发、测试、合并和分支收尾 | [贡献指南](docs/CONTRIBUTING.md) |
+
+完整导航见 [文档索引](docs/README.md)。产品与视觉约定分别在 [PRODUCT.md](PRODUCT.md) 和 [DESIGN.md](DESIGN.md)。
+
+## 许可与开源组件
+
+项目代码使用 [MIT License](LICENSE)。第三方代码的来源与许可保留在各自目录，动态工作流尤其参见 [组件来源说明](workflow-runtime/vendor/SOURCE.md)。修改和发布时须保留对应许可及 NOTICE。
