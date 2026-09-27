@@ -102,6 +102,7 @@ function switchPage(pageID) {
   // 离开工作流页时停掉详情轮询由 deactivate 控制；此处简化：仅聊天页外的页不处理
   if (pageID !== 'page-workflows') workflowsPage.deactivate();
   if (pageID !== 'page-settings') settingsPage.deactivate();
+  if (pageID !== 'page-sessions') sessionsPage.deactivate();
 }
 
 // 深链接：?page=page-workflows 直达指定页签

@@ -308,7 +308,7 @@ textarea.wf-prompt { font-size: 13.5px; line-height: 1.6; resize: vertical; min-
   overflow-y: auto;
 }
 .sess-layout > .panel-header { padding: 20px 0 14px; }
-.sess-table { padding-bottom: 20px; }
+.sess-table { padding-bottom: 20px; flex-shrink: 0; }
 .data-table {
   width: 100%; border-collapse: separate; border-spacing: 0;
   font-size: 13px;
@@ -340,9 +340,13 @@ textarea.wf-prompt { font-size: 13.5px; line-height: 1.6; resize: vertical; min-
 .data-table td.sess-actions { white-space: nowrap; }
 .data-table td.sess-actions .btn { display: inline-block; margin-right: 8px; }
 .data-table td.sess-actions .btn:last-child { margin-right: 0; }
-.sess-messages { margin-top: 20px; }
-.sess-msg-list { display: flex; flex-direction: column; gap: 14px; padding: 14px 0 48px; }
+.sess-messages { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 0 max(24px, calc((100% - 1080px) / 2)); }
+.sess-messages > .panel-header { padding: 20px 0 14px; flex-shrink: 0; }
+.sess-messages > .panel-header h3 { min-width: 0; overflow-wrap: anywhere; }
+.sess-messages > .panel-header button { flex-shrink: 0; }
+.sess-msg-list { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; gap: 14px; padding: 14px 0 48px; }
 .sess-msg {
+  flex-shrink: 0;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -405,7 +409,7 @@ textarea.wf-prompt { font-size: 13.5px; line-height: 1.6; resize: vertical; min-
  :root{--nav-height:60px}.topnav{padding:0 16px;gap:18px}.nav-brand-text{display:none}.nav-tabs{gap:0}.nav-tab{padding:8px 12px;font-size:12px}.nav-right{gap:0}.nav-auth{padding:4px 6px;font-size:11px}
  .sidebar{position:fixed;top:60px;bottom:0;left:0;z-index:var(--z-drawer);transform:translateX(-100%);visibility:hidden;transition:transform 200ms ease-out,visibility 200ms}.sidebar-open .sidebar{transform:translateX(0);visibility:visible}.sidebar-backdrop:not([hidden]){display:block;position:fixed;inset:60px 0 0;background:#0009;border:0;z-index:var(--z-backdrop)}#sidebar-toggle{display:inline-flex}.delete-btn{opacity:1}
  .chat-header{padding:15px 18px}.chat-status{font-size:11px}.chat-heading h1{max-width:48vw;font-size:14px}.empty-state{padding:26px 24px}.welcome-mark{font-size:48px;margin-bottom:20px}.empty-title{font-size:25px}.empty-subtitle{font-size:13px}.starter-list{margin-top:24px;gap:8px}.starter-list button{padding:8px 10px;gap:16px;font-size:11px}.message-list{padding:24px 18px}.assistant-message{gap:10px}.assistant-avatar{flex-basis:24px;font-size:12px}.user-bubble{max-width:92%}.input-area{padding:12px 16px max(16px,env(safe-area-inset-bottom))}.input-container{padding:14px}.message-input{font-size:16px}.composer-footer{font-size:10px}.composer-footer>span:last-child{display:none}.jump-latest{bottom:145px}
- .wf-layout{display:block;overflow-y:auto}.wf-submit{width:100%;border-right:0;border-bottom:1px solid var(--border)}.wf-runs{min-height:260px;overflow:visible}.wf-form{overflow:visible}.wf-templates{flex-wrap:wrap}.wf-top-name{min-width:180px}.wf-detail-actions{gap:4px}.sess-layout{padding:0 16px}.sess-layout>.panel-header{padding:20px 0}.data-table th,.data-table td{padding:10px;font-size:12px}.sess-title-cell{min-width:140px}.data-table .col-nowrap{white-space:normal!important}.login-card{padding:24px}.panel-header h3{font-size:18px}
+ .wf-layout{display:block;overflow-y:auto}.wf-submit{width:100%;border-right:0;border-bottom:1px solid var(--border)}.wf-runs{min-height:260px;overflow:visible}.wf-form{overflow:visible}.wf-templates{flex-wrap:wrap}.wf-top-name{min-width:180px}.wf-detail-actions{gap:4px}.sess-layout,.sess-messages{padding:0 16px}.sess-layout>.panel-header{padding:20px 0}.data-table th,.data-table td{padding:10px;font-size:12px}.sess-title-cell{min-width:140px}.data-table .col-nowrap{white-space:normal!important}.login-card{padding:24px}.panel-header h3{font-size:18px}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 .clipboard-buffer{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0}

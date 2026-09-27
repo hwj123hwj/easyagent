@@ -163,20 +163,20 @@
 
     <!-- Page: Sessions -->
     <div id="page-sessions" class="page" hidden>
-      <div class="sess-layout">
+      <div id="sess-overview" class="sess-layout">
         <div class="panel-header">
           <div><h3>全部会话</h3></div>
           <button id="sess-refresh-btn" class="btn btn-ghost">刷新</button>
         </div>
         <div id="sess-table" class="sess-table"></div>
-        <div id="sess-messages" class="sess-messages" hidden>
+      </div>
+      <section id="sess-messages" class="sess-messages" aria-labelledby="sess-msg-title" hidden>
           <div class="panel-header">
             <h3 id="sess-msg-title">会话消息</h3>
-            <button id="sess-close-btn" class="btn btn-ghost">关闭</button>
+            <button id="sess-close-btn" class="btn btn-ghost">返回会话</button>
           </div>
-          <div id="sess-msg-list" class="sess-msg-list"></div>
-        </div>
-      </div>
+          <div id="sess-msg-list" class="sess-msg-list" tabindex="0" aria-label="会话消息"></div>
+      </section>
     </div>
 
     <!-- Feishu settings inherit Qingye: status first, credentials next, owner pairing last. -->
