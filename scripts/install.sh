@@ -6,13 +6,14 @@
 #   curl -fsSL https://raw.githubusercontent.com/hwj123hwj/easyagent/main/scripts/install.sh | bash
 #
 # 脚本会自动完成:
-#   1. 检测系统 → 下载预编译二进制（或编译源码）
+#   1. 检测系统 → 下载并校验指定 Release（默认最新正式版）
 #   2. 安装到 ~/.easyagent/bin 并配置 PATH
 #   3. 创建 ~/.easyagent/.env 配置文件
 #   4. 引导用户填入 API Key
 #   5. 创建 easyagent 全局命令别名
 #
 set -euo pipefail
+umask 077
 
 REPO="hwj123hwj/easyagent"
 LEGACY_ROOT="${PI_GO_HOME:-$HOME/.pi-go}"
@@ -71,62 +72,107 @@ NEEDS_DOWNLOAD=true
 
 # 如果已有相同版本，跳过
 if [ -f "${BINARY_PATH}" ]; then
-    CURRENT_VER=$("${BINARY_PATH}" --version 2>/dev/null | awk '{print $2}' || echo "")
-    if [ -n "$CURRENT_VER" ]; then
-        info "Found existing easyagent ${CURRENT_VER}"
-        read -rp "$(echo -e ${CYAN}ℹ${NC}  Reinstall/upgrade? [Y/n] )" REPLY < /dev/tty 2>/dev/null || REPLY="y"
-        if [[ "${REPLY,,}" == "n" ]]; then
-            ok "Keeping existing installation"
-            NEEDS_DOWNLOAD=false
-        fi
+    info "Found existing EasyAgent installation: ${BINARY_PATH}"
+    read -rp "$(echo -e ${CYAN}ℹ${NC}  Reinstall/upgrade? [Y/n] )" REPLY < /dev/tty 2>/dev/null || REPLY="y"
+    if [[ "$REPLY" == "n" || "$REPLY" == "N" ]]; then
+        ok "Keeping existing installation"
+        NEEDS_DOWNLOAD=false
     fi
 fi
 
+# Downloads and verifies everything before replacing an installed file.
+# Run in a subshell so temporary files and rollback traps cannot leak to setup.
+download_release() (
+    set -euo pipefail
+    tag=${EA_VERSION:-}
+    if [ -z "$tag" ]; then
+        info "Fetching latest stable release..."
+        tag=$(curl -fsSL --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${REPO}/releases/latest" \
+            | sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p')
+    fi
+    [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?$ ]] \
+        || fail "Invalid release version: $tag"
+    stage=$(mktemp -d "${INSTALL_DIR}/.download.XXXXXX")
+    publishing=false
+    destinations=()
+    rollback() {
+        status=$?
+        if [ "$publishing" = true ] && [ "$status" -ne 0 ]; then
+            for dest in "${destinations[@]}"; do
+                if [ -e "$stage/backup/$dest" ] || [ -L "$stage/backup/$dest" ]; then
+                    mv -f "$stage/backup/$dest" "$INSTALL_DIR/$dest"
+                else
+                    rm -f "$INSTALL_DIR/$dest"
+                fi
+            done
+        fi
+        rm -rf "$stage"
+        exit "$status"
+    }
+    trap rollback EXIT
+    base="https://github.com/${REPO}/releases/download/$tag"
+    curl -fsSL --connect-timeout 10 --max-time 60 "$base/checksums.txt" -o "$stage/checksums.txt" \
+        || fail "Cannot retrieve release checksums; installation unchanged"
+    checksum_for() {
+        awk -v name="$1" '$2 == name || $2 == "*" name {value=$1; count++} END {if (count == 1) print value; else exit 1}' "$stage/checksums.txt"
+    }
+    fetch_verified() {
+        asset=$1
+        digest=$(checksum_for "$asset") || fail "Missing or duplicate checksum: $asset"
+        [[ "$digest" =~ ^[0-9a-fA-F]{64}$ ]] || fail "Invalid SHA-256: $asset"
+        curl -fSL --connect-timeout 10 --max-time 300 "$base/$asset" -o "$stage/$asset" \
+            || fail "Download failed: $asset; installation unchanged"
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "$stage/$asset" | awk '{print $1}')
+        else
+            actual=$(shasum -a 256 "$stage/$asset" | awk '{print $1}')
+        fi
+        [ "$actual" = "$digest" ] || fail "SHA-256 mismatch: $asset; installation unchanged"
+    }
+    core="easyagent-$OS-$ARCH"
+    if ! checksum_for "$core" >/dev/null; then
+        core="pi-agent-$OS-$ARCH" # Historical assets remain supported, with verification.
+    fi
+    fetch_verified "$core"
+    chmod +x "$stage/$core"
+    if [[ "$core" == easyagent-* ]]; then
+        reported=$("$stage/$core" --version)
+        [ "$reported" = "easyagent $tag" ] || fail "Downloaded binary reports a different version: $reported"
+    fi
+    # Historical pi-agent --version runs past flag parsing into app startup.
+    # Verify its release checksum, but never execute that binary during installation.
+    mv "$stage/$core" "$stage/easyagent"
+    destinations=(easyagent)
+    if [[ "$core" == easyagent-* ]] || checksum_for release.json >/dev/null; then
+        fetch_verified release.json
+        fetch_verified "easyagent-bridge-$OS-$ARCH"
+        chmod +x "$stage/easyagent-bridge-$OS-$ARCH"
+        [ "$("$stage/easyagent-bridge-$OS-$ARCH" --version)" = "easyagent-bridge $tag" ] \
+            || fail 'Bridge version differs from release'
+        mv "$stage/easyagent-bridge-$OS-$ARCH" "$stage/easyagent-bridge"
+        fetch_verified workflow-runtime.mjs
+        fetch_verified workflow-runtime-licenses.tar.gz
+        destinations+=(easyagent-bridge workflow-runtime.mjs workflow-runtime-licenses.tar.gz release.json)
+    elif [ -e "$INSTALL_DIR/workflow-runtime.mjs" ]; then
+        fail 'This historical release has no workflow bundle; use a separate EA_HOME for downgrades'
+    fi
+    mkdir "$stage/backup"
+    for dest in "${destinations[@]}"; do
+        [ ! -d "$INSTALL_DIR/$dest" ] || fail "Install destination is a directory: $dest"
+        if [ -e "$INSTALL_DIR/$dest" ] || [ -L "$INSTALL_DIR/$dest" ]; then
+            cp -pP "$INSTALL_DIR/$dest" "$stage/backup/$dest"
+        fi
+    done
+    publishing=true
+    for dest in "${destinations[@]}"; do
+        mv -f "$stage/$dest" "$INSTALL_DIR/$dest"
+    done
+    publishing=false
+    ok "Installed verified release $tag"
+)
+
 if [ "$NEEDS_DOWNLOAD" = true ]; then
-    # 获取最新 release tag
-    info "Fetching latest release..."
-    TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-        | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
-
-    DOWNLOADED=false
-
-    if [ -n "$TAG" ]; then
-        # 尝试下载预编译二进制
-        URL="https://github.com/${REPO}/releases/download/${TAG}/${BINARY_NAME}-${OS}-${ARCH}"
-        info "Downloading easyagent ${TAG}..."
-        if curl -fSL "${URL}" -o "${BINARY_PATH}.tmp" 2>/dev/null; then
-            mv "${BINARY_PATH}.tmp" "${BINARY_PATH}"
-            chmod +x "${BINARY_PATH}"
-            DOWNLOADED=true
-            ok "Downloaded ${TAG}"
-        else
-            LEGACY_URL="https://github.com/${REPO}/releases/download/${TAG}/${LEGACY_BINARY_NAME}-${OS}-${ARCH}"
-            info "Trying the previous release binary name for ${TAG}..."
-            if curl -fSL "${LEGACY_URL}" -o "${BINARY_PATH}.tmp" 2>/dev/null; then
-                mv "${BINARY_PATH}.tmp" "${BINARY_PATH}"
-                chmod +x "${BINARY_PATH}"
-                DOWNLOADED=true
-                ok "Downloaded ${TAG} using the previous binary name"
-            fi
-        fi
-    fi
-
-    if [ "$DOWNLOADED" = false ]; then
-        # 回退：从源码编译
-        if command -v go &>/dev/null; then
-            info "Building from source (Go detected)..."
-            TMPDIR=$(mktemp -d)
-            git clone --depth 1 "https://github.com/${REPO}.git" "${TMPDIR}/easyagent" 2>/dev/null
-            cd "${TMPDIR}/easyagent"
-            CGO_ENABLED=0 go build -ldflags "-X main.version=dev" \
-                -o "${BINARY_PATH}" ./cmd/easyagent
-            cd - >/dev/null
-            rm -rf "${TMPDIR}"
-            ok "Built from source"
-        else
-            fail "Cannot download binary and Go is not installed.\nPlease install Go from https://go.dev/dl/ and re-run this script."
-        fi
-    fi
+    download_release
 fi
 
 chmod +x "${BINARY_PATH}" 2>/dev/null || true

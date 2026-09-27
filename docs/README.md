@@ -11,6 +11,7 @@
 | [动态工作流](DYNAMIC_WORKFLOW.md) | `/workflow`、ZCode 引擎接入、并发与恢复 |
 | [YAML 流水线](WORKFLOW.md) | 固定 DAG、模板、重试、审批与缓存 |
 | [迷你主机部署](MINI_DEPLOY.md) | 自动更新、systemd 自启动、健康检查与回滚 |
+| [版本与发布](RELEASING.md) | tag、版本说明、发布校验与安装完整性 |
 | [API](API.md) | 对话、流式事件、会话和管理接口 |
 
 ## 开发与设计

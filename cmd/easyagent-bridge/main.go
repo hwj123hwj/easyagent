@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,7 +15,13 @@ import (
 	"github.com/joho/godotenv"
 )
 
+var version = "dev"
+
 func main() {
+	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-version") {
+		fmt.Printf("easyagent-bridge %s\n", version)
+		return
+	}
 	// Load the configured or standard .env file (ignore missing files).
 	envFile := config.Env("EA_ENV_FILE")
 	if envFile != "" {
