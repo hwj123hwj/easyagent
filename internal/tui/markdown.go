@@ -21,8 +21,8 @@ var sharedMarkdown *MarkdownRenderer
 
 // NewMarkdownRenderer creates a glamour renderer with auto dark/light detection.
 func NewMarkdownRenderer(width int) *MarkdownRenderer {
-	if width < 40 {
-		width = 80
+	if width < 1 {
+		width = 1
 	}
 
 	style := "light"
@@ -56,8 +56,8 @@ func SharedMarkdown() *MarkdownRenderer {
 
 // SetWidth updates the word-wrap width and resets the cache.
 func (mr *MarkdownRenderer) SetWidth(width int) {
-	if width < 40 {
-		width = 80
+	if width < 1 {
+		width = 1
 	}
 	mr.mu.Lock()
 	defer mr.mu.Unlock()

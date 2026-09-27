@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 // LocalBashOperations executes commands on the local machine.
@@ -21,6 +22,8 @@ func (LocalBashOperations) Run(ctx context.Context, req RunRequest) (RunResult, 
 	}
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", req.Command)
+	isolateCommand(cmd)
+	cmd.WaitDelay = time.Second
 	if req.WorkDir != "" {
 		cmd.Dir = req.WorkDir
 	}

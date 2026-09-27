@@ -406,97 +406,102 @@ func TestInputModel_InputHeightMatchesView(t *testing.T) {
 	}
 }
 
-// TestView_InputIsLastLine：输入框必须是帧的最后一个非空行。
-// bubbletea altscreen 每帧渲染完把终端光标停在最后一行第 0 列，
-// 输入法内联组词（预编辑串）跟随终端光标位置——输入框不在最后，
-// 拼音就叠在状态栏上（2026-09-27 踩坑）。
-func TestView_InputIsLastLine(t *testing.T) {
+func TestView_InputAboveFooter(t *testing.T) {
 	m := New(&runtime.AgentSession{}, slashcmd.NewRegistry(), false)
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.Update(tea.WindowSizeMsg{Width: 99, Height: 37})
 	m.input.insertString("你好")
-
 	view := m.View()
-	lines := strings.Split(view, "\n")
-	// 从后往前找第一个非空行，必须是输入框内容
-	last := ""
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.TrimSpace(lines[i]) != "" {
-			last = lines[i]
-			break
-		}
+	if !(strings.Index(view, "你好") < strings.Index(view, "Enter: send") && strings.Index(view, "Enter: send") < strings.Index(view, "ready")) {
+		t.Fatal("expected input, help, status in that order")
 	}
-	if !strings.Contains(last, "你好") {
-		t.Fatalf("input content should be the last non-empty line, got %q", last)
-	}
-	// 状态栏不能在输入框之后
-	statusIdx, inputIdx := -1, -1
-	for i, l := range lines {
-		if strings.Contains(l, "ready") && statusIdx < 0 {
-			statusIdx = i
-		}
-		if strings.Contains(l, "你好") && inputIdx < 0 {
-			inputIdx = i
-		}
-	}
-	if statusIdx < 0 || inputIdx < 0 || statusIdx > inputIdx {
-		t.Fatalf("status bar (line %d) must render above input (line %d)", statusIdx, inputIdx)
+	if got := lipgloss.Height(view); got != 37 {
+		t.Fatalf("height=%d", got)
 	}
 }
 
-// TestInputModel_CursorColumn：IME 组词串跟随终端光标位置渲染，
-// CursorColumn 必须给出光标在 View 最后一行上的准确可视列。
-// 配套 HWJ bubbletea 补丁（tea.SetCursorColumn）。
-func TestInputModel_CursorColumn(t *testing.T) {
+func TestInputCursorPosition(t *testing.T) {
 	im := NewInputModel()
-	im.SetWidth(80)
+	im.SetWidth(10) // 7 cells of content plus prompt and caret
+	im.insertString("abcdefg中文")
+	for _, tc := range []struct{ x, col, row int }{{0, 2, 0}, {6, 8, 0}, {7, 2, 1}, {8, 4, 1}, {9, 6, 1}} {
+		im.cursorX = tc.x
+		col, row := im.CursorPosition()
+		if col != tc.col || row != tc.row {
+			t.Errorf("x=%d got (%d,%d), want (%d,%d)", tc.x, col, row, tc.col, tc.row)
+		}
+	}
+	im.newLine()
+	im.cursorY = 0
+	im.cursorX = 2
+	col, row := im.CursorPosition()
+	if col != 4 || row != 0 {
+		t.Fatalf("editing earlier line: (%d,%d)", col, row)
+	}
+}
 
-	// 空输入：光标在 "› " 之后 = 第 2 列
-	if got := im.CursorColumn(); got != 2 {
-		t.Errorf("empty input: CursorColumn() = %d, want 2", got)
+func TestPasteMultilineAndUndo(t *testing.T) {
+	im := NewInputModel()
+	im.insertString("beforeafter")
+	im.cursorX = 6
+	im.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune("中文\r\nline 2\r\n")})
+	if got := im.Text(); got != "before中文\nline 2\nafter" {
+		t.Fatalf("paste=%q", got)
 	}
+	if im.cursorY != 2 || im.cursorX != 0 {
+		t.Fatal("wrong paste caret")
+	}
+	im.undo()
+	if im.Text() != "beforeafter" || im.cursorX != 6 {
+		t.Fatal("paste must undo in one step")
+	}
+	im.AddHistory("one\ntwo")
+	im.navigateHistory(-1)
+	if len(im.lines) != 2 || im.cursorY != 1 || im.cursorX != 3 {
+		t.Fatal("multiline history was flattened")
+	}
+}
 
-	// 中文后：2 格 prompt + 4 格（两个全角字）
-	im.insertString("你好")
-	if got := im.CursorColumn(); got != 6 {
-		t.Errorf(`input "你好": CursorColumn() = %d, want 6`, got)
+func TestInputWrapPreservesSpaces(t *testing.T) {
+	im := NewInputModel()
+	im.SetWidth(12)
+	text := "abc   def     中文  xyz"
+	im.insertString(text)
+	if got := strings.Join(im.segments(text), ""); got != text {
+		t.Fatalf("lost whitespace: %q", got)
 	}
+}
 
-	// 光标移到行首（在 "你" 上）：prompt 后第 0 列内容位 = 2
-	im.cursorX = 0
-	if got := im.CursorColumn(); got != 2 {
-		t.Errorf("cursor at home: CursorColumn() = %d, want 2", got)
+func TestViewFitsWithLongDraft(t *testing.T) {
+	for _, height := range []int{1, 4, 5, 8, 24} {
+		m := New(&runtime.AgentSession{}, slashcmd.NewRegistry(), false)
+		m.Update(tea.WindowSizeMsg{Width: 30, Height: height})
+		m.input.insertString(strings.Repeat("中文 very long line\n", 40) + "END")
+		for _, y := range []int{0, 20, 40} {
+			m.input.cursorY = y
+			m.input.cursorX = 0
+			view := m.View()
+			if lipgloss.Height(view) > height {
+				t.Fatalf("window=%d rendered=%d", height, lipgloss.Height(view))
+			}
+			for _, line := range strings.Split(view, "\n") {
+				if lipgloss.Width(line) > 30 {
+					t.Fatal("line overflow")
+				}
+			}
+		}
 	}
+}
 
-	// 长行软换行：光标在第一段末尾（断行位）——逻辑光标归第一段，
-	// 终端光标却停在最后一行（第二段），行不一致只能退 0（旧行为）
-	im.Reset()
-	im.cursorX = 0
-	im.insertString(strings.Repeat("a", 78) + "中文")
-	im.cursorX = 78
-	if got := im.CursorColumn(); got != 0 {
-		t.Errorf("cursor at wrap boundary (segment mismatch): CursorColumn() = %d, want 0", got)
+func TestStreamingUsesSingleTimer(t *testing.T) {
+	m := New(&runtime.AgentSession{}, slashcmd.NewRegistry(), false)
+	_, first := m.Update(StreamTextMsg{Delta: "a"})
+	_, second := m.Update(StreamTextMsg{Delta: "b"})
+	if first == nil || second != nil {
+		t.Fatal("stream deltas must share one timer")
 	}
-
-	// 软换行且光标真在最后一段：列 = 前段内容宽 + 段内偏移
-	im.cursorX = 79 // "中" 上（第二段第 0 列）
-	if got := im.CursorColumn(); got != 2 {
-		t.Errorf("cursor on wrapped last segment: CursorColumn() = %d, want 2", got)
-	}
-	im.cursorX = 81 // "文" 之后（第二段段尾）
-	if got := im.CursorColumn(); got != 6 {
-		t.Errorf("cursor at end of wrapped last segment: CursorColumn() = %d, want 6", got)
-	}
-
-	// 多行输入：光标在第一行、后面还有空行（View 最后一行不是光标行）→ 退回 0
-	im.Reset()
-	im.insertString("hi")
-	im.newLine() // cursorY=1（空行），光标在此行 → 最后一行就是光标行
-	if got := im.CursorColumn(); got != 2 {
-		t.Errorf("cursor on trailing empty line: CursorColumn() = %d, want 2", got)
-	}
-	im.cursorUp() // 光标移回第一行 "hi|"，最后一行是空行 → 0
-	if got := im.CursorColumn(); got != 0 {
-		t.Errorf("cursor above last rendered line: CursorColumn() = %d, want 0", got)
+	_, next := m.Update(TickMsg{})
+	if next == nil || m.viewport.streaming != "ab" {
+		t.Fatal("tick should flush and schedule once")
 	}
 }
 
@@ -544,5 +549,25 @@ func TestViewport_IncrementalRenderMatchesFull(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(v.lines, "\n"), "你好") {
 		t.Fatalf("shrunken viewport should contain only first message")
+	}
+}
+
+func TestViewportResizeClampsScroll(t *testing.T) {
+	v := NewMessageViewport(30, 4)
+	v.SetMessages([]ChatMessage{{Role: "user", Content: strings.Repeat("line\n", 40)}})
+	v.ScrollUp(2)
+	v.Resize(30, 80)
+	if v.scrollOffset != 0 || v.NewLinesCount() < 0 {
+		t.Fatal("resize left an invalid scroll position")
+	}
+}
+
+func TestConfirmationStaysInsideFrame(t *testing.T) {
+	m := New(&runtime.AgentSession{}, slashcmd.NewRegistry(), false)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.confirmation.Show("id", "bash", strings.Repeat("long description ", 200))
+	view := m.View()
+	if lipgloss.Height(view) != 24 || !strings.Contains(view, "Cancel") {
+		t.Fatal("confirmation must fit and keep action buttons visible")
 	}
 }

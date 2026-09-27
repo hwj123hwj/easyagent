@@ -38,7 +38,7 @@ func (sb *StatusBar) Render(
 	switch status {
 	case "busy":
 		spinner := spinnerChars[spinnerIdx%len(spinnerChars)]
-		statusPart = sb.theme.StatusBusy.Render(spinner+" working")
+		statusPart = sb.theme.StatusBusy.Render(spinner + " working")
 	case "error":
 		statusPart = sb.theme.StatusError.Render("● error")
 	case "thinking":
@@ -55,10 +55,9 @@ func (sb *StatusBar) Render(
 	// Token usage
 	tokenPart := ""
 	if inputTokens > 0 || outputTokens > 0 {
-		total := inputTokens + outputTokens
 		tokenPart = sb.theme.StatusDim.Render("tokens: ") +
 			sb.theme.StatusAccent.Render(fmt.Sprintf("%s ↑ %s ↓",
-				formatTokenCount(total),
+				formatTokenCount(inputTokens),
 				formatTokenCount(outputTokens)))
 	}
 

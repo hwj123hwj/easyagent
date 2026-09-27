@@ -1,11 +1,13 @@
 package tea
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -555,63 +557,119 @@ var spaceRunes = []rune{' '}
 
 // readAnsiInputs reads keypress and mouse inputs from a TTY and produces messages
 // containing information about the key or mouse events accordingly.
+// escapeInputDelay distinguishes a standalone Escape key from a split report.
+// A short OS read is not an event boundary (including the initial ESC or CSI).
+const escapeInputDelay = 100 * time.Millisecond
+
 func readAnsiInputs(ctx context.Context, msgs chan<- Msg, input io.Reader) error {
-	var buf [256]byte
-
-	var leftOverFromPrevIteration []byte
-loop:
-	for {
-		// Read and block.
-		numBytes, err := input.Read(buf[:])
-		if err != nil {
-			return fmt.Errorf("error reading input: %w", err)
-		}
-		b := buf[:numBytes]
-		if leftOverFromPrevIteration != nil {
-			b = append(leftOverFromPrevIteration, b...)
-		}
-
-		// If we had a short read (numBytes < len(buf)), we're sure that
-		// the end of this read is an event boundary, so there is no doubt
-		// if we are encountering the end of the buffer while parsing a message.
-		// However, if we've succeeded in filling up the buffer, there may
-		// be more data in the OS buffer ready to be read in, to complete
-		// the last message in the input. In that case, we will retry with
-		// the left over data in the next iteration.
-		canHaveMoreData := numBytes == len(buf)
-
-		var i, w int
-		for i, w = 0, 0; i < len(b); i += w {
-			var msg Msg
-			w, msg = detectOneMsg(b[i:], canHaveMoreData)
-			if w == 0 {
-				// Expecting more bytes beyond the current buffer. Try waiting
-				// for more input.
-				leftOverFromPrevIteration = make([]byte, 0, len(b[i:])+len(buf))
-				leftOverFromPrevIteration = append(leftOverFromPrevIteration, b[i:]...)
-				continue loop
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type inputChunk struct {
+		data []byte
+		err  error
+		full bool
+	}
+	chunks := make(chan inputChunk, 1)
+	go func() {
+		for {
+			buf := make([]byte, 256)
+			n, err := input.Read(buf)
+			select {
+			case chunks <- inputChunk{buf[:n], err, n == len(buf)}:
+			case <-ctx.Done():
+				return
 			}
-
+			if err != nil {
+				return
+			}
+		}
+	}()
+	var pending []byte
+	var readErr error
+	var timer *time.Timer
+	var deadline <-chan time.Time
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	for {
+		expired, full := false, false
+		select {
+		case chunk := <-chunks:
+			pending = append(pending, chunk.data...)
+			readErr = chunk.err
+			full = chunk.full
+		case <-deadline:
+			expired = true
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if timer != nil {
+			timer.Stop()
+			timer = nil
+			deadline = nil
+		}
+		for len(pending) > 0 {
+			var w int
+			var msg Msg
+			ambiguous := bytes.Equal(pending, []byte("\x1b")) || bytes.Equal(pending, []byte("\x1b[")) || bytes.Equal(pending, []byte("\x1bO"))
+			if !ambiguous || expired || readErr != nil {
+				w, msg = detectOneMsg(pending, full && !expired && readErr == nil)
+			}
+			if w == 0 {
+				if expired || readErr != nil {
+					// Incomplete control reports are diagnostic messages, never text input.
+					// Standalone ESC is handled normally above; bracketed paste waits below.
+					w, msg = len(pending), unknownCSISequenceMsg(append([]byte(nil), pending...))
+				} else {
+					if pending[0] == '\x1b' && !bytes.HasPrefix(pending, []byte("\x1b[200~")) {
+						timer = time.NewTimer(escapeInputDelay)
+						deadline = timer.C
+					}
+					break
+				}
+			}
 			select {
 			case msgs <- msg:
 			case <-ctx.Done():
-				err := ctx.Err()
-				if err != nil {
-					err = fmt.Errorf("found context error while reading input: %w", err)
-				}
-				return err
+				return ctx.Err()
 			}
+			pending = pending[w:]
 		}
-		leftOverFromPrevIteration = nil
+		if readErr != nil {
+			return fmt.Errorf("error reading input: %w", readErr)
+		}
 	}
 }
 
 var (
 	unknownCSIRe  = regexp.MustCompile(`^\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]`)
-	mouseSGRRegex = regexp.MustCompile(`(\d+);(\d+);(\d+)([Mm])`)
+	mouseSGRRegex = regexp.MustCompile(`^(\d+);(\d+);(\d+)([Mm])`)
 )
 
 func detectOneMsg(b []byte, canHaveMoreData bool) (w int, msg Msg) {
+	// HWJ: mouse reports can be split at any read boundary. Never interpret a
+	// partial report as Alt+[ followed by printable input. Short reads are not
+	// guaranteed to end at an event boundary either.
+	if canHaveMoreData && (string(b) == "\x1b" || string(b) == "\x1b[") {
+		return 0, nil
+	}
+	if len(b) >= 3 && string(b[:3]) == "\x1b[M" && len(b) < 6 {
+		return 0, nil
+	}
+	if len(b) >= 3 && string(b[:3]) == "\x1b[<" && len(b) < 64 {
+		partial := true
+		for _, ch := range b[3:] {
+			if ch != ';' && (ch < '0' || ch > '9') {
+				partial = false
+				break
+			}
+		}
+		if partial {
+			return 0, nil
+		}
+	}
 	// Detect mouse events.
 	// X10 mouse events have a length of 6 bytes
 	const mouseEventX10Len = 6
@@ -623,7 +681,7 @@ func detectOneMsg(b []byte, canHaveMoreData bool) (w int, msg Msg) {
 			if matchIndices := mouseSGRRegex.FindSubmatchIndex(b[3:]); matchIndices != nil {
 				// SGR mouse events length is the length of the match plus the length of the escape sequence
 				mouseEventSGRLen := matchIndices[1] + 3 //nolint:mnd
-				return mouseEventSGRLen, MouseMsg(parseSGRMouseEvent(b))
+				return mouseEventSGRLen, MouseMsg(parseSGRMouseEvent(b[:mouseEventSGRLen]))
 			}
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // MessageViewport is a scrollable viewport that renders conversation messages
@@ -13,7 +14,8 @@ type MessageViewport struct {
 	width               int
 	height              int
 	messages            []ChatMessage
-	streaming           string   // text being streamed (not yet finalized)
+	streaming           string // text being streamed (not yet finalized)
+	toolTargets         map[int]toolTarget
 	lines               []string // rendered lines (cached)
 	cachedLines         []string // rendered message lines (without streaming) — cached for incremental updates
 	cachedCount         int      // cachedLines 覆盖的 messages 前缀长度（增量渲染用）
@@ -39,7 +41,7 @@ func NewMessageViewport(width, height int) MessageViewport {
 // Resize updates the viewport dimensions and markdown renderer width.
 func (v *MessageViewport) Resize(width, height int) {
 	v.width = width
-	v.height = height
+	v.height = max(1, height)
 	if v.md != nil {
 		v.md.SetWidth(width - 2) // account for left padding
 	}
@@ -72,6 +74,7 @@ func (v *MessageViewport) Clear() {
 	v.messages = nil
 	v.streaming = ""
 	v.lines = nil
+	v.toolTargets = nil
 	v.cachedLines = nil
 	v.cachedCount = 0
 	v.scrollOffset = 0
@@ -84,7 +87,7 @@ func (v *MessageViewport) ScrollUp(n int) {
 	if v.scrollOffset < 0 {
 		v.scrollOffset = 0
 	}
-	v.userScrolled = true
+	v.userScrolled = v.scrollOffset < max(0, len(v.lines)-v.height)
 }
 
 // ScrollDown moves the viewport down by n lines.
@@ -116,12 +119,12 @@ func (v *MessageViewport) GotoBottom() {
 	v.newLinesSinceScroll = 0
 }
 
-// NewLinesCount returns how many new lines appeared since user scrolled up.
+// NewLinesCount returns how many transcript lines are below the visible page.
 func (v *MessageViewport) NewLinesCount() int {
 	if !v.userScrolled {
 		return 0
 	}
-	return len(v.lines) - v.scrollOffset - v.height
+	return max(0, len(v.lines)-v.scrollOffset-v.height)
 }
 
 // View renders the visible portion of the viewport.
@@ -157,25 +160,6 @@ func (v *MessageViewport) View() string {
 		visible = append(visible, "")
 	}
 
-	// Add scroll indicator if user has scrolled up
-	if v.userScrolled && v.NewLinesCount() > 0 {
-		newLines := v.NewLinesCount()
-		indicator := v.theme.StatusDim.Render(fmt.Sprintf(" ↑ %d new (scroll down to view) ", newLines))
-		if len(visible) > 0 {
-			visible[len(visible)-1] = indicator
-		}
-	} else if v.userScrolled {
-		totalLines := len(v.lines)
-		percent := int(float64(v.scrollOffset) / float64(totalLines) * 100)
-		if percent < 0 {
-			percent = 0
-		}
-		indicator := v.theme.StatusDim.Render(fmt.Sprintf(" ↑ %d%% (scroll for more) ", percent))
-		if len(visible) > 0 {
-			visible[len(visible)-1] = indicator
-		}
-	}
-
 	return strings.Join(visible, "\n")
 }
 
@@ -189,6 +173,7 @@ func (v *MessageViewport) rebuildLines() {
 		cacheValid = false
 	}
 	if !cacheValid {
+		v.toolTargets = make(map[int]toolTarget)
 		v.cachedLines = nil
 		v.cachedCount = 0
 	}
@@ -206,14 +191,20 @@ func (v *MessageViewport) rebuildLines() {
 	if v.cachedLines != nil && start > 0 {
 		// 复用前 start 条；先取总行数（= 第 start 条的起始行）再截断过期条目
 		reuseLines := v.cachedOffsets[start]
+		for row := range v.toolTargets {
+			if row >= reuseLines {
+				delete(v.toolTargets, row)
+			}
+		}
 		v.cachedOffsets = v.cachedOffsets[:start]
 		newLines = append(newLines, v.cachedLines[:reuseLines]...)
 	} else {
 		v.cachedOffsets = nil
+		v.toolTargets = make(map[int]toolTarget)
 	}
 	for i := start; i < len(v.messages); i++ {
 		v.cachedOffsets = append(v.cachedOffsets, len(newLines))
-		newLines = append(newLines, v.renderMessage(v.messages[i])...)
+		newLines = append(newLines, v.renderMessage(v.messages[i], i, len(newLines))...)
 	}
 	v.cachedLines = newLines
 	v.cachedCount = len(v.messages)
@@ -232,10 +223,14 @@ func (v *MessageViewport) rebuildLines() {
 	// Smart auto-scroll: only jump to bottom if user hasn't scrolled up
 	if !v.userScrolled {
 		v.GotoBottom()
+	} else {
+		v.scrollOffset = min(v.scrollOffset, max(0, len(v.lines)-v.height))
 	}
 }
 
-func (v *MessageViewport) renderMessage(msg ChatMessage) []string {
+func (v *MessageViewport) renderMessage(msg ChatMessage, messageIndex, baseRow int) []string {
+	msg.Content = terminalText(msg.Content)
+	msg.Role = terminalText(msg.Role)
 	var lines []string
 
 	// Role label with timestamp
@@ -291,10 +286,15 @@ func (v *MessageViewport) renderMessage(msg ChatMessage) []string {
 		}
 	}
 
-	// Tool calls
-	for _, tool := range msg.Tools {
-		panel := NewToolPanel(tool, v.width-2) // account for left padding
-		lines = append(lines, panel.Render()...)
+	if len(msg.Tools) > 0 {
+		v.toolTargets[baseRow+len(lines)] = toolTarget{message: messageIndex, tool: -1, expanded: msg.ToolsExpanded}
+		lines = append(lines, v.toolGroupHeader(msg))
+		if msg.ToolsExpanded {
+			for i, tool := range msg.Tools {
+				v.toolTargets[baseRow+len(lines)] = toolTarget{message: messageIndex, tool: i, expanded: !tool.Collapsed}
+				lines = append(lines, NewToolPanel(tool, v.width).Render()...)
+			}
+		}
 	}
 
 	lines = append(lines, "") // blank line separator
@@ -303,6 +303,7 @@ func (v *MessageViewport) renderMessage(msg ChatMessage) []string {
 }
 
 func (v *MessageViewport) renderStreaming(text string) []string {
+	text = terminalText(text)
 	var lines []string
 
 	lines = append(lines, fmt.Sprintf("%s %s",
@@ -330,3 +331,7 @@ func wrapVisual(line string, width int) []string {
 	wrapped := lipgloss.NewStyle().Width(width).MaxWidth(width).Render(line)
 	return strings.Split(wrapped, "\n")
 }
+
+// terminalText removes control sequences from external text before adding UI
+// styles. Tool/model output must never change terminal modes or cursor state.
+func terminalText(text string) string { return sanitizeInput(ansi.Strip(text)) }

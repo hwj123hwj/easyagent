@@ -1,23 +1,21 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/hwj123hwj/easyagent/sdk/agent"
 )
 
 // ConfirmationState manages the yes/no confirmation dialog overlay.
 // When active, all key input is routed to the dialog instead of the input editor.
 type ConfirmationState struct {
-	active       bool
-	description  string
-	toolCallID   string
-	selected     int // 0=Yes, 1=No
-	toolName     string
-	resultChan   chan ConfirmationResultMsg
+	active      bool
+	description string
+	toolCallID  string
+	selected    int // 0=Yes, 1=No
+	toolName    string
+	resultChan  chan ConfirmationResultMsg
 }
 
 // NewConfirmationState creates a new confirmation state.
@@ -36,7 +34,7 @@ func (cs *ConfirmationState) IsActive() bool {
 // Show activates the confirmation dialog.
 func (cs *ConfirmationState) Show(toolCallID, toolName, description string) {
 	cs.active = true
-	cs.description = description
+	cs.description = terminalText(description)
 	cs.toolCallID = toolCallID
 	cs.toolName = toolName
 	cs.selected = 0 // default to Yes
@@ -55,6 +53,9 @@ func (cs *ConfirmationState) HandleKey(msg tea.KeyMsg) (approved bool, consumed 
 		return false, false, false
 	}
 
+	if msg.Type == tea.KeyEnter {
+		return cs.selected == 0, true, true
+	}
 	action := DefaultKeyBindings.ResolveConfirmation(msg)
 
 	switch action {
@@ -101,32 +102,7 @@ func (cs *ConfirmationState) Render(width int) string {
 // wireConfirmationCallback sets up the agent's confirmation function to use
 // the TUI dialog instead of auto-approving.
 func (m *TuiModel) wireConfirmationCallback() {
-	m.session.SetConfirmFunc(func(ctx context.Context, req agent.ConfirmationRequest) agent.ConfirmDecision {
-		// If context is cancelled, deny
-		if ctx.Err() != nil {
-			return agent.ConfirmDecision{Approved: false, Reason: "context cancelled"}
-		}
-
-		// Show the confirmation dialog
-		m.confirmation.Show(req.ToolCallID, req.ToolName, req.Description)
-
-		// Send a message to the TUI to re-render
-		if m.program != nil {
-			m.program.Send(ConfirmationMsg{Req: req})
-		}
-
-		// Wait for user response
-		select {
-		case result := <-m.confirmation.resultChan:
-			return agent.ConfirmDecision{
-				Approved: result.Approved,
-				Reason:   "",
-			}
-		case <-ctx.Done():
-			m.confirmation.Hide()
-			return agent.ConfirmDecision{Approved: false, Reason: "context cancelled"}
-		}
-	})
+	m.session.SetConfirmFunc(m.handleConfirmation)
 }
 
 // ConfirmationResultMsg carries the user's decision from the dialog.
@@ -177,7 +153,10 @@ func (m *TuiModel) renderConfirmationOverlay() string {
 }
 
 // ConfirmationMsg is a message sent when a confirmation is requested.
+type confirmationCancelledMsg struct{ result chan ConfirmationResultMsg }
+
 type ConfirmationDialogMsg struct {
+	Result      chan ConfirmationResultMsg
 	ToolCallID  string
 	ToolName    string
 	Description string

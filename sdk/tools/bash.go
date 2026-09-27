@@ -53,8 +53,10 @@ func NewBashTool(opts ...BashToolOption) *BashTool {
 	return t
 }
 
-func (t *BashTool) Name() string        { return "bash" }
-func (t *BashTool) Description() string { return "Execute a shell command on the server." }
+func (t *BashTool) Name() string { return "bash" }
+func (t *BashTool) Description() string {
+	return "Execute a non-interactive shell command on the server. No terminal or password input is available; use sudo -n when elevated access is needed."
+}
 func (t *BashTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",

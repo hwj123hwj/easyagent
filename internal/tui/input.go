@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // InputModel is a multi-line text input editor.
@@ -64,9 +65,9 @@ func (im *InputModel) wrapWidth(firstLine bool) int {
 		return 0
 	}
 	if firstLine {
-		return im.width - 2
+		return im.width - 3
 	}
-	return im.width - 2
+	return im.width - 3
 }
 
 // IsEmpty returns true if there's no text.
@@ -77,6 +78,7 @@ func (im *InputModel) IsEmpty() bool {
 // Reset clears the input.
 func (im *InputModel) Reset() {
 	im.saveUndo()
+	im.histIdx = -1
 	im.lines = []string{""}
 	im.cursorX = 0
 	im.cursorY = 0
@@ -140,6 +142,10 @@ func (im *InputModel) HandleKey(msg tea.KeyMsg) {
 		// Bubble Tea may pass as KeyRunes. If we insert them, they leak
 		// into the message and corrupt API URLs.
 		if msg.Type == tea.KeyRunes {
+			if msg.Paste {
+				im.insertString(sanitizeInput(strings.ReplaceAll(strings.ReplaceAll(string(msg.Runes), "\r\n", "\n"), "\r", "\n")))
+				return
+			}
 			cleaned := sanitizeRunes(msg.Runes)
 			if len(cleaned) > 0 {
 				im.insertString(string(cleaned))
@@ -154,7 +160,7 @@ func (im *InputModel) View() string {
 
 	for i, line := range im.lines {
 		// Bugfix: 长行按可视宽度软换行（CJK 感知），之前渲染成单行被终端截断。
-		segments := wrapVisual(line, im.wrapWidth(i == 0))
+		segments := im.segments(line)
 		for j, seg := range segments {
 			if i == 0 && j == 0 {
 				// First line: styled prompt
@@ -179,14 +185,14 @@ func (im *InputModel) View() string {
 }
 
 // segmentCursorBounds 返回第 segIdx 段在逻辑行内的 [start, end) 逻辑列区间。
-// 每个非末段末尾的换行占一个逻辑位置（对应真实换行/折行边界）。
+// 软换行不占用逻辑字符位置。
 func segmentCursorBounds(segments []string, segIdx int) (start, end int) {
 	for i, seg := range segments {
 		segLen := len([]rune(seg))
 		if i == segIdx {
 			return start, start + segLen
 		}
-		start += segLen + 1 // +1 for the break
+		start += segLen // soft wraps do not consume a character
 	}
 	return start, start
 }
@@ -194,9 +200,9 @@ func segmentCursorBounds(segments []string, segIdx int) (start, end int) {
 // segmentHoldsCursor 判断逻辑列 cursorX 是否落在第 segIdx 段（含段尾断行位）。
 func segmentHoldsCursor(segments []string, segIdx, cursorX int) bool {
 	start, end := segmentCursorBounds(segments, segIdx)
-	// 段尾断行位（cursorX == end 且不是最后一行的段尾）也归该段，光标画在段尾
+	// 非末段的段尾属于下一段的行首。
 	if segIdx < len(segments)-1 {
-		return cursorX >= start && cursorX <= end
+		return cursorX >= start && cursorX < end
 	}
 	return cursorX >= start
 }
@@ -236,39 +242,35 @@ func (im *InputModel) cursorHighlight(ch string) string {
 	return im.theme.InputPrompt.Reverse(true).Render(ch)
 }
 
-// CursorColumn 返回光标在 View() 最后一行上的可视列（0 基）。
-// bubbletea 每帧渲染完把终端光标停在最后一行，输入法内联组词（预编辑串）
-// 跟随终端光标位置；配合 tea.SetCursorColumn（HWJ bubbletea 本地补丁）
-// 让组词串落在光标处而不是行首。
-// 光标不在 View 最后一行（多行输入时编辑前面的行）时返回 0，无更好落点。
-func (im *InputModel) CursorColumn() int {
-	// 找 View 实际渲染的最后一个段（空逻辑行不产生渲染行）
-	lastY := -1
-	var segments []string
-	for i := len(im.lines) - 1; i >= 0; i-- {
-		segments = wrapVisual(im.lines[i], im.wrapWidth(i == 0))
-		if len(segments) > 0 {
-			lastY = i
-			break
+// segments preserves every input character across soft wraps, including spaces.
+func (im *InputModel) segments(line string) []string {
+	width := im.wrapWidth(true)
+	if width <= 0 {
+		return []string{line}
+	}
+	return strings.Split(ansi.Hardwrap(line, width, true), "\n")
+}
+
+// CursorPosition returns the zero-based visual column and row of the caret.
+func (im *InputModel) CursorPosition() (int, int) {
+	row := 0
+	for y, line := range im.lines {
+		segments := im.segments(line)
+		for j, seg := range segments {
+			if y == im.cursorY && segmentHoldsCursor(segments, j, im.cursorX) {
+				offset := segmentCursorOffset(segments, j, im.cursorX)
+				return 2 + lipgloss.Width(string([]rune(seg)[:offset])), row
+			}
+			row++
 		}
 	}
-	if lastY < 0 || im.cursorY != lastY {
-		return 0
-	}
-	segIdx := len(segments) - 1
-	if !segmentHoldsCursor(segments, segIdx, im.cursorX) {
-		return 0
-	}
-	prefix := "  " // 续段缩进
-	if lastY == 0 && segIdx == 0 {
-		prefix = im.prompt + " " // 首段 "› "
-	}
-	localX := segmentCursorOffset(segments, segIdx, im.cursorX)
-	segRunes := []rune(segments[segIdx])
-	if localX > len(segRunes) {
-		localX = len(segRunes)
-	}
-	return lipgloss.Width(prefix) + lipgloss.Width(string(segRunes[:localX]))
+	return 2, maxInt(0, row-1)
+}
+
+// CursorColumn returns the visual column of the caret.
+func (im *InputModel) CursorColumn() int {
+	col, _ := im.CursorPosition()
+	return col
 }
 
 // sanitizeRunes filters out non-printable control characters from a rune slice.
@@ -342,12 +344,22 @@ func (im *InputModel) cursorDown() {
 
 func (im *InputModel) insertString(s string) {
 	im.saveUndo()
-	line := im.lines[im.cursorY]
-	runes := []rune(line)
-	insertAt := im.cursorX
-	newRunes := append(runes[:insertAt], append([]rune(s), runes[insertAt:]...)...)
-	im.lines[im.cursorY] = string(newRunes)
-	im.cursorX += utf8.RuneCountInString(s)
+	runes := []rune(im.lines[im.cursorY])
+	parts := strings.Split(s, "\n")
+	before, after := string(runes[:im.cursorX]), string(runes[im.cursorX:])
+	if len(parts) == 1 {
+		im.lines[im.cursorY] = before + s + after
+		im.cursorX += utf8.RuneCountInString(s)
+		return
+	}
+	replacement := append([]string(nil), im.lines[:im.cursorY]...)
+	replacement = append(replacement, before+parts[0])
+	replacement = append(replacement, parts[1:len(parts)-1]...)
+	replacement = append(replacement, parts[len(parts)-1]+after)
+	replacement = append(replacement, im.lines[im.cursorY+1:]...)
+	im.lines = replacement
+	im.cursorY += len(parts) - 1
+	im.cursorX = utf8.RuneCountInString(parts[len(parts)-1])
 }
 
 func (im *InputModel) backspace() {
@@ -464,13 +476,14 @@ func (im *InputModel) navigateHistory(dir int) {
 		im.cursorY = im.draftCursorY
 		return
 	}
-	im.lines = []string{im.history[im.histIdx]}
-	im.cursorX = utf8.RuneCountInString(im.lines[0])
-	im.cursorY = 0
+	im.lines = strings.Split(im.history[im.histIdx], "\n")
+	im.cursorY = len(im.lines) - 1
+	im.cursorX = utf8.RuneCountInString(im.lines[im.cursorY])
 }
 
 // AddHistory adds a submitted input to history.
 func (im *InputModel) AddHistory(text string) {
+	im.histIdx = -1
 	if text == "" {
 		return
 	}

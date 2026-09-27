@@ -27,6 +27,18 @@ func SetCursorColumn(cols int) {
 		cols = 0
 	}
 	cursorColumn.Store(int64(cols))
+	cursorRow.Store(0)
+}
+
+// cursorRow stores a one-based absolute row for alternate-screen rendering.
+// Zero retains the upstream behavior of parking on the last rendered row.
+var cursorRow atomic.Int64
+
+// SetCursorPosition parks the alternate-screen cursor at zero-based coordinates.
+// HWJ local patch: lets IME composition follow a multi-line editor above a footer.
+func SetCursorPosition(col, row int) {
+	SetCursorColumn(col)
+	cursorRow.Store(int64(max(0, row) + 1))
 }
 
 const (
@@ -294,7 +306,15 @@ func (r *standardRenderer) flush() {
 		// using the full terminal window.
 		// HWJ local patch: park the cursor at the app-requested column so
 		// IME inline composition renders at the text caret.
-		buf.WriteString(ansi.CursorPosition(int(cursorColumn.Load()), len(newLines)))
+		row := len(newLines)
+		if requested := int(cursorRow.Load()); requested > 0 {
+			row = min(requested, len(newLines))
+		}
+		col := int(cursorColumn.Load())
+		if col > 0 {
+			col++
+		}
+		buf.WriteString(ansi.CursorPosition(col, row))
 	} else {
 		buf.WriteByte('\r')
 		if c := int(cursorColumn.Load()); c > 0 {
