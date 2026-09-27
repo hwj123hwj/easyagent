@@ -481,6 +481,14 @@ func (p *Program) eventLoop(model Model, cmds chan Cmd) (Model, error) {
 			case setWindowTitleMsg:
 				p.SetWindowTitle(string(msg))
 
+			case bellMsg:
+				// HWJ local patch: ring the terminal bell.
+				if p.renderer != nil {
+					if r, ok := p.renderer.(*standardRenderer); ok {
+						r.execute("\a")
+					}
+				}
+
 			case windowSizeMsg:
 				go p.checkResize()
 			}

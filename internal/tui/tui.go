@@ -2,9 +2,11 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -61,11 +63,38 @@ type TuiModel struct {
 	modelSelect  bool         // Ctrl+P model selector popup active
 	program      *tea.Program // ref to program for sending msgs
 
+	// 当前 agent 流的取消函数：Ctrl+C 时真正中断底层 LLM 流/工具执行，
+	// 而不只是把 UI 状态置停。cmd goroutine 写、Update goroutine 读，需互斥。
+	streamCancelMu sync.Mutex
+	streamCancel   context.CancelFunc
+
+	// 已应用到 viewport 的流式文本长度（流式 100ms 节流用）
+	appliedStreamLen int
+
 	// App context for slash commands that need session management (/new, /switch, etc.)
 	app slashcmd.AppContext
 
 	// autoApprove 全权模式：跳过危险工具确认（config.auto_approve）
 	autoApprove bool
+}
+
+// registerStreamCancel 在流启动时注册取消函数。
+func (m *TuiModel) registerStreamCancel(cancel context.CancelFunc) {
+	m.streamCancelMu.Lock()
+	m.streamCancel = cancel
+	m.streamCancelMu.Unlock()
+}
+
+// cancelStream 取消当前流（若有）并清空注册，返回是否确实取消了流。
+func (m *TuiModel) cancelStream() bool {
+	m.streamCancelMu.Lock()
+	cancel := m.streamCancel
+	m.streamCancel = nil
+	m.streamCancelMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return cancel != nil
 }
 
 // SetProgram stores a reference to the tea.Program so we can send msgs from callbacks.
@@ -160,7 +189,8 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamBuf += msg.Delta
 		m.streaming = true
 		m.agentBusy = true
-		m.viewport.SetStreaming(m.streamBuf)
+		// 不立即渲染：delta 可能每秒几十个，全量 rebuild + flush 太频繁。
+		// 累加后由 100ms TickMsg 统一应用（节流）。
 		return m, m.spinnerTick()
 
 	case ToolStartMsg:
@@ -233,6 +263,7 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 			m.streamBuf = ""
 		}
+		m.appliedStreamLen = 0
 		m.streaming = false
 		m.agentBusy = false
 		m.spinnerOn = false
@@ -241,12 +272,20 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.outputTokens += msg.OutputTokens
 		m.viewport.SetStreaming("")
 		m.viewport.SetMessages(m.messages)
+		// 终端响铃 + 角标提醒：长任务跑完不用来回瞄（用户已滚屏时才响）
+		if m.viewport.userScrolled || m.viewport.scrollOffset > 0 {
+			return m, tea.Bell()
+		}
 		return m, nil
 
 	case AgentErrorMsg:
 		m.streaming = false
 		m.agentBusy = false
 		m.spinnerOn = false
+		// 用户 Ctrl+C 主动取消导致的 context canceled 不是错误，不打扰
+		if errors.Is(msg.Err, context.Canceled) {
+			return m, nil
+		}
 		m.err = msg.Err
 		m.messages = append(m.messages, ChatMessage{
 			Role:      "system",
@@ -287,6 +326,11 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TickMsg:
 		if m.spinnerOn || m.streaming {
 			m.spinnerIdx++
+			// 节流应用流式文本：100ms 一次，替代每个 delta 全量重渲
+			if m.streaming && len(m.streamBuf) != m.appliedStreamLen {
+				m.appliedStreamLen = len(m.streamBuf)
+				m.viewport.SetStreaming(m.streamBuf)
+			}
 			return m, m.spinnerTick()
 		}
 		return m, nil

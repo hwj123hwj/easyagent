@@ -16,6 +16,9 @@ type MessageViewport struct {
 	streaming           string   // text being streamed (not yet finalized)
 	lines               []string // rendered lines (cached)
 	cachedLines         []string // rendered message lines (without streaming) — cached for incremental updates
+	cachedCount         int      // cachedLines 覆盖的 messages 前缀长度（增量渲染用）
+	cachedWidth         int      // 生成缓存时的视口宽度（Resize 后缓存失效）
+	cachedOffsets       []int    // 每条消息在 cachedLines 中的起始行号（增量拼接用）
 	scrollOffset        int
 	userScrolled        bool // true if user manually scrolled up
 	newLinesSinceScroll int  // lines added since user scrolled up
@@ -44,10 +47,15 @@ func (v *MessageViewport) Resize(width, height int) {
 }
 
 // SetMessages updates the message list and rebuilds the view.
+// 增量渲染：除最后一条外消息不可变（工具开始/结束只改最后一条），
+// 前缀缓存直接复用，只重渲新增部分 + 最后一条。长会话不再全量重渲。
 func (v *MessageViewport) SetMessages(msgs []ChatMessage) {
 	v.messages = msgs
-	// Invalidate message cache — messages changed
-	v.cachedLines = nil
+	if len(msgs) < v.cachedCount {
+		// /new、/switch 等清空或截断了历史 → 全量重建
+		v.cachedLines = nil
+		v.cachedCount = 0
+	}
 	v.rebuildLines()
 }
 
@@ -65,6 +73,7 @@ func (v *MessageViewport) Clear() {
 	v.streaming = ""
 	v.lines = nil
 	v.cachedLines = nil
+	v.cachedCount = 0
 	v.scrollOffset = 0
 	v.userScrolled = false
 }
@@ -173,13 +182,42 @@ func (v *MessageViewport) View() string {
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 func (v *MessageViewport) rebuildLines() {
-	// Cache message lines if not yet cached
-	if v.cachedLines == nil {
+	// 增量渲染：复用已缓存前缀，只渲染新增消息 + 最后一条（可能被工具事件改动）。
+	// Resize 改宽度会使旧缓存失效（换行宽度不同），需全量重渲。
+	cacheValid := v.cachedLines != nil && v.cachedCount > 0 && v.cachedCount <= len(v.messages)
+	if cacheValid && v.width != v.cachedWidth {
+		cacheValid = false
+	}
+	if !cacheValid {
 		v.cachedLines = nil
-		for _, msg := range v.messages {
-			v.cachedLines = append(v.cachedLines, v.renderMessage(msg)...)
+		v.cachedCount = 0
+	}
+
+	// 从第一个未缓存的整十消息边界起，重渲 [cachedCount-1, len)：
+	// 最后一条缓存消息可能因工具事件变化，重新渲染它
+	start := 0
+	if v.cachedLines != nil {
+		start = v.cachedCount - 1
+		if start < 0 {
+			start = 0
 		}
 	}
+	var newLines []string
+	if v.cachedLines != nil && start > 0 {
+		// 复用前 start 条；先取总行数（= 第 start 条的起始行）再截断过期条目
+		reuseLines := v.cachedOffsets[start]
+		v.cachedOffsets = v.cachedOffsets[:start]
+		newLines = append(newLines, v.cachedLines[:reuseLines]...)
+	} else {
+		v.cachedOffsets = nil
+	}
+	for i := start; i < len(v.messages); i++ {
+		v.cachedOffsets = append(v.cachedOffsets, len(newLines))
+		newLines = append(newLines, v.renderMessage(v.messages[i])...)
+	}
+	v.cachedLines = newLines
+	v.cachedCount = len(v.messages)
+	v.cachedWidth = v.width
 
 	// Combine cached message lines + streaming lines
 	var lines []string

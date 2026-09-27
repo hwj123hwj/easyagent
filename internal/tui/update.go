@@ -49,6 +49,8 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.streaming = false
 			m.agentBusy = false
 			m.spinnerOn = false
+			// 真正中断底层 LLM 流/工具执行（否则 token 会烧到本轮结束）
+			m.cancelStream()
 			// Save partial response and clear stream buffer
 			if m.streamBuf != "" {
 				m.messages = append(m.messages, ChatMessage{
@@ -58,6 +60,7 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				})
 				m.streamBuf = ""
 			}
+			m.appliedStreamLen = 0
 			m.viewport.SetStreaming("")
 			m.viewport.SetMessages(m.messages)
 			return m, nil
@@ -349,7 +352,10 @@ func (m *TuiModel) sendMessage(input string) (tea.Model, tea.Cmd) {
 func (m *TuiModel) startAgentStream(input string) tea.Cmd {
 	program := m.program // capture before goroutine starts
 	return func() tea.Msg {
-		ctx := context.Background()
+		// 可取消 ctx：Ctrl+C 中断时真正掐断底层 LLM 流与工具执行
+		ctx, cancel := context.WithCancel(context.Background())
+		m.registerStreamCancel(cancel)
+		defer cancel()
 		stream, err := m.session.PromptStream(ctx, input)
 		if err != nil {
 			return AgentErrorMsg{Err: err}
