@@ -21,6 +21,8 @@ systemctl --user enable --now easyagent-update.timer
 
 按实际主机修改 deploy.env 中 Go 路径和健康检查地址。配置 `EA_DEPLOY_BRIDGE_BIN` 后，桥接程序与主程序一起替换、重启和回滚，并检查桥接服务处于 active；没有桥接服务的主机省略该变量。桥接使用长连接，现有服务退出最多可能等待 90 秒。保持用户 linger 开启，使服务在 SSH 退出后继续运行。更新器无需 GitHub Runner；不执行 PR 分支，不开放远程命令入口。生产服务已有的工具权限和网络监听设置保持不变。
 
+2026-09-27 验收时，迷你主机现有桥接二进制包含 `OpenOwnerAccess` / `SetOwnerAccess` 身份限制，而当时 main 尚未包含对应代码，因此该主机暂未设置 `EA_DEPLOY_BRIDGE_BIN`，保留现有桥接程序。待这些权限改动合并并验证后再开启桥接同步，不能用缺少权限控制的版本覆盖线上程序。
+
 ## 运维
 
 ```bash
