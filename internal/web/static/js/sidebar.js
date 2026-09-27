@@ -12,6 +12,8 @@ export class Sidebar {
     this.newSessionBtn = document.getElementById('new-session-btn');
     this.connectionStatus = document.getElementById('connection-status');
 
+    this.search = document.getElementById('session-search');
+    this.search.addEventListener('input', () => this._renderSessions());
     this._bindEvents();
     this._bindWS();
   }
@@ -22,7 +24,8 @@ export class Sidebar {
     this.modelSelect.addEventListener('change', () => {
       const val = this.modelSelect.value;
       if (!val || !this.state.currentSessionId) return;
-      const [provider, model] = val.split('/');
+      const slash = val.indexOf('/');
+      const provider = val.slice(0, slash), model = val.slice(slash + 1);
       this.ws.sendSwitchModel(this.state.currentSessionId, model, provider);
     });
 
@@ -64,30 +67,32 @@ export class Sidebar {
   async loadSessions() {
     try {
       const resp = await authFetch(`${this.state.baseUrl}/sessions`);
-      if (!resp.ok) return;
-      this.state.sessions = await resp.json();
+      if (!resp.ok) throw new Error('请求失败（' + resp.status + '）');
+      this.state.sessions = await resp.json() || [];
       this._renderSessions();
     } catch (e) {
-      console.error('Failed to load sessions:', e);
+      this.sessionList.textContent = '对话加载失败，请刷新重试。';
     }
   }
 
   async loadModels() {
     try {
       const resp = await authFetch(`${this.state.baseUrl}/models`);
-      if (!resp.ok) return;
+      if (!resp.ok) throw new Error('请求失败（' + resp.status + '）');
       const data = await resp.json();
       this.state.models = data.models || [];
       this._renderModels(data.current);
     } catch (e) {
-      console.error('Failed to load models:', e);
+      this.modelSelect.replaceChildren(new Option('模型加载失败', ''));
     }
   }
 
-  async createSession() {
+  async createSession({select = true} = {}) {
+    if (this.creating) return null;
+    this.creating = true; this.newSessionBtn.disabled = true;
     try {
       const resp = await authFetch(`${this.state.baseUrl}/sessions`, { method: 'POST' });
-      if (!resp.ok) return;
+      if (!resp.ok) throw new Error('请求失败（' + resp.status + '）');
       const data = await resp.json();
       this.state.sessions.unshift({
         id: data.id,
@@ -96,18 +101,22 @@ export class Sidebar {
         last_active: data.created_at,
       });
       this._renderSessions();
-      this.selectSession(data.id);
+      if (select) await this.selectSession(data.id);
+      return data.id;
     } catch (e) {
-      console.error('Failed to create session:', e);
-    }
+      const notice = document.getElementById('chat-notice'); notice.textContent = '新建失败：' + e.message; notice.hidden = false;
+      return null;
+    } finally { this.creating = false; this.newSessionBtn.disabled = false; }
   }
 
   async deleteSession(sessionId) {
+    if (!confirm("确认删除这条对话？此操作不可恢复。")) return;
     try {
       const resp = await authFetch(`${this.state.baseUrl}/sessions/${sessionId}`, { method: 'DELETE' });
-      if (!resp.ok) return;
+      if (!resp.ok) throw new Error('请求失败（' + resp.status + '）');
       this.state.sessions = this.state.sessions.filter(s => s.id !== sessionId);
       if (this.state.currentSessionId === sessionId) {
+        history.replaceState(null, '', location.pathname + location.search);
         this.state.currentSessionId = null;
         this.onSessionChange(null);
       }
@@ -117,55 +126,41 @@ export class Sidebar {
     }
   }
 
-  selectSession(sessionId) {
+  async selectSession(sessionId) {
     this.state.currentSessionId = sessionId;
     this._renderSessions();
-    this.onSessionChange(sessionId);
+    history.replaceState(null, "", "#s=" + encodeURIComponent(sessionId));
+    await this.onSessionChange(sessionId);
   }
 
   _renderSessions() {
-    if (this.state.sessions.length === 0) {
-      this.sessionList.innerHTML = '<div class="empty-sessions">还没有对话</div>';
-      return;
+    const query = this.search.value.trim().toLocaleLowerCase();
+    const sessions = this.state.sessions.filter(s => (s.title || '新对话').toLocaleLowerCase().includes(query));
+    document.getElementById('session-count').textContent = this.state.sessions.length;
+    this.sessionList.replaceChildren();
+    if (!sessions.length) {
+      const empty = document.createElement('p'); empty.className = 'empty-sessions';
+      empty.textContent = query ? '没有找到匹配的对话' : '从一个新对话开始'; this.sessionList.append(empty); return;
     }
-
-    this.sessionList.innerHTML = this.state.sessions.map(s => {
-      const active = s.id === this.state.currentSessionId ? ' active' : '';
-      const title = this._formatSessionTitle(s);
-      const meta = this._formatSessionMeta(s);
-      return `
-        <div class="session-item${active}" data-session-id="${s.id}">
-          <div class="session-info">
-            <div class="session-title">${title}</div>
-            <div class="session-meta">${meta}</div>
-          </div>
-          <button class="delete-btn" title="删除">✕</button>
-        </div>
-      `;
-    }).join('');
+    for (const s of sessions) {
+      const item = document.createElement('div'); item.className = 'session-item' + (s.id === this.state.currentSessionId ? ' active' : ''); item.dataset.sessionId = s.id;
+      const open = document.createElement('button'); open.className = 'session-open';
+      const title = document.createElement('span'); title.className = 'session-title'; title.textContent = (s.title || '').trim() || '新对话'; open.title = title.textContent;
+      const meta = document.createElement('span'); meta.className = 'session-meta'; meta.textContent = this._formatSessionMeta(s); open.append(title, meta);
+      const remove = document.createElement('button'); remove.className = 'delete-btn'; remove.textContent = '×'; remove.setAttribute('aria-label', '删除对话：' + title.textContent);
+      item.append(open, remove); this.sessionList.append(item);
+    }
   }
-
   _renderModels(current) {
-    if (!this.state.models.length) {
-      this.modelSelect.innerHTML = '<option value="">No models</option>';
-      return;
+    this.modelSelect.replaceChildren();
+    if (!this.state.models.length) { this.modelSelect.append(new Option('暂无可用模型', '')); return; }
+    const models = [...this.state.models];
+    if (current?.id && !models.some(m => m.id === current.id && m.provider === current.provider)) models.unshift(current);
+    for (const model of models) {
+      const option = new Option(model.name || model.id, `${model.provider}/${model.id}`);
+      option.selected = current?.id === model.id && (!current.provider || current.provider === model.provider);
+      this.modelSelect.append(option);
     }
-
-    this.modelSelect.innerHTML = this.state.models.map(m => {
-      const val = `${m.provider}/${m.id}`;
-      const selected = current && current.id === m.id ? ' selected' : '';
-      return `<option value="${val}"${selected}>${m.name || m.id}</option>`;
-    }).join('');
-  }
-
-  _formatSessionTitle(s) {
-    // 后端 List 已提取首条用户消息作为标题；空会话回退为"新对话"
-    const t = (s.title || '').trim();
-    if (!t) return '新对话';
-    const plain = t.replace(/[&<>"']/g, c => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c])).replace(/\s+/g, ' ');
-    return plain.length > 28 ? plain.slice(0, 28) + '…' : plain;
   }
 
   _formatSessionMeta(s) {

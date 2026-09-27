@@ -78,25 +78,26 @@ export class PiWebSocket {
   send(msg) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
+      return true;
     } else {
-      console.warn('WebSocket not connected, queuing message');
+      return false;
     }
   }
 
   sendPrompt(sessionId, prompt) {
-    this.send({ type: 'prompt', session_id: sessionId, prompt });
+    return this.send({ type: 'prompt', session_id: sessionId, prompt });
   }
 
   sendCancel(sessionId) {
-    this.send({ type: 'cancel', session_id: sessionId });
+    return this.send({ type: 'cancel', session_id: sessionId });
   }
 
   sendSwitchModel(sessionId, model, provider) {
-    this.send({ type: 'switch_model', session_id: sessionId, model, provider });
+    return this.send({ type: 'switch_model', session_id: sessionId, model, provider });
   }
 
   sendPing() {
-    this.send({ type: 'ping' });
+    return this.send({ type: 'ping' });
   }
 
   on(event, handler) {

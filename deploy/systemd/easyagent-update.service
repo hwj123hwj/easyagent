@@ -1,0 +1,11 @@
+[Unit]
+Description=Build, verify and deploy EasyAgent main with rollback
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/easyagent/deploy.env
+ExecStart=%h/.local/bin/easyagent-update
+TimeoutStartSec=30min
+Nice=10
+UMask=0077
