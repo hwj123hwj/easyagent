@@ -27,7 +27,6 @@ type TuiModel struct {
 	input            InputModel
 	viewport         MessageViewport
 	statusBar        StatusBar
-	spinnerOn        bool
 	spinnerIdx       int
 	tickPending      bool
 	selection        textSelection
@@ -69,7 +68,11 @@ type TuiModel struct {
 	// Phase 3: completion + confirmation + model selector
 	completion   CompletionState
 	confirmation *ConfirmationState
-	modelSelect  bool         // Ctrl+P model selector popup active
+	modelSelect  bool // Ctrl+P model selector popup active
+	modelCatalog []CompletionItem
+	toolFocus    bool
+	focusedTool  toolTarget
+	runStarted   time.Time
 	program      *tea.Program // ref to program for sending msgs
 
 	// 当前 agent 流的取消函数：Ctrl+C 时真正中断底层 LLM 流/工具执行，
@@ -140,6 +143,7 @@ func New(session *runtime.AgentSession, cmds *slashcmd.Registry, autoApprove boo
 	})
 	session.SetConfirmEnabled(!autoApprove)
 
+	m.restoreHistory()
 	return m
 }
 
@@ -205,16 +209,35 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// ── Agent events ──
 	case StreamTextMsg:
+		first := m.streamBuf == ""
 		m.streamBuf += msg.Delta
 		m.streaming = true
 		m.agentBusy = true
-		// 不立即渲染：delta 可能每秒几十个，全量 rebuild + flush 太频繁。
-		// 累加后由 100ms TickMsg 统一应用（节流）。
+		// Show the first chunk immediately; coalesce subsequent chunks at 100ms.
+		if first {
+			m.viewport.SetStreaming(m.streamBuf)
+			m.appliedStreamLen = len(m.streamBuf)
+		}
 		return m, m.spinnerTick()
 
+	case StreamTurnEndMsg:
+		text := msg.Text
+		if text == "" {
+			text = m.streamBuf
+		}
+		if text != "" {
+			m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: text, Timestamp: time.Now()})
+		}
+		m.streamBuf = ""
+		m.appliedStreamLen = 0
+		m.streaming = false
+		m.viewport.SetStreaming("")
+		m.viewport.SetMessages(m.messages)
+		return m, nil
+
 	case ToolStartMsg:
+		m.streaming = false
 		m.agentBusy = true
-		m.spinnerOn = true
 		// Group tools under the current user turn, even if progress/compaction
 		// messages were appended while it was running.
 		if len(m.messages) == 0 {
@@ -247,7 +270,6 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.spinnerTick()
 
 	case ToolEndMsg:
-		m.spinnerOn = false
 		// Find the matching tool call by ID (primary) or name (fallback).
 		// Search from the last message backwards.
 		found := false
@@ -305,7 +327,6 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appliedStreamLen = 0
 		m.streaming = false
 		m.agentBusy = false
-		m.spinnerOn = false
 		// Accumulate token usage
 		m.inputTokens += msg.InputTokens
 		m.outputTokens += msg.OutputTokens
@@ -323,7 +344,6 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishToolGroups(true)
 		m.streaming = false
 		m.agentBusy = false
-		m.spinnerOn = false
 		if m.streamBuf != "" {
 			m.messages = append(m.messages, ChatMessage{
 				Role: "assistant", Content: m.streamBuf, Timestamp: time.Now(),
@@ -376,10 +396,10 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TickMsg:
 		m.tickPending = false
-		if m.spinnerOn || m.streaming {
+		if m.agentBusy {
 			m.spinnerIdx++
 			// 节流应用流式文本：100ms 一次，替代每个 delta 全量重渲
-			if m.streaming && len(m.streamBuf) != m.appliedStreamLen {
+			if len(m.streamBuf) != m.appliedStreamLen {
 				m.appliedStreamLen = len(m.streamBuf)
 				m.viewport.SetStreaming(m.streamBuf)
 			}
@@ -483,7 +503,7 @@ func (m *TuiModel) renderView() string {
 	var buf strings.Builder
 
 	// Message viewport
-	buf.WriteString(m.viewport.View())
+	buf.WriteString(m.focusedViewport())
 	buf.WriteByte('\n')
 
 	// Separator line
@@ -505,18 +525,18 @@ func (m *TuiModel) renderView() string {
 	buf.WriteByte('\n')
 
 	// Status bar
-	status := "ready"
-	if m.agentBusy {
-		if m.streaming {
-			status = "thinking"
-		} else {
-			status = "busy"
-		}
+	status := m.runStatus()
+	mode := "confirm"
+	if m.session != nil && !m.session.ConfirmEnabled() {
+		mode = "auto"
+	}
+	if m.agentBusy && !m.runStarted.IsZero() {
+		mode = formatDuration(time.Since(m.runStarted)) + " · " + mode
 	}
 	buf.WriteString(m.statusBar.Render(
 		m.width, status, m.spinnerIdx,
 		m.provider, m.modelID, m.workspace, m.streaming,
-		m.inputTokens, m.outputTokens,
+		m.inputTokens, m.outputTokens, mode,
 	))
 	m.frameCaret = screenPoint{min(col, m.width-1), inputRow + cursorRow - inputStart}
 	m.hasFrameCaret = true
@@ -606,12 +626,59 @@ func (m *TuiModel) helpHint() string {
 	if m.copyNotice != "" {
 		return m.theme.HelpText.Render(m.copyNotice)
 	}
-	text := "Enter: send | Ctrl+J: newline | Drag: copy | F2: reply | F3: all | Ctrl+O: tools"
-	if m.agentBusy {
-		text = "Ctrl+C: cancel | Drag: copy | F2: reply | F3: all | Ctrl+O: tools"
+	var hints []string
+	switch {
+	case m.toolFocus:
+		hints = []string{"↑↓: tools", "Enter: expand", "F2: copy tool", "Esc: input", "PgUp/Dn: scroll"}
+	case m.modelSelect:
+		hints = []string{"Type: search models", "↑↓: select", "Enter: switch", "Esc: cancel"}
+	case m.agentBusy:
+		hints = []string{"Ctrl+C: cancel", "Ctrl+T: tools", "Drag: copy", "F2: reply", "F3: all"}
+	default:
+		hints = []string{"Enter: send", "Ctrl+J: newline", "/: commands", "Ctrl+P: models", "Ctrl+T: tools", "Drag: copy", "F2: reply", "F3: all"}
 	}
 	if m.viewport.userScrolled {
-		text = fmt.Sprintf("↓ %d lines below | PgDn: newer | ", m.viewport.NewLinesCount()) + text
+		hints = append([]string{fmt.Sprintf("↓ %d lines · PgDn", m.viewport.NewLinesCount())}, hints...)
 	}
-	return m.theme.HelpText.Render(text)
+	return m.theme.HelpText.Render(fitHints(hints, m.width))
+}
+
+// runStatus reflects the current phase, including concurrent tools.
+func (m *TuiModel) runStatus() string {
+	if !m.agentBusy {
+		if m.err != nil {
+			return "error"
+		}
+		return "ready"
+	}
+	running := 0
+	for _, msg := range m.messages {
+		for _, tool := range msg.Tools {
+			if tool.Streaming {
+				running++
+			}
+		}
+	}
+	if running > 0 {
+		return fmt.Sprintf("tools %d", running)
+	}
+	if m.streaming {
+		return "generating"
+	}
+	return "thinking"
+}
+
+func fitHints(hints []string, width int) string {
+	var visible []string
+	for _, hint := range hints {
+		candidate := strings.Join(append(visible, hint), " · ")
+		if lipgloss.Width(candidate) > width {
+			continue
+		}
+		visible = append(visible, hint)
+	}
+	if len(visible) == 0 {
+		return ansi.Truncate(hints[0], width, "")
+	}
+	return strings.Join(visible, " · ")
 }

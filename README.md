@@ -66,7 +66,7 @@ export EA_WORKFLOW_RUNTIME="$PWD/workflow-runtime/output/workflow-runtime.mjs"
 ./bin/easyagent -y                    # 跳过交互确认，不改变文件路径限制
 ```
 
-TUI 中输入 `/help` 查看命令。`Enter` 发送，`Ctrl+J` 换行，`PgUp/PgDn` 翻页；鼠标拖选后松开复制，`F2` 复制最近回复，`F3` 复制完整对话及工具结果，`Esc` 清除选区。点击工具组或命令标题展开详情，`Ctrl+O` 切换最近工具组。macOS 使用 `pbcopy`，Linux 使用 `wl-copy`、`xclip` 或 `xsel`；复制失败会显示提示。
+TUI 中输入 `/help` 查看命令。`Enter` 发送，`Ctrl+J` 换行，`PgUp/PgDn` 翻页；鼠标拖选后松开复制，`F2` 复制最近回复，`F3` 复制完整对话及工具结果，`Esc` 清除选区。点击工具组或命令标题展开详情，`Ctrl+O` 切换最近工具组。`Ctrl+T` 进入工具浏览，`↑↓` 选择组或命令，`Enter` 展开/折叠，`F2` 复制选中工具的完整参数和结果，`Esc` 返回输入。`Ctrl+P` 或 `/models` 打开模型选择器，可直接输入搜索，`Ctrl+U` 清空搜索。使用 `--session <ID>` 或 `/switch` 恢复会话时会显示当前分支完整历史。等待、输出文字和工具执行分别显示状态与耗时；输入草稿非空时，空闲 `Ctrl+C` 会保留草稿。macOS 使用 `pbcopy`，Linux 使用 `wl-copy`、`xclip` 或 `xsel`；复制失败会显示提示。
 
 ## 文档
 
