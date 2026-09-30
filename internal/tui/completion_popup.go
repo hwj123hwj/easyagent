@@ -33,6 +33,9 @@ func (cp *CompletionPopup) RenderHeight(cm *CompletionState, width, height int) 
 	if cm.Kind() == CompletionModel {
 		overhead++
 	}
+	if len(cm.Items()) == 0 {
+		return cp.theme.StatusDim.Render(ansi.Truncate("No models match: "+terminalText(cm.query)+" · Backspace / Esc", width, "…"))
+	}
 	if height <= overhead {
 		return "\x1b[7m" + ansi.Truncate("› "+terminalText(cm.SelectedItem().Label), width, "…") + "\x1b[0m"
 	}
@@ -104,13 +107,17 @@ func (cp *CompletionPopup) Render(cm *CompletionState, width int, maxRows ...int
 	}
 
 	if cm.Kind() == CompletionModel {
-		lines = append(lines, ansi.Truncate(fmt.Sprintf("%d/%d  ↑↓ Select · Enter Switch · Esc Cancel", selected+1, len(items)), max(1, width-2), ""))
+		search := "Type to search"
+		if cm.query != "" {
+			search = "Search: " + terminalText(cm.query)
+		}
+		lines = append(lines, ansi.Truncate(fmt.Sprintf("%s · %d/%d · ↑↓ Enter Esc", search, selected+1, len(items)), max(1, width-2), "…"))
 	}
 
 	// Wrap in border
 	popupStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.AdaptiveColor{Light: "#0969DA", Dark: "#58A6FF"}).
+		BorderForeground(lipgloss.AdaptiveColor{Light: "#087F78", Dark: "#82D5CA"}).
 		Padding(0, 0).
 		Width(maxInt(1, width-2)).MaxWidth(width)
 

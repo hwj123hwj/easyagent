@@ -14,11 +14,11 @@ import (
 type CompletionKind int
 
 const (
-	CompletionNone    CompletionKind = iota
-	CompletionSlash                  // /command
-	CompletionSub                    // /command <subcommand>
-	CompletionFile                   // @filepath
-	CompletionModel                  // Ctrl+P model selector
+	CompletionNone  CompletionKind = iota
+	CompletionSlash                // /command
+	CompletionSub                  // /command <subcommand>
+	CompletionFile                 // @filepath
+	CompletionModel                // Ctrl+P model selector
 )
 
 // CompletionItem represents a single autocomplete suggestion.
@@ -48,7 +48,7 @@ func NewCompletionState() CompletionState {
 
 // IsActive returns true if the completion popup is visible.
 func (cm *CompletionState) IsActive() bool {
-	return cm.visible && len(cm.items) > 0
+	return cm.visible && (len(cm.items) > 0 || cm.kind == CompletionModel)
 }
 
 // SelectedItem returns the currently highlighted item, or nil.

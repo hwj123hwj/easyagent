@@ -2,9 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // StatusBar renders the bottom status bar showing agent state, model info,
@@ -30,12 +32,15 @@ func (sb *StatusBar) Render(
 	provider, modelID, workspace string,
 	streaming bool,
 	inputTokens, outputTokens int,
+	detail ...string,
 ) string {
 	sep := sb.theme.StatusDim.Render(" │ ")
 
 	// Status indicator
 	var statusPart string
 	switch status {
+	case "generating":
+		statusPart = sb.theme.StatusBusy.Render(spinnerChars[spinnerIdx%len(spinnerChars)] + " writing")
 	case "busy":
 		spinner := spinnerChars[spinnerIdx%len(spinnerChars)]
 		statusPart = sb.theme.StatusBusy.Render(spinner + " working")
@@ -45,50 +50,42 @@ func (sb *StatusBar) Render(
 		spinner := spinnerChars[spinnerIdx%len(spinnerChars)]
 		statusPart = sb.theme.StatusBusy.Render(spinner + " thinking")
 	default:
-		statusPart = sb.theme.StatusReady.Render("● ready")
-	}
-
-	// Model info
-	modelPart := sb.theme.StatusDim.Render("model: ") +
-		sb.theme.StatusAccent.Render(provider+"/"+modelID)
-
-	// Token usage
-	tokenPart := ""
-	if inputTokens > 0 || outputTokens > 0 {
-		tokenPart = sb.theme.StatusDim.Render("tokens: ") +
-			sb.theme.StatusAccent.Render(fmt.Sprintf("%s ↑ %s ↓",
-				formatTokenCount(inputTokens),
-				formatTokenCount(outputTokens)))
-	}
-
-	// Workspace
-	wsPart := ""
-	if workspace != "" {
-		// Shorten workspace to just the last directory component
-		shortWs := workspace
-		if idx := strings.LastIndex(workspace, "/"); idx >= 0 {
-			shortWs = workspace[idx+1:]
+		if strings.HasPrefix(status, "tools ") {
+			statusPart = sb.theme.StatusBusy.Render(spinnerChars[spinnerIdx%len(spinnerChars)] + " " + status)
+		} else {
+			statusPart = sb.theme.StatusReady.Render("● ready")
 		}
-		wsPart = sb.theme.StatusDim.Render("workspace: ") +
-			sb.theme.StatusAccent.Render(shortWs)
 	}
 
-	// Assemble
-	parts := []string{statusPart, modelPart}
-	if tokenPart != "" {
-		parts = append(parts, tokenPart)
+	// Reserve room for phase and permission mode before fitting metadata.
+	content := ansi.Truncate(statusPart, width, "")
+	if len(detail) > 0 && detail[0] != "" {
+		mode := sb.theme.StatusDim.Render(detail[0])
+		if lipgloss.Width(content+sep+mode) <= width {
+			content += sep + mode
+		}
 	}
-	if wsPart != "" {
-		parts = append(parts, wsPart)
+	remaining := width - lipgloss.Width(content+sep)
+	if remaining > 3 {
+		label := provider + "/" + modelID
+		if remaining < 28 {
+			label = modelID
+		}
+		content += sep + sb.theme.StatusAccent.Render(ansi.Truncate(terminalText(label), remaining, "…"))
 	}
-
-	content := strings.Join(parts, " "+sep+" ")
-
-	// Pad to fill width
-	contentWidth := lipgloss.Width(content)
-	if contentWidth < width {
-		content += strings.Repeat(" ", width-contentWidth)
+	var metadata []string
+	if workspace != "" {
+		metadata = append(metadata, terminalText(filepath.Base(workspace)))
 	}
+	if inputTokens+outputTokens > 0 {
+		metadata = append(metadata, fmt.Sprintf("%s ↑ %s ↓", formatTokenCount(inputTokens), formatTokenCount(outputTokens)))
+	}
+	for _, part := range metadata {
+		if lipgloss.Width(content+sep+part) <= width {
+			content += sep + sb.theme.StatusDim.Render(part)
+		}
+	}
+	content += strings.Repeat(" ", max(0, width-lipgloss.Width(content)))
 
 	return content
 }
