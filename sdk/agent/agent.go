@@ -34,7 +34,7 @@ type Options struct {
 	CompactionSettings compaction.Settings      // 上下文压缩设置
 	SummarizeFunc      compaction.SummarizeFunc // 可选：摘要生成函数
 	LifecycleHooks     LifecycleHooks           // 可选：工具执行生命周期钩子
-	HookSystem         HookSystemInterface      // 可选：增强型 Hook 系统（优先级排序、超时、policy 集成）
+	HookSystem         HookSystemInterface      // 可选：增强型 Hook 系统（优先级排序、超时）
 	ConfirmFunc        ConfirmFunc              // 可选：危险工具执行前向用户确认（未注入则默认放行）
 	LoopDetectSettings LoopDetectSettings       // 循环检测设置（默认启用，连续相同 tool call 触发提醒）
 }
