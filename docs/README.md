@@ -17,6 +17,7 @@
 ## 开发与设计
 
 - [架构](ARCHITECTURE.md)：源码分层、数据流和公共 SDK。
+- [核心机制](INTERNALS.md)：工具生命周期、确认门、循环检测、双层压缩与事件流。
 - [贡献指南](CONTRIBUTING.md)：本地验证、PR、合并及分支清理。
 - [SDK 边界](decisions/sdk-extraction.md)、[Skills 与 Application](decisions/skills-vs-application.md)、[两类工作流](decisions/workflow-engine.md)、[移除 LSP 工具](decisions/remove-lsp-tools.md)：仍适用的设计取舍。
 
