@@ -13,6 +13,7 @@ Thumbs.db
 
 # Build
 /tmp/
+/dist/
 
 # Easy Code
 .easycode/
