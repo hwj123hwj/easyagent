@@ -14,11 +14,13 @@ import (
 type CompletionKind int
 
 const (
-	CompletionNone  CompletionKind = iota
-	CompletionSlash                // /command
-	CompletionSub                  // /command <subcommand>
-	CompletionFile                 // @filepath
-	CompletionModel                // Ctrl+P model selector
+	CompletionNone    CompletionKind = iota
+	CompletionSlash                  // /command
+	CompletionSub                    // /command <subcommand>
+	CompletionFile                   // @filepath
+	CompletionModel                  // Ctrl+P model selector
+	CompletionHistory                // Ctrl+R input history search
+	CompletionSession                // Ctrl+G session selector
 )
 
 // CompletionItem represents a single autocomplete suggestion.
@@ -26,6 +28,7 @@ type CompletionItem struct {
 	Label       string // displayed text
 	Description string // help text / description
 	InsertText  string // text to insert (may differ from label)
+	Preview     string // selected item's detail, not inserted into input
 }
 
 // CompletionState manages autocomplete state.
@@ -36,6 +39,7 @@ type CompletionState struct {
 	visible    bool
 	query      string // current filter text (e.g. "mo" from "/mo")
 	queryStart int    // position in the input line where the query starts
+	loading    bool
 	theme      *Theme
 }
 
@@ -48,7 +52,22 @@ func NewCompletionState() CompletionState {
 
 // IsActive returns true if the completion popup is visible.
 func (cm *CompletionState) IsActive() bool {
-	return cm.visible && (len(cm.items) > 0 || cm.kind == CompletionModel)
+	return cm.visible && (len(cm.items) > 0 || cm.searchable())
+}
+
+func (cm *CompletionState) searchable() bool {
+	return cm.kind == CompletionModel || cm.kind == CompletionHistory || cm.kind == CompletionSession
+}
+
+func (cm *CompletionState) searchName() string {
+	switch cm.kind {
+	case CompletionHistory:
+		return "history"
+	case CompletionSession:
+		return "sessions"
+	default:
+		return "models"
+	}
 }
 
 // SelectedItem returns the currently highlighted item, or nil.
@@ -81,6 +100,7 @@ func (cm *CompletionState) Close() {
 	cm.items = nil
 	cm.kind = CompletionNone
 	cm.query = ""
+	cm.loading = false
 }
 
 // TriggerSlash detects if the input line should trigger slash-command completion.

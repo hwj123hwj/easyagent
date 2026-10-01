@@ -66,14 +66,16 @@ type TuiModel struct {
 	theme *Theme
 
 	// Phase 3: completion + confirmation + model selector
-	completion   CompletionState
-	confirmation *ConfirmationState
-	modelSelect  bool // Ctrl+P model selector popup active
-	modelCatalog []CompletionItem
-	toolFocus    bool
-	focusedTool  toolTarget
-	runStarted   time.Time
-	program      *tea.Program // ref to program for sending msgs
+	completion    CompletionState
+	confirmation  *ConfirmationState
+	modelSelect   bool // Ctrl+P model selector popup active
+	modelCatalog  []CompletionItem
+	searchCatalog []CompletionItem
+	pickerID      uint64
+	toolFocus     bool
+	focusedTool   toolTarget
+	runStarted    time.Time
+	program       *tea.Program // ref to program for sending msgs
 
 	// 当前 agent 流的取消函数：Ctrl+C 时真正中断底层 LLM 流/工具执行，
 	// 而不只是把 UI 状态置停。cmd goroutine 写、Update goroutine 读，需互斥。
@@ -166,6 +168,10 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg = event.msg
 	}
 	switch msg := msg.(type) {
+	case sessionPickerListMsg:
+		return m.receiveSessionList(msg)
+	case sessionPickerSwitchMsg:
+		return m.receiveSessionSwitch(msg)
 
 	// ── Terminal resize ──
 	case tea.WindowSizeMsg:
@@ -632,10 +638,12 @@ func (m *TuiModel) helpHint() string {
 		hints = []string{"↑↓: tools", "Enter: expand", "F2: copy tool", "Esc: input", "PgUp/Dn: scroll"}
 	case m.modelSelect:
 		hints = []string{"Type: search models", "↑↓: select", "Enter: switch", "Esc: cancel"}
+	case m.completion.Kind() == CompletionHistory || m.completion.Kind() == CompletionSession:
+		hints = []string{"Type: search " + m.completion.searchName(), "↑↓: select", "Enter: choose", "Esc: cancel"}
 	case m.agentBusy:
 		hints = []string{"Ctrl+C: cancel", "Ctrl+T: tools", "Drag: copy", "F2: reply", "F3: all"}
 	default:
-		hints = []string{"Enter: send", "Ctrl+J: newline", "/: commands", "Ctrl+P: models", "Ctrl+T: tools", "Drag: copy", "F2: reply", "F3: all"}
+		hints = []string{"Enter: send", "Ctrl+J: newline", "/: commands", "Ctrl+R: history", "Ctrl+G: sessions", "Ctrl+P: models", "Ctrl+T: tools", "Drag: copy", "F2: reply", "F3: all"}
 	}
 	if m.viewport.userScrolled {
 		hints = append([]string{fmt.Sprintf("↓ %d lines · PgDn", m.viewport.NewLinesCount())}, hints...)

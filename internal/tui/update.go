@@ -61,6 +61,16 @@ func (m *TuiModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.modelSelect {
 		return m.handleModelSelectKey(msg)
 	}
+	if m.completion.Kind() == CompletionHistory || m.completion.Kind() == CompletionSession {
+		return m.handleSearchPickerKey(msg)
+	}
+	if msg.Type == tea.KeyCtrlR {
+		m.openHistoryPicker()
+		return m, nil
+	}
+	if msg.Type == tea.KeyCtrlG {
+		return m.openSessionPicker()
+	}
 	if m.completion.IsActive() {
 		return m.handleCompletionKey(msg)
 	}
@@ -128,6 +138,8 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case ActionOpenModelSelect: // Ctrl+P
 		return m.openModelSelector()
+	case ActionOpenSessions: // Ctrl+G
+		return m.openSessionPicker()
 
 	case ActionSubmit: // Enter
 		if m.agentBusy {
@@ -166,7 +178,7 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ActionSearchHistory: // Ctrl+R
-		m.input.navigateHistory(-1)
+		m.openHistoryPicker()
 		return m, nil
 
 	case ActionPageUp:
@@ -195,9 +207,12 @@ func (m *TuiModel) handleCompletionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch action {
 	case ActionAcceptCompletion:
 		item := m.completion.SelectedItem()
-		if item != nil && msg.Type == tea.KeyEnter && item.InsertText == "/models" {
+		if item != nil && msg.Type == tea.KeyEnter && (item.InsertText == "/models" || item.InsertText == "/sessions") {
 			m.input.Reset()
 			m.completion.Close()
+			if item.InsertText == "/sessions" {
+				return m.openSessionPicker()
+			}
 			return m.openModelSelector()
 		}
 		if item != nil {
@@ -318,27 +333,31 @@ func (m *TuiModel) handleModelSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *TuiModel) filterModels() {
+	filterPicker(&m.completion, m.modelCatalog)
+}
+
+func filterPicker(cm *CompletionState, catalog []CompletionItem) {
 	selected := ""
-	if item := m.completion.SelectedItem(); item != nil {
+	if item := cm.SelectedItem(); item != nil {
 		selected = item.InsertText
 	}
-	m.completion.items = nil
-	for _, item := range m.modelCatalog {
+	cm.items = nil
+	for _, item := range catalog {
 		match := true
-		for _, word := range strings.Fields(strings.ToLower(m.completion.query)) {
-			if !strings.Contains(strings.ToLower(item.Label+" "+item.Description), word) {
+		for _, word := range strings.Fields(strings.ToLower(cm.query)) {
+			if !strings.Contains(strings.ToLower(item.Label+" "+item.Description+" "+item.InsertText+" "+item.Preview), word) {
 				match = false
 				break
 			}
 		}
 		if match {
-			m.completion.items = append(m.completion.items, item)
+			cm.items = append(cm.items, item)
 		}
 	}
-	m.completion.selected = 0
-	for i, item := range m.completion.items {
+	cm.selected = 0
+	for i, item := range cm.items {
 		if item.InsertText == selected {
-			m.completion.selected = i
+			cm.selected = i
 			break
 		}
 	}
@@ -529,6 +548,9 @@ func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(input) == "/models" {
 		return m.openModelSelector()
 	}
+	if strings.TrimSpace(input) == "/sessions" || strings.TrimSpace(input) == "/switch" {
+		return m.openSessionPicker()
+	}
 
 	cmdCtx := slashcmd.Context{
 		Ctx:     context.Background(),
@@ -560,14 +582,7 @@ func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		if result.SessionSwitchTo != nil {
 			// Convert SessionContext to AgentSession
 			if as, ok := result.SessionSwitchTo.(*runtime.AgentSession); ok {
-				confirmEnabled := m.session.ConfirmEnabled()
-				m.session = as
-				m.wireConfirmationCallback()
-				m.session.SetConfirmEnabled(confirmEnabled)
-				m.provider, m.modelID = as.ModelInfo()
-				m.toolFocus = false
-				m.viewport.Clear()
-				m.restoreHistory()
+				m.useSession(as)
 			}
 		}
 

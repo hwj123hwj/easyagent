@@ -22,6 +22,7 @@ const (
 	ActionToggleToolPanel  // Ctrl+O
 	ActionOpenModelSelect  // Ctrl+P
 	ActionSearchHistory    // Ctrl+R
+	ActionOpenSessions     // Ctrl+G
 	ActionUndo             // Ctrl+Z
 	ActionAcceptCompletion // Tab
 	ActionClosePopup       // Esc
@@ -81,6 +82,8 @@ func (k *KeyBindingTable) ResolveInput(msg tea.KeyMsg) KeyAction {
 		return ActionOpenModelSelect
 	case tea.KeyCtrlR:
 		return ActionSearchHistory
+	case tea.KeyCtrlG:
+		return ActionOpenSessions
 	case tea.KeyCtrlZ:
 		return ActionUndo
 	case tea.KeyCtrlJ:
