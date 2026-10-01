@@ -54,6 +54,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 - 项目介绍 & 架构：`README.md` / `docs/ARCHITECTURE.md`
 - 开发流程 & 编码规范（分支命名、commit 格式等）：`docs/CONTRIBUTING.md`
+- 并行开发 & worktree（会话提交纪律、收尾清理）：`docs/WORKTREES.md`
 - 架构决策：`docs/decisions/`
 - 竞品调研：`docs/research/`
 
