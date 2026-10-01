@@ -11,7 +11,7 @@
 
 公开接口包括 CLI 参数、配置名、HTTP 协议及 `sdk/`。`desktop/package.json` 描述独立 Electron 客户端的包版本，不用于决定核心 Release；工作流 bundle 跟随核心 tag 和提交发布。
 
-现有标签的名称及附注形式合规，保留已发布历史。**一个 tag 永远对应一个提交；不能删除重打、强推移动或覆盖已发布资产。** GitHub 的 Release immutability 对启用之后的新发布锁定资产；tag ruleset 还保护旧 `v*` 标签免于移动、删除。[GitHub 不可变发布说明](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
+2026-10-01 按维护者明确要求，在备份旧 Pi Agent 的 Release 元数据、全部资产和 Git 标签对象后，清理 `v0.10.0` 至 `v0.11.0` 的公开 Release 与 tag，以 EasyAgent `v0.1.0` 重新开始。这是更名时的一次性迁移；提交历史不清理。后续**一个 tag 永远对应一个提交；不能删除重打、强推移动或覆盖已发布资产。** GitHub 的 Release immutability 对启用之后的新发布锁定资产；tag ruleset 保护 `v*` 标签免于移动、删除。[GitHub 不可变发布说明](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 
 ## 两条分发路径
 
@@ -33,8 +33,8 @@ git switch main
 git fetch --prune --tags origin
 git pull --ff-only origin main
 # 示例版本；先按本次实际变化选择并提交对应 CHANGELOG 节。
-python3 scripts/release.py tag v0.12.0-rc.1
-git push origin refs/tags/v0.12.0-rc.1
+python3 scripts/release.py tag v0.1.1-rc.1
+git push origin refs/tags/v0.1.1-rc.1
 ```
 
 脚本拒绝脏工作区、非 main、未同步远端、重复/倒退版本和缺失说明。支持手工 `git tag -s` 签名；CI 至少强制附注标签。不要执行 `git push --tags`，以免顺带发布本地实验标签。
@@ -58,10 +58,10 @@ git push origin refs/tags/v0.12.0-rc.1
 安装脚本默认选择最新正式 Release，也可显式指定已有版本：
 
 ```bash
-EA_VERSION=v0.12.0-rc.1 bash scripts/install.sh
+EA_VERSION=v0.1.0 bash scripts/install.sh
 ```
 
-这只是操作示例，并不表示该版本已经发布。脚本校验 SHA-256 和程序报告的版本后才替换文件，新版同时安装核心、桥接、工作流 bundle 与许可归档。下载或校验失败保留旧安装；不再偷偷回退到 main 编译。旧 `pi-agent-*` 资产仍支持校验和验证后安装；旧程序的 `--version` 存在启动副作用，因此安装器不会执行它来探测版本。
+脚本校验 SHA-256 和程序报告的版本后才替换文件，新版同时安装核心、桥接、工作流 bundle 与许可归档。下载或校验失败保留旧安装；不再偷偷回退到 main 编译。安装器仍识别旧 `pi-agent-*` 资产，但本仓库旧公开 Release 已在更名迁移中清理。旧程序的 `--version` 存在启动副作用，因此安装器不会执行它来探测版本。
 
 从带工作流 bundle 的新版降级到没有 bundle 的历史版本，应使用独立 `EA_HOME`，防止混用组件。安装器适合 CLI 安装，不负责生产服务的并发切换；正在运行的迷你主机继续使用其带锁和健康回滚的更新器。
 

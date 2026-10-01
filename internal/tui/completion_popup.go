@@ -30,11 +30,18 @@ func (cp *CompletionPopup) RenderHeight(cm *CompletionState, width, height int) 
 		return ""
 	}
 	overhead := 2
-	if cm.Kind() == CompletionModel {
+	if cm.searchable() {
 		overhead++
+		if item := cm.SelectedItem(); item != nil && item.Preview != "" {
+			overhead += len(pickerPreview(item.Preview, width))
+		}
 	}
 	if len(cm.Items()) == 0 {
-		return cp.theme.StatusDim.Render(ansi.Truncate("No models match: "+terminalText(cm.query)+" · Backspace / Esc", width, "…"))
+		notice := "No " + cm.searchName() + " match: " + terminalText(cm.query) + " · Backspace / Esc"
+		if cm.loading {
+			notice = "Loading " + cm.searchName() + "… · Esc: cancel"
+		}
+		return cp.theme.StatusDim.Render(ansi.Truncate(notice, width, "…"))
 	}
 	if height <= overhead {
 		return "\x1b[7m" + ansi.Truncate("› "+terminalText(cm.SelectedItem().Label), width, "…") + "\x1b[0m"
@@ -78,6 +85,9 @@ func (cp *CompletionPopup) Render(cm *CompletionState, width int, maxRows ...int
 
 		// Pad label to align descriptions
 		labelWidth := min(maxLabel, max(1, width-2))
+		if cm.searchable() {
+			labelWidth = min(labelWidth, max(1, (width-2)*2/3))
+		}
 		label = ansi.Truncate(label, labelWidth, "…")
 		padded := label + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width(label))+2)
 		padded = ansi.Truncate(padded, max(1, width-2), "")
@@ -106,10 +116,18 @@ func (cp *CompletionPopup) Render(cm *CompletionState, width int, maxRows ...int
 		lines = append(lines, line)
 	}
 
-	if cm.Kind() == CompletionModel {
-		search := "Type to search"
+	if cm.searchable() {
+		if item := cm.SelectedItem(); item != nil && item.Preview != "" {
+			for _, line := range pickerPreview(item.Preview, width) {
+				lines = append(lines, cp.theme.StatusDim.Render(line))
+			}
+		}
+		search := "Type to search " + cm.searchName()
 		if cm.query != "" {
 			search = "Search: " + terminalText(cm.query)
+		}
+		if cm.loading {
+			search = "Opening session…"
 		}
 		lines = append(lines, ansi.Truncate(fmt.Sprintf("%s · %d/%d · ↑↓ Enter Esc", search, selected+1, len(items)), max(1, width-2), "…"))
 	}
@@ -123,6 +141,16 @@ func (cp *CompletionPopup) Render(cm *CompletionState, width int, maxRows ...int
 
 	content := strings.Join(lines, "\n")
 	return popupStyle.Render(content)
+}
+
+func pickerPreview(text string, width int) []string {
+	width = max(1, width-2)
+	lines := strings.Split(ansi.Hardwrap(terminalText(text), width, true), "\n")
+	if len(lines) > 2 {
+		lines[1] = ansi.Truncate(lines[1], max(0, width-1), "") + "…"
+		lines = lines[:2]
+	}
+	return lines
 }
 
 // ConfirmationPopup renders a yes/no confirmation dialog.

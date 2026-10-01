@@ -346,6 +346,9 @@ func (a *App) ListSessionsInfo() ([]slashcmd.SessionInfo, error) {
 	for i, s := range sessions {
 		result[i] = slashcmd.SessionInfo{
 			ID:           s.ID,
+			Title:        s.Title,
+			Workspace:    s.Workspace,
+			Application:  s.Application,
 			MessageCount: s.MessageCount,
 			LastActive:   s.LastActive,
 		}

@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/glamour"
+	glamouransi "github.com/charmbracelet/glamour/ansi"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -29,11 +31,7 @@ func NewMarkdownRenderer(width int) *MarkdownRenderer {
 	if lipgloss.HasDarkBackground() {
 		style = "dark"
 	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle(style),
-		glamour.WithWordWrap(width),
-		glamour.WithEmoji(),
-	)
+	r, err := readingRenderer(style, width)
 	if err != nil {
 		return &MarkdownRenderer{renderer: nil}
 	}
@@ -62,16 +60,35 @@ func (mr *MarkdownRenderer) SetWidth(width int) {
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
 
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle(mr.style),
-		glamour.WithWordWrap(width),
-		glamour.WithEmoji(),
-	)
+	r, err := readingRenderer(mr.style, width)
 	if err != nil {
 		return
 	}
 	mr.renderer = r
 	mr.cache = make(map[string]string)
+}
+
+// Keep prose and tables readable on wide terminals without changing the
+// terminal's background. Glamour still handles Markdown and cell wrapping.
+func readingRenderer(theme string, width int) (*glamour.TermRenderer, error) {
+	style := styles.LightStyleConfig
+	accent := "#087F78"
+	if theme == "dark" {
+		style = styles.DarkStyleConfig
+		accent = "#82D5CA"
+	}
+	margin := uint(0)
+	style.Document.Margin = &margin
+	style.Heading.Color = &accent
+	for _, heading := range []*glamouransi.StyleBlock{&style.H1, &style.H2, &style.H3, &style.H4, &style.H5, &style.H6} {
+		*heading = glamouransi.StyleBlock{}
+	}
+	return glamour.NewTermRenderer(
+		glamour.WithStyles(style),
+		glamour.WithWordWrap(max(1, min(width, 96))),
+		glamour.WithTableWrap(true),
+		glamour.WithEmoji(),
+	)
 }
 
 // Render converts markdown text to a glamour-rendered string.
