@@ -41,6 +41,8 @@ scripts/build-desktop.sh arm64
 # 或 scripts/build-desktop.sh x64
 ```
 
-脚本使用独立 `desktop/.bundle` 构建 Go 核心、工作流 bundle 与许可证，下载并核验官方便携 Node.js，随后检查 TypeScript、测试并打包。不会替换已有 CLI 或 8080 服务。输出在 `desktop/release`；包版本来自 `desktop/package.json`，本地打包不自动发布 GitHub Release。
+脚本使用独立 `desktop/.bundle` 构建 Go 核心、工作流 bundle 与许可证，下载并核验官方便携 Node.js，随后检查 TypeScript、测试并打包。不会替换已有 CLI 或 8080 服务。输出在 `desktop/release/版本/架构`；包版本来自 `desktop/package.json`，本地打包不自动发布 GitHub Release。
 
-当前打包面向 macOS，未配置 Developer ID 签名与公证。桌面更新提示只匹配架构与桌面 DMG 资产，不把 Go CLI 的 Release 当成桌面安装包。正式分发前仍需签名、公证及相应机器的安装验收。
+发布构建使用 `scripts/build-desktop.sh arm64 v0.2.0-rc.1`（或 `x64`），只接受版本匹配的附注 tag、已合入 main 的干净源码；完成后只读挂载 DMG，验证包内核心、运行时、许可证与来源提交。`v0.2.0-rc.1` 作为测试版需手动下载，桌面更新提示仍只选择正式版。
+
+当前打包面向 macOS，使用完整的 ad hoc 测试签名并在安装包内校验，未配置 Developer ID 签名与公证。桌面更新提示只匹配架构与桌面 DMG 资产，不把 Go CLI 的 Release 当成桌面安装包。正式分发前仍需开发者签名、公证及相应机器的安装验收。

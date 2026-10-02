@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing annotated tag, e.g. v0.1.0 or v0.1.1-rc.1'
+        description: 'Existing annotated tag, e.g. v0.2.0-rc.1'
         required: true
         type: string
 permissions:
@@ -41,17 +41,9 @@ jobs:
     uses: ./.github/workflows/verify.yml
     with:
       ref: ${{ needs.validate.outputs.sha }}
-  publish:
+  core:
     needs: [validate, verify]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      TAG: ${{ needs.validate.outputs.version }}
-      RELEASE_SHA: ${{ needs.validate.outputs.sha }}
-      PRERELEASE: ${{ needs.validate.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,7 +55,79 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Build exact revision and checksum every asset
+      - name: Build core and workflow payloads from exact revision
+        env:
+          TAG: ${{ needs.validate.outputs.version }}
         run: bash scripts/build-release.sh "$TAG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-core
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 3
+  desktop:
+    needs: [validate, verify]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      EA_DESKTOP_NODE_VERSION: v24.21.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: package
+        name: Build and validate native desktop installer
+        env:
+          TAG: ${{ needs.validate.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(node -p process.arch)" = "$ARCH"
+          bash scripts/build-desktop.sh "$ARCH" "$TAG"
+          printf 'dmg=desktop/release/%s/%s/EasyAgent-%s-%s.dmg\n' "${TAG#v}" "$ARCH" "${TAG#v}" "$ARCH" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-${{ matrix.arch }}
+          path: ${{ steps.package.outputs.dmg }}
+          if-no-files-found: error
+          retention-days: 3
+  publish:
+    needs: [validate, core, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.validate.outputs.version }}
+      RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Assemble complete manifest and verify every asset
+        run: |
+          python3 scripts/release.py validate "$TAG"
+          python3 scripts/release.py manifest "$TAG" "$RELEASE_SHA" dist
+          (cd dist && sha256sum --check checksums.txt)
       - name: Publish complete draft without replacing published assets
         run: python3 scripts/publish-release.py "$TAG" "$RELEASE_SHA" dist

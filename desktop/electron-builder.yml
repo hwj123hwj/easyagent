@@ -36,6 +36,7 @@ mac:
   target:
     - dmg
   category: public.app-category.developer-tools
+  sign: ./scripts/sign-adhoc.cjs
   hardenedRuntime: false
   gatekeeperAssess: false
   # icon: build/icon.icns

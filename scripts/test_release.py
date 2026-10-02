@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -57,12 +58,19 @@ class AssetsTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.directory = Path(self.tmp.name)
         self.tag, self.sha = 'v1.2.3', 'a' * 40
-        for name in release.ASSETS: (self.directory / name).write_text('fixture:' + name)
+        for name in release.required_assets(self.tag): (self.directory / name).write_text('fixture:' + name)
 
     def test_exact_manifest_and_tamper_detection(self):
         release.manifest(self.directory, self.tag, self.sha)
         hashes = publisher.validate_assets(self.directory, self.tag, self.sha)
-        self.assertEqual(len(hashes), len(release.ASSETS) + 2)
+        self.assertEqual(len(hashes), len(release.required_assets(self.tag)) + 2)
+        manifest = json.loads((self.directory / 'release.json').read_text())
+        self.assertEqual(set(manifest['assets']), set(release.required_assets(self.tag)))
+        for name, digest in manifest['assets'].items():
+            self.assertEqual(digest, hashlib.sha256((self.directory / name).read_bytes()).hexdigest())
+        for line in (self.directory / 'checksums.txt').read_text().splitlines():
+            digest, name = line.split('  ', 1)
+            self.assertEqual(digest, hashlib.sha256((self.directory / name).read_bytes()).hexdigest())
         original = (self.directory / 'checksums.txt').read_text()
         release.manifest(self.directory, self.tag, self.sha)
         self.assertEqual(original, (self.directory / 'checksums.txt').read_text())
@@ -75,6 +83,80 @@ class AssetsTest(unittest.TestCase):
         (self.directory / 'workflow-runtime.mjs').write_text('ok')
         (self.directory / 'old-binary').write_text('leftover')
         with self.assertRaises(ValueError): release.manifest(self.directory, self.tag, self.sha)
+
+    def test_desktop_assets_required_from_first_desktop_version(self):
+        self.assertEqual(len(release.ASSETS), 10)
+        self.assertEqual(release.required_assets('v0.1.0'), release.ASSETS)
+        for tag in ('v0.2.0-alpha.1', 'v0.2.0-beta.1', 'v0.2.0-rc.1', 'v0.2.0', 'v1.2.3'):
+            with self.subTest(tag=tag):
+                self.assertEqual(release.required_assets(tag), release.ASSETS + (
+                    f'EasyAgent-{tag[1:]}-arm64.dmg', f'EasyAgent-{tag[1:]}-x64.dmg'))
+
+    def test_each_missing_desktop_asset_rejects_manifest_and_publish(self):
+        release.manifest(self.directory, self.tag, self.sha)
+        for name in release.desktop_assets(self.tag):
+            path = self.directory / name
+            content = path.read_bytes()
+            path.unlink()
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'missing or empty'):
+                release.manifest(self.directory, self.tag, self.sha)
+            with mock.patch.object(publisher, 'api') as api, self.assertRaises(ValueError):
+                publisher.publish(self.tag, self.sha, self.directory)
+            api.assert_not_called()
+            path.write_bytes(content)
+
+    def test_wrong_version_and_extra_desktop_assets_rejected(self):
+        release.manifest(self.directory, self.tag, self.sha)
+        correct = self.directory / release.desktop_assets(self.tag)[0]
+        wrong = self.directory / 'EasyAgent-0.2.0-rc.1-arm64.dmg'
+        correct.rename(wrong)
+        with self.assertRaisesRegex(ValueError, 'unexpected'):
+            release.manifest(self.directory, self.tag, self.sha)
+        with self.assertRaises(ValueError): publisher.validate_assets(self.directory, self.tag, self.sha)
+        wrong.rename(correct)
+        wrong.write_text('unexpected desktop build')
+        with self.assertRaisesRegex(ValueError, 'unexpected'):
+            release.manifest(self.directory, self.tag, self.sha)
+        with self.assertRaises(ValueError): publisher.validate_assets(self.directory, self.tag, self.sha)
+
+    def test_core_only_manifest_is_never_publishable(self):
+        for name in release.desktop_assets(self.tag): (self.directory / name).unlink()
+        for tag in (self.tag, 'v0.1.0'):
+            with self.subTest(tag=tag):
+                release.manifest(self.directory, tag, self.sha, core_only=True)
+                manifest = json.loads((self.directory / 'release.json').read_text())
+                self.assertTrue(manifest['core_only'])
+                self.assertEqual(set(manifest['assets']), set(release.ASSETS))
+                with mock.patch.object(publisher, 'api') as api, self.assertRaises(ValueError):
+                    publisher.publish(tag, self.sha, self.directory)
+                api.assert_not_called()
+        for name in release.desktop_assets(self.tag): (self.directory / name).write_text('fixture:' + name)
+        release.manifest(self.directory, self.tag, self.sha)
+        manifest = json.loads((self.directory / 'release.json').read_text())
+        manifest['core_only'] = True
+        (self.directory / 'release.json').write_text(json.dumps(manifest))
+        with mock.patch.object(publisher, 'api') as api, self.assertRaisesRegex(ValueError, 'partial core-only'):
+            publisher.publish(self.tag, self.sha, self.directory)
+        api.assert_not_called()
+
+    def test_manifest_cli_requires_explicit_core_only(self):
+        for name in release.desktop_assets(self.tag): (self.directory / name).unlink()
+        command = ['python3', str(Path(release.__file__)), 'manifest', self.tag, self.sha, str(self.directory)]
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('missing or empty release asset', result.stderr)
+        result = subprocess.run(command + ['--core-only'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads((self.directory / 'release.json').read_text())['core_only'])
+
+    def test_old_release_manifest_remains_compatible(self):
+        for name in release.desktop_assets(self.tag): (self.directory / name).unlink()
+        tag = 'v0.1.0'
+        release.manifest(self.directory, tag, self.sha)
+        data = json.loads((self.directory / 'release.json').read_text())
+        self.assertEqual(set(data), {'version', 'commit', 'assets'})
+        hashes = publisher.validate_assets(self.directory, tag, self.sha)
+        self.assertEqual(set(hashes), set(release.ASSETS) | {'release.json', 'checksums.txt'})
 
     def test_existing_release_is_never_uploaded_or_modified(self):
         release.manifest(self.directory, self.tag, self.sha)

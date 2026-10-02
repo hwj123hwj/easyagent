@@ -27,6 +27,17 @@ def version_key(tag):
     return (int(major), int(minor), int(patch), {"alpha": 0, "beta": 1, "rc": 2, None: 3}[phase], int(count or 0))
 
 
+def desktop_assets(tag):
+    version_key(tag)
+    return tuple(f"EasyAgent-{tag[1:]}-{arch}.dmg" for arch in ("arm64", "x64"))
+
+
+def required_assets(tag):
+    if version_key(tag) >= version_key("v0.2.0-alpha.1"):
+        return ASSETS + desktop_assets(tag)
+    return ASSETS
+
+
 def check_next(tag, tags):
     key = version_key(tag)
     versions = [other for other in tags if TAG_RE.fullmatch(other) and other != tag]
@@ -75,22 +86,25 @@ def make_tag(tag, main_ref):
     print(f"Created annotated tag {tag}; publish explicitly with: git push origin refs/tags/{tag}")
 
 
-def manifest(directory, tag, sha):
+def manifest(directory, tag, sha, core_only=False):
     version_key(tag)
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("manifest requires a full commit SHA")
     directory = Path(directory)
-    allowed = set(ASSETS) | {"release.json", "checksums.txt"}
+    required = ASSETS if core_only else required_assets(tag)
+    allowed = set(required) | {"release.json", "checksums.txt"}
     extra = {p.name for p in directory.iterdir()} - allowed
     if extra:
         raise ValueError(f"unexpected release files: {sorted(extra)}")
     assets = {}
-    for name in ASSETS:
+    for name in required:
         path = directory / name
         if not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
             raise ValueError(f"missing or empty release asset: {name}")
         assets[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     data = {"version": tag, "commit": sha, "assets": assets}
+    if core_only:
+        data["core_only"] = True
     (directory / "release.json").write_text(json.dumps(data, sort_keys=True, indent=2) + "\n")
     assets["release.json"] = hashlib.sha256((directory / "release.json").read_bytes()).hexdigest()
     (directory / "checksums.txt").write_text("".join(f"{digest}  {name}\n" for name, digest in sorted(assets.items())))
@@ -110,12 +124,13 @@ def main():
     sub.add_argument("version")
     sub.add_argument("sha")
     sub.add_argument("directory")
+    sub.add_argument("--core-only", action="store_true", help="validate core build outputs only; this partial manifest cannot be published")
     args = parser.parse_args()
     try:
         if args.command == "tag":
             make_tag(args.version, args.main_ref)
         elif args.command == "manifest":
-            manifest(args.directory, args.version, args.sha)
+            manifest(args.directory, args.version, args.sha, core_only=args.core_only)
         else:
             sha, notes = validate(args.version, args.main_ref)
             if args.notes_file:
