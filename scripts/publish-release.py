@@ -7,7 +7,7 @@ import subprocess
 import sys
 from urllib.parse import quote
 
-from release import ASSETS, release_notes, version_key
+from release import release_notes, required_assets, version_key
 
 
 def api(method, path, data=None, optional=False):
@@ -25,7 +25,8 @@ def api(method, path, data=None, optional=False):
 
 def validate_assets(directory, tag, sha):
     directory = Path(directory)
-    expected = set(ASSETS) | {"release.json", "checksums.txt"}
+    required = required_assets(tag)
+    expected = set(required) | {"release.json", "checksums.txt"}
     if {p.name for p in directory.iterdir()} != expected:
         raise ValueError("release directory does not contain exactly the required assets")
     hashes = {}
@@ -35,7 +36,9 @@ def validate_assets(directory, tag, sha):
             raise ValueError(f"invalid release asset: {name}")
         hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest = json.loads((directory / "release.json").read_text())
-    if manifest != {"version": tag, "commit": sha, "assets": {n: hashes[n] for n in ASSETS}}:
+    if isinstance(manifest, dict) and manifest.get("core_only"):
+        raise ValueError("partial core-only manifests cannot be published")
+    if manifest != {"version": tag, "commit": sha, "assets": {n: hashes[n] for n in required}}:
         raise ValueError("release manifest does not match the requested version, commit or files")
     checksums = "".join(f"{hashes[n]}  {n}\n" for n in sorted(expected - {"checksums.txt"}))
     if (directory / "checksums.txt").read_text() != checksums:

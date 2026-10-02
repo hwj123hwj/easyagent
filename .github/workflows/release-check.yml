@@ -7,7 +7,12 @@ on:
       - 'scripts/publish-release.py'
       - 'scripts/build-release.sh'
       - 'scripts/check-release-build.sh'
+      - 'scripts/build-desktop.sh'
+      - 'scripts/check-desktop*.sh'
       - 'scripts/test_release*.py'
+      - 'desktop/**'
+      - 'workflow-runtime/**'
+      - 'CHANGELOG.md'
       - 'cmd/easyagent*/**'
 permissions:
   contents: read
@@ -25,3 +30,31 @@ jobs:
         with:
           node-version: 22
       - run: bash scripts/check-release-build.sh
+  desktop-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      EA_DESKTOP_NODE_VERSION: v24.21.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Exercise the real desktop release builder with a local-only tag
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(node -p process.arch)" = "$ARCH"
+          bash scripts/check-desktop-release-build.sh "$ARCH"

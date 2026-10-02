@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Linux release builder. Verification is performed by the required Verify job.
+# Linux core builder. Desktop payloads join this staging manifest before publication.
 set -euo pipefail
 version=${1:?Usage: build-release.sh vMAJOR.MINOR.PATCH}
 python3 scripts/release.py validate "$version"
@@ -32,5 +32,5 @@ done
 # Both binaries must expose the version without starting a service or reading credentials.
 [[ $(dist/easyagent-linux-amd64 --version) == "easyagent $version" ]]
 [[ $(dist/easyagent-bridge-linux-amd64 --version) == "easyagent-bridge $version" ]]
-python3 scripts/release.py manifest "$version" "$revision" dist
+python3 scripts/release.py manifest "$version" "$revision" dist --core-only
 (cd dist && sha256sum --check checksums.txt)

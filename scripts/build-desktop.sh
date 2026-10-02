@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build a self-contained macOS desktop app without replacing any installed core.
-# Usage: scripts/build-desktop.sh [arm64|x64|--x64]
+# Usage: scripts/build-desktop.sh [arm64|x64|--x64] [release-tag]
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -13,8 +13,21 @@ esac
 node -e 'if(Number(process.versions.node.split(".")[0])<22)throw Error("Node.js 22+ is required to build workflow runtime")'
 cd "$PROJECT_ROOT"
 BUNDLE="$PROJECT_ROOT/desktop/.bundle"
+VERSION=$(node -e 'const p=require("./desktop/package.json"),l=require("./desktop/package-lock.json");if(p.version!==l.version||p.version!==l.packages[""].version)throw Error("Desktop package and lock versions differ");process.stdout.write(p.version)')
+TAG=${2:-}
+python3 - "$VERSION" <<'PY'
+import sys
+sys.path.insert(0, "scripts")
+from release import version_key
+version_key("v" + sys.argv[1])
+PY
+if [[ -n "$TAG" ]]; then
+  [[ "$TAG" == "v$VERSION" ]] || { echo 'Release tag must match desktop package version' >&2; exit 1; }
+  [[ $(node -p process.arch) == "$ARCH" ]] || { echo 'Release installers must be built and verified on their native architecture' >&2; exit 1; }
+  python3 scripts/release.py validate "$TAG"
+fi
+OUTPUT="$PROJECT_ROOT/desktop/release/$VERSION/$ARCH"
 mkdir -p "$BUNDLE/licenses"
-VERSION=$(node -p 'require("./desktop/package.json").version')
 CGO_ENABLED=0 GOOS=darwin GOARCH="$GO_ARCH" go build -trimpath \
   -ldflags "-s -w -X main.version=v$VERSION" -o "$BUNDLE/easyagent" ./cmd/easyagent
 (cd workflow-runtime && npm ci --ignore-scripts && npm run build && npm test)
@@ -47,5 +60,7 @@ npm ci --ignore-scripts
 npm run typecheck
 npm test
 if [[ ! -f node_modules/electron/path.txt ]]; then node node_modules/electron/install.js; fi
-npm run "electron:build:$ARCH"
-echo "Desktop package: $PROJECT_ROOT/desktop/release (Node $NODE_VERSION, $ARCH)"
+npm run "electron:build:$ARCH" -- --config.directories.output="$OUTPUT"
+cd "$PROJECT_ROOT"
+bash scripts/check-desktop-package.sh "$ARCH" "$TAG" "$OUTPUT"
+echo "Desktop package: $OUTPUT (Node $NODE_VERSION, $ARCH)"

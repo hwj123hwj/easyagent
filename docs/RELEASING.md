@@ -9,7 +9,7 @@
 - MAJOR：1.0 之后不兼容的公开接口变更。当前仍处于 0.x，不为发布流程整改直接跳到 1.0。
 - 预发布用于验收，不标记为 GitHub Latest；正式发布只推进版本，不倒退。
 
-公开接口包括 CLI 参数、配置名、HTTP 协议及 `sdk/`。`desktop/package.json` 描述独立 Electron 客户端的包版本，不用于决定核心 Release；工作流 bundle 跟随核心 tag 和提交发布。
+公开接口包括 CLI 参数、配置名、HTTP 协议及 `sdk/`。`desktop/package.json` 描述 Electron 客户端的包版本；从 `v0.2.0-alpha.1` 起，同一个 Release 包含 CLI、桥接、工作流和桌面，发布时该包版本必须与 tag 去掉 `v` 后一致。工作流 bundle 同样跟随该 tag 和提交。
 
 2026-10-01 按维护者明确要求，在备份旧 Pi Agent 的 Release 元数据、全部资产和 Git 标签对象后，清理 `v0.10.0` 至 `v0.11.0` 的公开 Release 与 tag，以 EasyAgent `v0.1.0` 重新开始。这是更名时的一次性迁移；提交历史不清理。后续**一个 tag 永远对应一个提交；不能删除重打、强推移动或覆盖已发布资产。** GitHub 的 Release immutability 对启用之后的新发布锁定资产；tag ruleset 保护 `v*` 标签免于移动、删除。[GitHub 不可变发布说明](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 
@@ -24,7 +24,7 @@
 
 ## 准备版本
 
-1. 选定版本，更新 [CHANGELOG.md](../CHANGELOG.md)：将本轮变化整理到精确的 `## [vX.Y.Z] - YYYY-MM-DD` 节，写明新功能、修复与迁移要求。保留下一轮 `Unreleased`。
+1. 选定版本，更新 [CHANGELOG.md](../CHANGELOG.md)：将本轮变化整理到精确的 `## [vX.Y.Z] - YYYY-MM-DD` 节，写明新功能、修复与迁移要求。保留下一轮 `Unreleased`，同步桌面 `package.json` 与 lockfile 的版本。
 2. 通过 PR 合并代码和版本说明，等 CI 完成。在干净的主工作副本或专用临时 checkout 操作，不提交凭据、运行数据或本地审阅文件。
 3. 同步 main 和 tags，创建附注 tag，显式推送该 tag：
 
@@ -44,16 +44,18 @@ git push origin refs/tags/v0.1.1-rc.1
 ## 自动发布的强制检查
 
 1. 严格版本格式；附注 tag；HEAD 与 tag 一致；提交已进入 main；版本高于现有版本；对应 CHANGELOG 节非空。
-2. 复用完整 Verify：动态工作流测试、Go 测试/vet、Bubble Tea、Web、更新器，以及发布与安装脚本测试。
-3. 同一 SHA 构建 Linux/macOS、amd64/arm64 的核心与桥接共 8 个程序。注入相同版本，并验证 Linux 程序的 `--version`；Node bundle 与许可文件一起构建。
-4. 生成 `release.json`（版本、完整提交 SHA、各资产 SHA-256）和 `checksums.txt`。缺失、空文件、额外旧文件、校验失败都会阻止发布。
+2. 复用完整 Verify：动态工作流测试、Go 测试/vet、Bubble Tea、Web、桌面 TypeScript / 测试 / 构建、更新器，以及发布与安装脚本测试。
+3. 同一 SHA 构建 Linux/macOS、amd64/arm64 的核心与桥接共 8 个程序。注入相同版本，并验证 Linux 程序的 `--version`；Node bundle 与许可文件一起构建。两种 Mac 架构在各自原生 runner 构建桌面 DMG，核验包版本、内置核心的源码 SHA 与架构、Node、工作流、许可证及 DMG 内部内容，并检查包内应用的完整 ad hoc 签名。
+4. 汇集上述 12 个组件，生成完整 `release.json`（版本、完整提交 SHA、各资产 SHA-256）和 `checksums.txt`，共 14 项资产。Linux core 阶段的 `core_only` 清单不能发布；缺失任一 DMG、空文件、错版本文件名、额外旧文件或校验失败都会阻止发布。
 5. 先建草稿，上传全部资产，核对 GitHub 返回的各文件 digest，再一次性公开；已公开版本拒绝重传。失败只保留草稿供检查，不公开半套文件。
 
-发布相关脚本变更还会运行 `Release build check`：在临时仓库创建仅供测试的 tag，实际构建所有目标，不向 GitHub 推送测试 tag，也不创建 Release。
+发布相关脚本变更还会运行 `Release build check`：在临时仓库创建仅供测试的 tag，实际构建所有核心目标及两个桌面目标，不向 GitHub 推送测试 tag，也不创建 Release。
 
 发布失败后先看 Actions 日志。纯网络上传失败可以重跑同一 tag，继续未公开的草稿；若需要改代码或脚本，提交修复后使用新版本，不移动旧 tag。草稿中出现不匹配的提交或额外资产会拒绝发布，应先核查来源。
 
 ## 安装与核验
+
+macOS 桌面从 Release 下载 `EasyAgent-版本-arm64.dmg`（Apple Silicon）或 `EasyAgent-版本-x64.dmg`（Intel）。桌面更新检查只提示正式版；RC 需手动下载。当前 RC 使用 ad hoc 测试签名，未进行 Developer ID 签名或 Apple 公证，应在 Release 中明确说明；完整测试签名与 GitHub SHA-256 校验均不代替 Apple 的开发者认证和公证。
 
 安装脚本默认选择最新正式 Release，也可显式指定已有版本：
 
