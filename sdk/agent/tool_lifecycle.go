@@ -42,10 +42,13 @@ type AfterToolCallHook func(ctx context.Context, call ToolCallContext, result To
 // ConfirmationRequest 描述一次需要用户确认的工具调用。
 // 当工具实现了 ToolWithConfirmation 且 RequiresConfirmation 返回 ok=true 时构造。
 type ConfirmationRequest struct {
-	ToolCallID  string
-	ToolName    string
-	Args        json.RawMessage // validated + prepared args
-	Description string          // 工具给出的操作描述，展示给用户
+	// RequiresApproval marks integrations whose trust is independent of the
+	// ordinary dangerous-tool confirmation toggle.
+	RequiresApproval bool
+	ToolCallID       string
+	ToolName         string
+	Args             json.RawMessage // validated + prepared args
+	Description      string          // 工具给出的操作描述，展示给用户
 }
 
 // ConfirmDecision 是用户对一次确认请求的裁决。

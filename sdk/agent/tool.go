@@ -90,3 +90,11 @@ type ToolWithConfirmation interface {
 	Tool
 	RequiresConfirmation(params json.RawMessage) (description string, ok bool)
 }
+
+// ToolRequiringConfirmation opts a tool into refusing execution when its
+// confirmation cannot be presented. External tools use this to keep an
+// untrusted server from silently inheriting a headless entrypoint's access.
+type ToolRequiringConfirmation interface {
+	Tool
+	RequiresConfirmationAvailable() bool
+}

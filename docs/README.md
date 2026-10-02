@@ -7,6 +7,8 @@
 | 文档 | 内容 |
 |---|---|
 | [配置](CONFIG.md) | 模型、环境变量、文件访问策略、认证 |
+| [桌面客户端](DESKTOP.md) | 本地/远程连接、桌面交互、macOS 构建 |
+| [MCP](MCP.md) | 传输、用户/项目配置、工具信任与 OAuth |
 | [飞书](FEISHU.md) | 网页配置、长连接、首次配对、故障定位 |
 | [动态工作流](DYNAMIC_WORKFLOW.md) | `/workflow`、ZCode 引擎接入、并发与恢复 |
 | [YAML 流水线](WORKFLOW.md) | 固定 DAG、模板、重试、审批与缓存 |

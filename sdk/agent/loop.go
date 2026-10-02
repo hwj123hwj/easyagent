@@ -582,12 +582,19 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) ai.Message 
 			// 未注入 ConfirmFunc（serve/feishu 单向流）→ 默认放行。
 			approved := true
 			reason := ""
+			gate, gated := tool.(ToolRequiringConfirmation)
+			requiresApproval := gated && gate.RequiresConfirmationAvailable()
+			if requiresApproval && a.confirmFunc == nil {
+				approved = false
+				reason = "this tool requires an interactive approval or explicit server trust"
+			}
 			if a.confirmFunc != nil {
 				decision := a.confirmFunc(ctx, ConfirmationRequest{
-					ToolCallID:  call.ID,
-					ToolName:    call.Name,
-					Args:        args,
-					Description: desc,
+					RequiresApproval: requiresApproval,
+					ToolCallID:       call.ID,
+					ToolName:         call.Name,
+					Args:             args,
+					Description:      desc,
 				})
 				approved = decision.Approved
 				reason = decision.Reason

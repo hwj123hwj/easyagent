@@ -39,11 +39,11 @@ systemctl --user stop easyagent-update.timer     # 暂停自动更新
 
 手工回滚：先停 timer，停止相关服务，从同一已验证 SHA 的 release 同时恢复 core、已配置的 bridge 和 `workflow-runtime.mjs`，保留同版来源与许可文件；然后重启服务，检查健康版本与桥接连接。不能只替换 core 而留下不兼容的桥接或 bundle。保留 timer 停止状态直到问题解决。没有自动清理发布备份，定期按磁盘空间人工保留需要的版本。
 
-部署会短暂断开 WebSocket，进行中的请求可能中断；网页保留当前输入草稿，完成后重新连接。需要避免打断长任务时先暂停 timer，任务结束再开启。构建或测试失败不重启线上服务，网络暂时不可用时保持现有版本。
+部署会短暂断开 WebSocket，网页与桌面保留草稿并重新订阅会话任务。定时更新在任务活动时推迟；手动重启或异常退出中断的已接受任务标为 `interrupted`，不会因客户端重试相同 request ID 自动再执行。构建或测试失败不重启线上服务，网络暂时不可用时保持现有版本。
 
 ### 网页飞书设置
 
-在核心服务的 `core.env` 中显式配置以下两个绝对路径（同时必须设置 `EA_API_KEY`）：
+在核心服务的 `core.env` 中显式配置以下两个绝对路径（同时必须设置 `EA_SERVER_API_KEY` 或兼容的 `EA_API_KEY`）：
 
 ```dotenv
 EA_FEISHU_ENV_FILE=/home/q/.config/easyagent/feishu.env
@@ -58,7 +58,7 @@ FEISHU_OWNER_STATE_FILE=/home/q/.config/easyagent/feishu-owner.json
 
 ### 更新时保护正在执行的任务
 
-`EA_DEPLOY_CORE_ENV` 指向核心 EnvironmentFile（默认 `~/.config/easyagent/core.env`），更新器从中读取 `EA_API_KEY`，不在命令行或日志中打印它。可用 `EA_DEPLOY_CONTROL` 显式设置部署控制 URL，默认由健康检查 URL 推导 `/admin/deploy`。
+`EA_DEPLOY_CORE_ENV` 指向核心 EnvironmentFile（默认 `~/.config/easyagent/core.env`），更新器优先读取 `EA_SERVER_API_KEY`，否则读取兼容的 `EA_API_KEY`，不在命令行或日志中打印它。桥接使用同一服务令牌；模型网关密钥可继续单独设置。可用 `EA_DEPLOY_CONTROL` 显式设置部署控制 URL，默认由健康检查 URL 推导 `/admin/deploy`。
 
 控制接口始终要求认证：GET 返回活动数，POST 仅在空闲时取得 5 分钟租约，DELETE 使用原租约释放。忙碌返回 409；鉴权失败、接口不存在、网络失败均保留当前服务。更新器失败时尽力释放租约，异常退出后的租约也会过期，避免永久阻塞新任务。
 

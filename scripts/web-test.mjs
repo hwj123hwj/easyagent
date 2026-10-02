@@ -55,7 +55,7 @@ test('clipboard works on HTTP and falls back when modern access is denied', asyn
   assert.ok(removed);
 });
 
-import { commands, parseCommand, filterCommands } from '../internal/web/static/js/commands.js';
+import { commands, parseCommand, filterCommands, mergeCommands } from '../internal/web/static/js/commands.js';
 import { Drafts } from '../internal/web/static/js/drafts.js';
 test('slash completion searches names and Chinese labels, not arguments or paths', () => {
   assert.equal(filterCommands('/').length, commands.length);
@@ -185,4 +185,63 @@ test('deployment rejection restores unsent draft without replacing newer input',
   Object.assign(panel,{pendingSends:new Map([['a','//help']]),state:{currentSessionId:'a'},input:{value:''},drafts:new Drafts(),_resizeInput(){}});
   panel._restoreRejectedPrompt('a');assert.equal(panel.input.value,'//help');assert.equal(panel.drafts.get('a'),'//help');
   panel.pendingSends.set('a','previous');panel.input.value='newer';panel._restoreRejectedPrompt('a');assert.equal(panel.input.value,'newer');
+});
+
+import { PiWebSocket } from '../internal/web/static/js/websocket.js';
+test('stream recovery deduplicates replay and requests a snapshot on sequence gaps', () => {
+  const ws=new PiWebSocket('http://test'),events=[],requests=[];
+  ws.send=msg=>{requests.push(msg);return true;};
+  ws.on('event:text_delta',event=>events.push(event.text_delta));
+  ws._receive({type:'snapshot',session_id:'a',seq:4,run_id:'run_a'});
+  ws._receive({type:'event',session_id:'a',seq:5,event:{type:'text_delta',text_delta:'first'}});
+  ws._receive({type:'event',session_id:'a',seq:5,event:{type:'text_delta',text_delta:'duplicate'}});
+  ws._receive({type:'event',session_id:'a',seq:7,event:{type:'text_delta',text_delta:'gap'}});
+  assert.deepEqual(events,['first']);assert.equal(requests.at(-1).after_seq,5);
+  ws._receive({type:'replay',session_id:'a',seq:7,run:{run_id:'run_a'},events:[
+    {type:'event',session_id:'a',seq:6,event:{type:'text_delta',text_delta:'second'}},
+    {type:'event',session_id:'a',seq:7,event:{type:'text_delta',text_delta:'third'}},
+  ]});
+  assert.deepEqual(events,['first','second','third']);
+  ws.sendCancel('a');assert.equal(requests.at(-1).run_id,'run_a');
+  ws.stopped=true;ws._scheduleReconnect();assert.equal(ws.reconnectTimer,null);
+});
+test('a send keeps its draft until accepted and never erases a newer draft', async () => {
+  for(const edit of [false,true]){
+    const panel=Object.create(ChatPanel.prototype),drafts=new Drafts(),sent=[];
+    Object.assign(panel,{input:{value:'发送这条'},inputRevision:1,visibleSession:'a',drafts,pendingSends:new Map(),busy:new Set(),state:{currentSessionId:'a'},ws:{connected:true,sendPrompt:(...args)=>{sent.push(args);return true;}},commandMenu:{close(){}},_notice(){},_updateButtons(){},_resizeInput(){},show(){}});
+    drafts.set('a','发送这条');
+    await panel._send();assert.equal(panel.input.value,'发送这条');assert.equal(sent.length,1);
+    await panel._send();assert.equal(sent.length,1,'awaiting ACK must not submit again');
+    if(edit){panel.input.value='新草稿';drafts.set('a','新草稿');panel.inputRevision++;}
+    panel._accepted({session_id:'a',request_id:sent[0][2],state:'running'});
+    assert.equal(panel.input.value,edit?'新草稿':'');assert.equal(drafts.get('a'),edit?'新草稿':'');
+    assert.equal(panel.pendingSends.size,0);assert.ok(panel.busy.has('a'));
+  }
+});
+
+test('server commands submit a returned prompt once, after command completion, and respect newer input', async () => {
+  mergeCommands([{name:'qa_followup',description:'test command'}]);
+  const oldPost=api.post,oldDocument=globalThis.document;
+  globalThis.document={getElementById:()=>({})};
+  try {
+    for(const edit of [false,true]){
+      const sent=[],panel=Object.create(ChatPanel.prototype);
+      Object.assign(panel,{state:{currentSessionId:'a'},input:{value:'/qa_followup'},inputRevision:1,
+        commandMenu:{close(){}},_notice(){},_updateButtons(){},_inputChanged(){this.inputRevision++;},
+        async _send(){assert.equal(this.commandRunning,false);sent.push(this.input.value);}});
+      api.post=async()=>{if(edit){panel.input.value='新的草稿';panel.inputRevision++;}return{output:'准备执行',should_query:true,query_prompt:'执行目标'};};
+      await panel._command('/qa_followup');
+      assert.deepEqual(sent,edit?[]:['执行目标']);
+      assert.equal(panel.input.value,edit?'新的草稿':'执行目标');
+    }
+  } finally {api.post=oldPost;globalThis.document=oldDocument;}
+});
+
+test('a restored interrupted run shows history without duplicating the prompt or auto retrying', () => {
+  const panel=Object.create(ChatPanel.prototype),users=[],notices=[];
+  Object.assign(panel,{state:{currentSessionId:'a'},views:new Map(),busy:new Set(),messageList:{scrollTop:10},jump:{},follow:true,
+    clear(){},show(){},_updateButtons(){},_confirmations(){},_finalizeStream(){},_notice:text=>notices.push(text),
+    _addUserMessage:text=>users.push(text),_finishTools(){},streamHandlers:{}});
+  panel._snapshot({session_id:'a',reset:true,run:{state:'interrupted',prompt:''},messages:[{role:'user',content:'原任务'}],events:[]});
+  assert.deepEqual(users,['原任务']);assert.equal(panel.state.streaming,false);assert.match(notices[0],/未自动重新执行/);
 });

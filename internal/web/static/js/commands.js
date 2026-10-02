@@ -9,10 +9,19 @@ export const commands = [
   {name:'tools', label:'可用工具', description:'查看服务提供的工具'},
   {name:'compact', label:'压缩上下文', description:'总结较早消息，可追加保留要求', session:true, args:true},
   {name:'stop', label:'停止生成', description:'停止当前会话的任务'},
-  {name:'settings', label:'设置', description:'飞书连接、配对与服务状态'},
+  {name:'settings', label:'设置', description:'MCP、飞书连接与服务状态'},
+  {name:'mcp', label:'MCP 服务', description:'管理服务、工具和项目授权；留空打开设置', args:true},
 ];
+// Fetch the host catalog so new server commands appear without a frontend release.
+export function mergeCommands(catalog) {
+  for (const command of catalog || []) {
+    const existing=commands.find(c=>c.name===command.name);
+    if (existing) { existing.subcommands=command.subcommands; continue; }
+    commands.push({...command,label:command.name,args:true,session:true,server:true});
+  }
+}
 export function parseCommand(text) {
-  const match = text.trim().match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
+  const match = text.trim().match(/^\/([a-z][a-z0-9_-]*)(?:\s+([\s\S]*))?$/i);
   return match ? {name:match[1].toLowerCase(), args:(match[2] || '').trim()} : null;
 }
 export function filterCommands(text) {

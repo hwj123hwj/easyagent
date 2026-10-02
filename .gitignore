@@ -25,6 +25,9 @@ docs/reviews/
 data/
 *.log
 bin/
+.easyagent/mcp.json
+.easyagent/mcp-auth.json
+.easyagent/mcp.json.trust.json
 
 # Promo video workspace (large media + local .env)
 .video-promo-v011/

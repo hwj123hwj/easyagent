@@ -1,6 +1,6 @@
-appId: com.earendil-works.pi-go-desktop
+appId: com.easyagent.desktop
 productName: EasyAgent
-copyright: Copyright © 2024 Earendil Works
+copyright: Copyright © 2026 EasyAgent contributors
 
 # Publish to GitHub Releases (for future electron-updater support)
 publish:
@@ -16,20 +16,25 @@ directories:
 files:
   - dist/electron/**/*
   - dist/renderer/**/*
-  - "!node_modules"
+  - node_modules/ws/**/*
+  - node_modules/semver/**/*
   - "!src"
 
 # Go binary — placed in Contents/Resources/ (not inside asar)
 extraResources:
-  - from: "../easyagent"
-    to: "easyagent"
+  - from: .bundle/easyagent
+    to: easyagent
+  - from: .bundle/workflow-runtime.mjs
+    to: workflow-runtime.mjs
+  - from: .bundle/node
+    to: runtime/bin/node
+  - from: .bundle/licenses
+    to: licenses
 
 # macOS specific
 mac:
   target:
-    - target: dmg
-      arch:
-        - arm64
+    - dmg
   category: public.app-category.developer-tools
   hardenedRuntime: false
   gatekeeperAssess: false

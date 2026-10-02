@@ -17,6 +17,35 @@ type confirmableTool struct {
 	executed atomic.Int32
 }
 
+type approvalRequiredTool struct{ confirmableTool }
+
+func (*approvalRequiredTool) RequiresConfirmationAvailable() bool { return true }
+
+func TestExternalToolRequiresApprovalChannel(t *testing.T) {
+	for _, approved := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no_channel", true: "explicit_approval"}[approved], func(t *testing.T) {
+			registry := providers.NewRegistry()
+			registry.Register(&mockTestProvider{responses: []mockTestResponse{
+				{toolCalls: []ai.ToolCall{{ID: "c1", Name: "danger", Args: `{}`}}, stop: ai.StopReasonToolUse},
+				{text: "done", stop: ai.StopReasonStop},
+			}})
+			tool := &approvalRequiredTool{}
+			var confirm ConfirmFunc
+			if approved {
+				confirm = func(context.Context, ConfirmationRequest) ConfirmDecision { return ConfirmDecision{Approved: true} }
+			}
+			ag := New(Options{Model: ai.Model{ID: "test", Provider: "mock_test"}, Registry: registry, Tools: []Tool{tool}, ConfirmFunc: confirm, MaxTurns: 5})
+			_, err := ag.Prompt(context.Background(), ai.NewTextUserMessage("do it"))
+			require.NoError(t, err)
+			if approved {
+				assert.Equal(t, int32(1), tool.executed.Load())
+			} else {
+				assert.Zero(t, tool.executed.Load())
+			}
+		})
+	}
+}
+
 func (t *confirmableTool) Name() string        { return "danger" }
 func (t *confirmableTool) Description() string { return "A tool that needs confirmation" }
 func (t *confirmableTool) Parameters() map[string]any {

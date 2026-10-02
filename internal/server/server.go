@@ -39,6 +39,7 @@ func (s *Server) SetVersion(v string) {
 // It routes requests to AgentSessions via the App's SessionRegistry.
 type Server struct {
 	activity      activityGate
+	runs          *runRegistry
 	ctx           context.Context
 	cancel        context.CancelFunc
 	app           *app.App
@@ -104,6 +105,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 type ChatRequest struct {
 	Prompt    string `json:"prompt"`
 	SessionID string `json:"session_id,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // ChatResponse is the response for non-streaming chat.
@@ -129,7 +131,8 @@ type ErrorResponse struct {
 // It also wires the LoopManager's trigger resolver so /loop can inject prompts.
 func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	srv := &Server{app: application, slashCmds: slashCmds, ctx: ctx, cancel: cancel}
+	srv := &Server{app: application, slashCmds: slashCmds, ctx: ctx, cancel: cancel, runs: newRunRegistry()}
+	srv.restoreRunReceipts()
 
 	// Wire loop trigger: when a /loop fires, inject the prompt into the target session
 	if application.LoopManager() != nil {
@@ -146,22 +149,11 @@ func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
 // injectLoopPrompt injects a prompt into a session as a background agent turn.
 // Used by the /loop scheduler to fire recurring prompts.
 func (s *Server) injectLoopPrompt(ctx context.Context, sessionID, prompt string) error {
-	done, ok := s.activity.begin()
-	if !ok {
-		return fmt.Errorf("服务正在更新，请稍后重试")
-	}
-	defer done()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stop := context.AfterFunc(s.ctx, cancel)
-	defer stop()
-	sess, err := s.app.LoadSession(ctx, sessionID)
+	run, _, err := s.startRun(sessionID, prompt, "")
 	if err != nil {
-		return fmt.Errorf("load session for loop: %w", err)
+		return err
 	}
-
-	// Fire a non-blocking prompt; we don't need the result, just want it to run.
-	_, err = sess.Prompt(ctx, prompt)
+	_, err = s.waitRun(ctx, run)
 	return err
 }
 
@@ -177,10 +169,14 @@ func (s *Server) Handler() http.Handler {
 	restMux.HandleFunc("POST /sessions", s.createSession)
 	restMux.HandleFunc("GET /sessions/{id}/messages", s.getSessionMessages)
 	restMux.HandleFunc("GET /sessions/{id}/info", s.getSessionInfo)
+	restMux.HandleFunc("GET /sessions/{id}/run", s.getRun)
+	restMux.HandleFunc("POST /sessions/{id}/run/cancel", s.cancelRunHTTP)
+	restMux.HandleFunc("POST /sessions/{id}/run/confirm", s.confirmRunHTTP)
 	restMux.HandleFunc("DELETE /sessions/{id}", s.deleteSession)
 	restMux.HandleFunc("POST /sessions/{id}/model", s.switchModel)
 	restMux.HandleFunc("GET /models", s.listModels)
 	restMux.HandleFunc("GET /tools", s.listTools)
+	restMux.HandleFunc("GET /commands", s.listCommands)
 	restMux.HandleFunc("GET /applications", s.listApplications)
 	restMux.HandleFunc("POST /sessions/{id}/compact", s.compactSession)
 	restMux.HandleFunc("POST /sessions/{id}/command", s.executeCommand)
@@ -202,6 +198,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerDynamicWorkflowRoutes(restMux)
 
 	s.registerFeishuSettings(restMux)
+	s.registerMCPRoutes(restMux)
 
 	// User profile endpoints
 	s.registerProfileRoutes(restMux)
@@ -232,6 +229,9 @@ func (s *Server) Handler() http.Handler {
 	topMux.Handle("/sessions/", restHandler)
 	topMux.Handle("/models", restHandler)
 	topMux.Handle("/tools", restHandler)
+	topMux.Handle("/commands", restHandler)
+	topMux.Handle("/mcp", restHandler)
+	topMux.Handle("/mcp/", restHandler)
 	topMux.Handle("/applications", restHandler)
 	topMux.Handle("/workspace/", restHandler)
 	topMux.Handle("/kb/", restHandler)
@@ -274,97 +274,96 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	var req ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024*1024)).Decode(&req); err != nil {
+		writeError(w, 400, err.Error())
 		return
 	}
-	if req.Prompt == "" {
-		writeError(w, http.StatusBadRequest, "prompt is required")
-		return
-	}
-
-	if s.rejectActiveWorkflowActor(w, req.SessionID) {
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-	defer cancel()
-
-	sess, err := s.resolveSession(ctx, req.SessionID)
+	run, _, err := s.startRun(req.SessionID, req.Prompt, req.RequestID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		runHTTPError(w, err)
 		return
 	}
-
-	assistant, err := sess.Prompt(ctx, req.Prompt)
+	assistant, err := s.waitRun(r.Context(), run)
 	if err != nil {
-		if errors.Is(err, agent.ErrAgentBusy) {
-			writeError(w, http.StatusConflict, "agent is busy processing another request")
-			return
-		}
-		slog.Error("chat failed", "error", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
+		runHTTPError(w, err)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(ChatResponse{
-		Text:      assistant.Text,
-		ToolCalls: assistant.ToolCalls,
-		SessionID: sess.SessionID(),
-	})
+	_ = json.NewEncoder(w).Encode(ChatResponse{Text: assistant.Text, ToolCalls: assistant.ToolCalls, SessionID: run.SessionID})
 }
 
-// ─── POST /chat/stream ────────────────────────────────────────────────────────
-
+// SSE observes the same session-owned run as WS; losing the HTTP connection only unsubscribes.
 func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) {
 	var req ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024*1024)).Decode(&req); err != nil {
+		writeError(w, 400, err.Error())
 		return
 	}
-	if req.Prompt == "" {
-		writeError(w, http.StatusBadRequest, "prompt is required")
+	run, duplicate, err := s.startRun(req.SessionID, req.Prompt, req.RequestID)
+	if err != nil {
+		runHTTPError(w, err)
 		return
 	}
-
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-
-	if s.rejectActiveWorkflowActor(w, req.SessionID) {
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-	defer cancel()
-
-	sess, err := s.resolveSession(ctx, req.SessionID)
+	writeSSE(w, "session_id", run.SessionID)
+	writeRunSSE(w, "accepted", map[string]any{"session_id": run.SessionID, "run_id": run.ID, "request_id": run.RequestID, "duplicate": duplicate})
+	observer := &wsConn{outgoing: make(chan []byte, 512), done: make(chan struct{})}
+	defer observer.close()
+	defer s.unsubscribeRun(observer, run.SessionID)
+	snapshot, err := s.runSnapshot(run.SessionID, 0, "", observer)
 	if err != nil {
 		writeSSE(w, "error", err.Error())
 		return
 	}
-
-	writeSSE(w, "session_id", sess.SessionID())
-
-	stream, err := sess.PromptStream(ctx, req.Prompt)
-	if err != nil {
-		if errors.Is(err, agent.ErrAgentBusy) {
-			writeSSE(w, "error", "agent is busy processing another request")
+	if run.restored || snapshot.Run == nil || snapshot.Run.ID != run.ID {
+		// A later command/run may have replaced the session projection. Repeating
+		// the old request still returns its own result rather than following a new run.
+		assistant, err := s.waitRun(r.Context(), run)
+		if err != nil {
+			writeSSE(w, "error", err.Error())
 			return
 		}
-		writeSSE(w, "error", err.Error())
+		writeRunSSE(w, "done", agent.AgentStreamEvent{Type: agent.StreamEventDone, FinalMessage: assistant})
+		return
+	}
+	if events, ok := snapshot.Events.([]agent.AgentStreamEvent); ok {
+		for _, event := range events {
+			writeRunSSE(w, string(event.Type), event)
+		}
+	}
+	// A completed duplicate is replayed above; no new execution or subscription wait.
+	if snapshot.Run != nil && !runActive(snapshot.Run) {
 		return
 	}
 
-	flusher, canFlush := w.(http.Flusher)
-	for event := range stream {
-		data, err := json.Marshal(event)
-		if err != nil {
-			continue
-		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
-		if canFlush {
-			flusher.Flush()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-observer.done:
+			return
+		case data := <-observer.outgoing:
+			var event struct {
+				Type         string                 `json:"type"`
+				Event        agent.AgentStreamEvent `json:"event"`
+				State        string                 `json:"state"`
+				Confirmation *pendingConfirmation   `json:"confirmation"`
+			}
+			if json.Unmarshal(data, &event) != nil {
+				continue
+			}
+			if event.Type == "event" {
+				writeRunSSE(w, string(event.Event.Type), event.Event)
+			}
+			if event.Type == "confirmation" {
+				writeRunSSE(w, "confirmation", event.Confirmation)
+			}
+			if event.Type == "status" && event.State != "running" && event.State != "waiting_confirmation" {
+				return
+			}
 		}
 	}
 }
@@ -424,8 +423,12 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist workspace and application metadata for session listing
-	_ = s.app.SessionManager().SaveMeta(sess.SessionID(), req.Cwd, req.Application)
+	// Persist the resolved workspace, including sessions using the server default.
+	if err := s.app.SessionManager().SaveMeta(sess.SessionID(), sess.Workspace(), req.Application); err != nil {
+		_ = s.app.SessionStore().Delete(sess.SessionID())
+		writeError(w, http.StatusInternalServerError, "cannot save session metadata")
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(SessionResponse{
@@ -519,6 +522,16 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("id")
+	s.runs.mu.Lock()
+	defer s.runs.mu.Unlock()
+	if state := s.runs.sessions[sessionID]; state != nil && state.run != nil && runActive(state.run) {
+		writeError(w, http.StatusConflict, "会话仍在执行任务，请先取消或等待完成")
+		return
+	}
+	if sess, ok := s.app.SessionStore().Get(sessionID); ok && sess.IsBusy() {
+		writeError(w, http.StatusConflict, "会话仍在执行另一入口的任务，请先取消或等待完成")
+		return
+	}
 	mgr := s.app.SessionManager()
 	if err := mgr.Delete(sessionID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -526,6 +539,12 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = s.app.SessionStore().Delete(sessionID)
+	delete(s.runs.sessions, sessionID)
+	for requestID, run := range s.runs.requests {
+		if run.SessionID == sessionID {
+			delete(s.runs.requests, requestID)
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
@@ -756,6 +775,9 @@ func (s *Server) compactSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("id")
+	if s.rejectActiveRun(w, sessionID) {
+		return
+	}
 
 	var req CompactRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -774,9 +796,14 @@ func (s *Server) compactSession(w http.ResponseWriter, r *http.Request) {
 
 	summary, trimmedFrom, trimmedTo, err := sess.Compact(ctx, req.CustomInstructions)
 	if err != nil {
+		if errors.Is(err, agent.ErrAgentBusy) {
+			writeError(w, http.StatusConflict, "会话仍在执行任务，请先取消或等待完成")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "compact failed: "+err.Error())
 		return
 	}
+	s.invalidateRunSnapshot(sessionID)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(CompactResponse{
@@ -798,6 +825,7 @@ type CommandResponse struct {
 	Output      string `json:"output"`
 	ShouldQuery bool   `json:"should_query"`
 	QueryPrompt string `json:"query_prompt,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
 }
 
 func (s *Server) executeCommand(w http.ResponseWriter, r *http.Request) {
@@ -805,6 +833,9 @@ func (s *Server) executeCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("id")
+	if s.rejectActiveRun(w, sessionID) {
+		return
+	}
 
 	var req CommandRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -844,6 +875,10 @@ func (s *Server) executeCommand(w http.ResponseWriter, r *http.Request) {
 
 	resp := CommandResponse{
 		Output: result.Output,
+	}
+	s.invalidateRunSnapshot(sessionID)
+	if result.SessionSwitchTo != nil {
+		resp.SessionID = result.SessionSwitchTo.SessionID()
 	}
 	if result.ShouldQuery {
 		resp.ShouldQuery = true

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,6 +12,24 @@ import (
 
 // RegisterBuiltins registers coding-agent slash commands into the shared framework registry.
 func RegisterBuiltins(registry *slashcmd.Registry) {
+	registry.Register(slashcmd.Command{
+		Name: "mcp", Description: "管理 MCP 服务、项目授权与工具 (/mcp list)",
+		Subcommands: []slashcmd.Subcommand{{Name: "list", Description: "查看服务与连接状态"}, {Name: "reconnect", Description: "重连服务"}, {Name: "refresh", Description: "刷新工具"}, {Name: "enable", Description: "启用服务"}, {Name: "disable", Description: "停用服务"}, {Name: "trust", Description: "授权服务工具"}, {Name: "untrust", Description: "恢复工具逐次确认"}, {Name: "project", Description: "项目配置 trust|untrust"}},
+		Handler: func(ctx slashcmd.Context, args string) (slashcmd.CommandResult, error) {
+			host, ok := ctx.App.(interface {
+				ManageMCP(context.Context, string, string) (string, error)
+			})
+			if !ok {
+				return slashcmd.CommandResult{}, fmt.Errorf("MCP management is unavailable in this host")
+			}
+			workspace := ""
+			if session, ok := ctx.Session.(interface{ Workspace() string }); ok {
+				workspace = session.Workspace()
+			}
+			out, err := host.ManageMCP(ctx.Ctx, workspace, args)
+			return slashcmd.CommandResult{Output: out}, err
+		},
+	})
 	registerWorkflow(registry)
 	registry.Register(slashcmd.Command{
 		Name:        "confirm",
@@ -317,11 +336,23 @@ func RegisterBuiltins(registry *slashcmd.Registry) {
 				return slashcmd.CommandResult{Output: fmt.Sprintf("Current goal:\n  %s", goal)}, nil
 			case args == "clear":
 				// Clear the goal
-				ctx.Session.ClearGoal()
+				if sess, ok := ctx.Session.(interface{ TrySetGoal(string) error }); ok {
+					if err := sess.TrySetGoal(""); err != nil {
+						return slashcmd.CommandResult{}, err
+					}
+				} else {
+					ctx.Session.ClearGoal()
+				}
 				return slashcmd.CommandResult{Output: "Goal cleared."}, nil
 			default:
 				// Set the goal and auto-trigger agent execution
-				ctx.Session.SetGoal(args)
+				if sess, ok := ctx.Session.(interface{ TrySetGoal(string) error }); ok {
+					if err := sess.TrySetGoal(args); err != nil {
+						return slashcmd.CommandResult{}, err
+					}
+				} else {
+					ctx.Session.SetGoal(args)
+				}
 				return slashcmd.CommandResult{
 					Output:      fmt.Sprintf("Goal set:\n  %s\n\nStarting to work on this goal...", args),
 					ShouldQuery: true,

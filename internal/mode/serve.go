@@ -42,7 +42,7 @@ func (m *ServeMode) Run(listenAddr string) error {
 	// Enable API key auth if configured
 	if m.app.Config().APIKey != "" {
 		srv.SetAPIKey(m.app.Config().APIKey)
-		slog.Info("auth: API key enabled", "source", "EA_API_KEY")
+		slog.Info("auth: API key enabled")
 	} else if config.Env("EA_ALLOW_NO_AUTH") == "1" {
 		slog.Warn("auth: open access mode (EA_ALLOW_NO_AUTH=1) — all requests allowed; never expose this port")
 	} else {

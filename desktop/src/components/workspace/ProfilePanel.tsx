@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { getBaseUrl } from '../../store';
+import { apiRequest } from '../../store';
 import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
 import { useT } from '../../i18n/useT';
@@ -38,20 +38,8 @@ interface ProfileData {
 
 // ── API helpers ────────────────────────────────────────────────────────────
 
-async function fetchProfile(): Promise<ProfileData> {
-  const res = await fetch(`${getBaseUrl()}/profile`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
-async function deleteFact(category: string, key: string): Promise<void> {
-  const res = await fetch(`${getBaseUrl()}/profile`, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ category, key }),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-}
+async function fetchProfile():Promise<ProfileData> { return apiRequest('GET','/profile'); }
+async function deleteFact(category:string,key:string):Promise<void> { await apiRequest('DELETE','/profile',{category,key}); }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

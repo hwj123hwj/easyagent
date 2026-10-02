@@ -8,6 +8,7 @@ import { DynamicWorkflowsPage } from './dynamic-workflows.js';
 import { WorkflowsPage } from './workflows.js';
 import { SessionsPage } from './sessions.js';
 import { SettingsPage } from './settings.js';
+import { MCPSettings } from './mcp-settings.js';
 import { api, getToken, showLogin } from './api.js';
 
 // Determine base URL (same host serving this page)
@@ -31,6 +32,7 @@ const workflowsPage = new WorkflowsPage(state);
 const dynamicPage = new DynamicWorkflowsPage(state);
 const sessionsPage = new SessionsPage(state);
 const settingsPage = new SettingsPage();
+const mcpSettings = new MCPSettings(state);
 
 // Connect WebSocket
 ws.connect();
@@ -119,6 +121,8 @@ function switchPage(pageID) {
   if (pageID !== 'page-workflows') workflowsPage.deactivate();
   if (pageID !== 'page-dynamic-workflows') dynamicPage.deactivate();
   if (pageID !== 'page-settings') settingsPage.deactivate();
+  if (pageID === 'page-settings') mcpSettings.activate();
+  else mcpSettings.deactivate();
   if (pageID !== 'page-sessions') sessionsPage.deactivate();
 }
 

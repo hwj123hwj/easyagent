@@ -8,11 +8,15 @@ import urllib.request
 
 
 def api_key(path):
+    values = {}
     for line in pathlib.Path(path).read_text().splitlines():
         key, sep, value = line.strip().partition('=')
-        if sep and key == 'EA_API_KEY':
-            return value.strip().strip('\"\'')
-    raise ValueError('EA_API_KEY not configured')
+        if sep and key in ('EA_API_KEY', 'EA_SERVER_API_KEY'):
+            values[key] = value.strip().strip('\"\'')
+    key = values.get('EA_SERVER_API_KEY') or values.get('EA_API_KEY')
+    if key:
+        return key
+    raise ValueError('server API key not configured')
 
 
 def main():

@@ -1,6 +1,6 @@
 # 开发指南
 
-EasyAgent 的主要入口是 Go 服务内嵌 Web、终端 TUI 和飞书桥接。先阅读 [AGENTS.md](../AGENTS.md) 与 [架构](ARCHITECTURE.md)，当前使用说明从 [文档索引](README.md) 查找。
+EasyAgent 的主要入口是桌面客户端、Go 服务内嵌 Web、终端 TUI 和飞书桥接。先阅读 [AGENTS.md](../AGENTS.md) 与 [架构](ARCHITECTURE.md)，当前使用说明从 [文档索引](README.md) 查找。
 
 ## 环境与目录
 
@@ -17,7 +17,7 @@ Go 版本以 [go.mod](../go.mod) 为准（当前 1.24.2），动态工作流使�
 | `desktop/` | 独立 Electron / React 客户端 |
 | `deploy/`、`scripts/` | 服务模板、部署与验证脚本 |
 
-构建 Go 程序使用 `make build`，产出 `bin/easyagent` 和 `bin/easyagent-bridge`。`make install` 仅安装核心 CLI，不安装桥接或工作流 bundle。工作流组件需单独构建；桌面客户端的脚本见其 `package.json`。
+构建 Go 程序使用 `make build`，产出 `bin/easyagent` 和 `bin/easyagent-bridge`。`make install` 仅安装核心 CLI，不安装桥接或工作流 bundle。工作流组件需单独构建；桌面打包见 [桌面客户端](DESKTOP.md)。
 
 ## 本地验证
 
@@ -25,10 +25,11 @@ Go 版本以 [go.mod](../go.mod) 为准（当前 1.24.2），动态工作流使�
 
 ```bash
 (cd workflow-runtime && npm ci --ignore-scripts && npm run build && npm test)
+(cd desktop && npm ci --ignore-scripts && npm run typecheck && npm test && npm run build)
 go test ./...
 go vet ./...
 (cd third_party/bubbletea && go test ./...)
-node --test scripts/web-test.mjs
+node --test scripts/web-test.mjs scripts/mcp-settings-test.mjs
 python3 scripts/test_update_mini.py
 python3 -m unittest discover -s scripts -p "test_release*.py"
 git diff --check

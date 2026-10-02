@@ -96,6 +96,7 @@ func main() {
 	skillDir := flag.String("skill-dir", "", "directory containing skills (SKILL.md files)")
 	legacyTUI := flag.Bool("legacy", false, "Use legacy linear CLI instead of Bubble Tea TUI")
 	flag.BoolVar(&cfg.AllowOutsideWorkspace, "allow-outside-workspace", cfg.AllowOutsideWorkspace, "Allow file tools outside workspace (independent of -y; OS permissions still apply)")
+	flag.StringVar(&cfg.MCPConfigPath, "mcp-config", cfg.MCPConfigPath, "MCP user config path (default ~/.easyagent/mcp.json)")
 	yolo := flag.Bool("y", false, "全权模式：初始跳过危险工具确认（会话内 /confirm on|off 随时切换）")
 	if mode := modeForSubcommand(args); mode != "" {
 		os.Args = append([]string{os.Args[0], "--mode", mode}, args[1:]...)

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EasyAgent</title>
   <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/mcp-settings.css">
 </head>
 <body>
   <div id="app">
@@ -200,7 +201,13 @@
     <!-- Feishu settings inherit Qingye: status first, credentials next, owner pairing last. -->
     <main id="page-settings" class="page" hidden>
       <div class="settings-layout">
-        <header class="settings-heading"><div><h1>飞书连接</h1><p>让你的个人工作区在飞书里继续。</p></div><button id="settings-refresh" class="btn btn-ghost">刷新状态</button></header>
+        <header class="settings-heading"><div><h1>连接与工具</h1><p>管理消息入口，以及 Agent 可以使用的外部工具。</p></div></header>
+        <div class="settings-tabs" role="tablist" aria-label="设置类别">
+          <button id="settings-tab-feishu" role="tab" aria-selected="true" aria-controls="settings-feishu">飞书连接</button>
+          <button id="settings-tab-mcp" role="tab" aria-selected="false" aria-controls="settings-mcp" tabindex="-1">MCP 工具</button>
+        </div>
+        <section id="settings-feishu" role="tabpanel" aria-labelledby="settings-tab-feishu">
+        <header class="settings-heading settings-subheading"><div><h2>飞书连接</h2><p>让你的个人工作区在飞书里继续。</p></div><button id="settings-refresh" class="btn btn-ghost">刷新状态</button></header>
         <div id="feishu-notice" class="settings-notice" role="status" aria-live="polite"></div>
         <p id="feishu-unmanaged" hidden>此服务器尚未启用网页飞书管理。部署时配置 EA_FEISHU_ENV_FILE 和 FEISHU_OWNER_STATE_FILE，并启用 API 认证后，即可在这里管理。</p>
         <section id="service-status" class="settings-section" aria-labelledby="service-title" hidden>
@@ -222,6 +229,45 @@
           <h2 id="access-title">使用者配对</h2><p id="feishu-owner-status" class="settings-hint"></p>
           <button id="feishu-show-pairing" class="btn btn-ghost">查看私聊配对指令</button>
           <div id="feishu-pairing" hidden><label for="feishu-pair-command">私聊机器人发送以下指令</label><div class="pair-command-row"><input id="feishu-pair-command" class="settings-input" readonly autocomplete="off"><button id="feishu-copy-pairing" class="btn">复制</button></div><p id="feishu-copy-status" class="settings-hint" role="status" aria-live="polite"></p><p id="feishu-pair-expiry" class="settings-hint"></p></div>
+        </section>
+        </section>
+        <section id="settings-mcp" class="mcp-page" role="tabpanel" aria-labelledby="settings-tab-mcp" hidden>
+          <header class="settings-heading settings-subheading"><div><h2>外部工具</h2><p>通过 MCP 连接本地命令与远程服务。</p></div><button id="mcp-refresh" class="btn btn-ghost">刷新状态</button></header>
+          <div id="mcp-notice" class="settings-notice" role="status" aria-live="polite"></div>
+          <form id="mcp-workspace-form" class="mcp-workspace-form">
+            <label for="mcp-workspace">工作目录</label><div><input id="mcp-workspace" class="settings-input" autocomplete="off" spellcheck="false" placeholder="使用服务器默认工作目录"><button class="btn" type="submit">切换项目</button></div>
+          </form>
+          <div class="mcp-project-access"><div><strong id="mcp-project-label">项目配置尚未授权</strong><p id="mcp-project-note">个人配置始终可用。授权后才会读取此项目的 .easyagent/mcp.json。</p></div><button id="mcp-project-trust" class="btn">授权项目配置</button></div>
+          <div class="mcp-list-heading"><h3>连接的服务 <span id="mcp-count">0</span></h3><button id="mcp-add" class="btn btn-primary">添加服务</button></div>
+          <p class="mcp-location-note">配置与 stdio 命令运行在当前连接的 EasyAgent 主机上。未信任的工具每次执行都需要确认。</p>
+          <section id="mcp-editor" class="mcp-editor" aria-labelledby="mcp-editor-title" hidden>
+            <header><h3 id="mcp-editor-title">添加服务</h3><button id="mcp-editor-close" type="button" class="btn btn-ghost">取消</button></header>
+            <form id="mcp-server-form">
+              <div class="mcp-fields">
+                <div><label for="mcp-name">服务名称</label><input id="mcp-name" class="settings-input" required pattern="[A-Za-z0-9_-]{1,64}" maxlength="64" placeholder="例如 github" autocomplete="off" spellcheck="false"></div>
+                <div><label for="mcp-scope">保存位置</label><select id="mcp-scope" class="settings-input"><option value="user">个人 · 所有项目可用</option><option value="project" disabled>项目 · 当前目录可用</option></select></div>
+                <div><label for="mcp-transport">连接方式</label><select id="mcp-transport" class="settings-input"><option value="stdio">stdio · 本地命令</option><option value="http">Streamable HTTP</option><option value="sse">SSE · 旧版服务</option></select></div>
+                <div><label for="mcp-description">说明（可选）</label><input id="mcp-description" class="settings-input" maxlength="1024" autocomplete="off" placeholder="这个服务用于什么"></div>
+              </div>
+              <div id="mcp-stdio-fields"><label for="mcp-command">可执行命令</label><input id="mcp-command" class="settings-input" autocomplete="off" spellcheck="false" placeholder="例如 npx"><label for="mcp-args">命令参数 · JSON 数组</label><textarea id="mcp-args" class="settings-input mcp-code-input" rows="2" autocomplete="off" spellcheck="false" placeholder='["-y", "your-mcp-server"]'></textarea></div>
+              <div id="mcp-http-fields" hidden><label for="mcp-url">服务地址</label><input id="mcp-url" class="settings-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/mcp"></div>
+              <p id="mcp-edit-hint" class="settings-hint" hidden>连接配置和凭据不会回显。留空保留已保存的值；填写新的值会替换对应字段。</p>
+              <details class="mcp-advanced"><summary>高级配置与凭据</summary>
+                <div id="mcp-env-fields"><label for="mcp-env">环境变量 · JSON 对象</label><textarea id="mcp-env" class="settings-input mcp-code-input" rows="2" autocomplete="off" spellcheck="false" placeholder='{"TOKEN": "${TOKEN}"}'></textarea><label for="mcp-cwd">命令工作目录（可选）</label><input id="mcp-cwd" class="settings-input" autocomplete="off" spellcheck="false" placeholder="留空使用当前项目目录"></div>
+                <div id="mcp-headers-fields" hidden><label for="mcp-headers">请求头 · JSON 对象</label><textarea id="mcp-headers" class="settings-input mcp-code-input" rows="2" autocomplete="off" spellcheck="false" placeholder='{"Authorization": "Bearer ${MCP_TOKEN}"}'></textarea><label for="mcp-oauth">OAuth 客户端 · JSON 对象（可选）</label><textarea id="mcp-oauth" class="settings-input mcp-code-input" rows="2" autocomplete="off" spellcheck="false" placeholder='{"clientId": "your-client-id", "scopes": ["read"]}'></textarea><p class="settings-hint">支持自动注册的服务可直接登录。此处填写时会替换整个 OAuth 客户端配置；输入 null 清除。</p></div>
+                <div class="mcp-fields"><div><label for="mcp-include">仅启用这些工具 · JSON 数组</label><textarea id="mcp-include" class="settings-input mcp-code-input" rows="2" autocomplete="off" spellcheck="false" placeholder='["read_*", "search"]'></textarea></div><div><label for="mcp-exclude">停用这些工具 · JSON 数组</label><textarea id="mcp-exclude" class="settings-input mcp-code-input" rows="2" autocomplete="off" spellcheck="false" placeholder='["delete_*"]'></textarea></div></div>
+                <label for="mcp-timeout">工具超时 · 毫秒（0 使用默认值）</label><input id="mcp-timeout" class="settings-input" type="number" min="0" step="1" placeholder="60000">
+                <p class="settings-hint">高级字段留空保留原值。输入 {} 清除环境变量或请求头，输入 [] 清除参数或工具过滤。凭据只保存到服务器，不会回传页面。</p>
+              </details>
+              <div class="mcp-editor-options"><label><input id="mcp-enabled" type="checkbox" checked> 启用服务</label><label><input id="mcp-trusted" type="checkbox"> 信任此服务的工具</label></div>
+              <p class="settings-hint">启用 stdio 服务会启动所填命令。信任工具后，可直接执行这些工具，请确认来源可信。</p>
+              <p id="mcp-editor-error" class="mcp-editor-error" role="alert"></p>
+              <div class="mcp-editor-actions"><button id="mcp-save" type="submit" class="btn btn-primary">保存并连接</button></div>
+            </form>
+          </section>
+          <div id="mcp-issues" class="mcp-issues" hidden></div>
+          <div id="mcp-servers" class="mcp-servers" aria-label="MCP 服务"><p class="mcp-empty">正在读取连接配置…</p></div>
+          <p id="mcp-oauth-note" class="settings-hint" hidden>当前页面使用局域网 HTTP，OAuth 授权请在桌面客户端完成；网页仍可管理连接与工具。</p>
         </section>
       </div>
     </main>

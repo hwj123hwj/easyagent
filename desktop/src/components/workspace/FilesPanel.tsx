@@ -13,8 +13,9 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import fuzzysort from 'fuzzysort';
-import { useStore, getBaseUrl } from '../../store';
+import { useStore, apiRequest } from '../../store';
 import { Icon } from '../Icon';
+import { copyText } from '../../client/clipboard';
 import { FileIcon } from './FileIcons';
 import { Markdown } from '../Markdown';
 import { Resizer } from './Resizer';
@@ -48,39 +49,11 @@ function breadcrumb(root: string, file: string): string[] {
 
 // ── REST API helpers (talk to easyagent backend) ────────────────────────────────
 
-async function listDir(path: string): Promise<DirEntry[]> {
-  const res = await fetch(`${getBaseUrl()}/workspace/list-dir?path=${encodeURIComponent(path)}`);
-  if (!res.ok) return [];
-  return res.json();
-}
-
-async function searchFiles(root: string): Promise<string[]> {
-  const res = await fetch(`${getBaseUrl()}/workspace/search-files?path=${encodeURIComponent(root)}`);
-  if (!res.ok) return [];
-  return res.json();
-}
-
-async function readFileText(path: string): Promise<string> {
-  const res = await fetch(`${getBaseUrl()}/workspace/read-file?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error('read failed');
-  const data = await res.json();
-  return data.content;
-}
-
-async function readFileBase64(path: string): Promise<{ data: string; mimeType: string } | null> {
-  const res = await fetch(`${getBaseUrl()}/workspace/read-file-base64?path=${encodeURIComponent(path)}`);
-  if (!res.ok) return null;
-  return res.json();
-}
-
-async function writeFileText(path: string, content: string): Promise<boolean> {
-  const res = await fetch(`${getBaseUrl()}/workspace/write-file?path=${encodeURIComponent(path)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  });
-  return res.ok;
-}
+async function listDir(path:string):Promise<DirEntry[]> { return apiRequest('GET', '/workspace/list-dir?path='+encodeURIComponent(path)); }
+async function searchFiles(root:string):Promise<string[]> { return apiRequest('GET', '/workspace/search-files?path='+encodeURIComponent(root)); }
+async function readFileText(path:string):Promise<string> { const value=await apiRequest<{content:string}>('GET','/workspace/read-file?path='+encodeURIComponent(path)); return value.content; }
+async function readFileBase64(path:string):Promise<{data:string;mimeType:string}|null> { return apiRequest('GET','/workspace/read-file-base64?path='+encodeURIComponent(path)); }
+async function writeFileText(path:string,content:string):Promise<boolean> { await apiRequest('PUT','/workspace/write-file?path='+encodeURIComponent(path),{content}); return true; }
 
 export function FilesPanel() {
   const activeId = useStore((s) => s.activeSessionId);
@@ -194,6 +167,7 @@ function FileTabs({
 // ── breadcrumb + "Open in" toolbar ──
 
 function FileToolbar({ root, file, t }: { root: string; file: string; t: TFunc }) {
+  const local = useStore(s=>s.profiles.find(p=>p.id===s.selectedProfile)?.kind==='local');
   const crumbs = useMemo(() => breadcrumb(root, file), [root, file]);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -228,7 +202,8 @@ function FileToolbar({ root, file, t }: { root: string; file: string; t: TFunc }
       <div ref={menuRef} style={{ position: 'relative' }}>
         <button
           className="chip interactive file-open-in"
-          title={t('files.openIn')}
+          disabled={!local}
+          title={local?t('files.openIn'):'路径属于远程主机，无法在本机打开'}
           onClick={() => setMenuOpen((o) => !o)}
         >
           <Icon name="external-link" size={13} />
@@ -510,8 +485,7 @@ function FileContent({ path, t }: { path: string; t: TFunc }) {
   const handleSave = async () => {
     if (!loaded || loaded.kind !== 'text') return;
     setSaving(true);
-    const ok = await writeFileText(path, editContent);
-    setSaving(false);
+    let ok=false; try { ok=await writeFileText(path,editContent); } catch(error) { window.alert((error as Error).message); } finally {setSaving(false);}
     if (ok) {
       // Update loaded content to reflect saved state
       setLoaded({ kind: 'text', text: editContent });
@@ -698,7 +672,7 @@ function CodeContextMenu({
           </button>
           <button
             onClick={() => {
-              void navigator.clipboard.writeText(selection);
+              void copyText(selection);
               onClose();
             }}
           >
@@ -717,7 +691,7 @@ function CodeContextMenu({
             range.selectNodeContents(code);
             sel?.removeAllRanges();
             sel?.addRange(range);
-            void navigator.clipboard.writeText(sel?.toString() ?? '');
+            void copyText(sel?.toString() ?? '');
           }
           onClose();
         }}

@@ -7,7 +7,7 @@
 按 [迷你主机部署](MINI_DEPLOY.md) 配好 core / bridge 两个 systemd 用户服务。核心配置需要：
 
 ```dotenv
-EA_API_KEY=your-api-key
+EA_SERVER_API_KEY=your-agent-server-key
 EA_FEISHU_ENV_FILE=/home/q/.config/easyagent/feishu.env
 FEISHU_OWNER_STATE_FILE=/home/q/.config/easyagent/feishu-owner.json
 ```
@@ -26,7 +26,7 @@ FEISHU_OWNER_STATE_FILE=/home/q/.config/easyagent/feishu-owner.json
 FEISHU_APP_ID=cli_your-app-id
 FEISHU_APP_SECRET=your-app-secret
 PI_AGENT_URL=http://127.0.0.1:8080
-EA_API_KEY=your-api-key
+EA_SERVER_API_KEY=your-agent-server-key
 # 可选：显式配置已授权账号，否则使用首次配对。
 # FEISHU_OWNER_OPEN_ID=ou_your-open-id
 # FEISHU_OWNER_STATE_FILE=/absolute/path/feishu-owner.json
@@ -46,7 +46,7 @@ EA_API_KEY=your-api-key
 |---|---|
 | bridge active 但机器人无响应 | 检查飞书 WebSocket 连接日志、应用发布状态、消息事件与权限 |
 | 提示未授权 / 无法配对 | 是否私聊目标应用、是否为当前有效配对码、core 与 bridge 是否使用同一 owner 文件 |
-| 配对成功但对话请求失败 | `PI_AGENT_URL` 是否可达、`EA_API_KEY` 是否与核心一致、模型服务是否正常 |
+| 配对成功但对话请求失败 | `PI_AGENT_URL` 是否可达、服务令牌（`EA_SERVER_API_KEY`，兼容 `EA_API_KEY`）是否与核心一致、模型服务是否正常 |
 | 卡片只有状态或文字很慢 | 分别检查核心 SSE 首个文本事件、工具耗时和飞书卡片更新；不能只按总耗时判断模型卡顿 |
 | 富文本消息无法解析 | 保留消息结构和错误日志用于回归测试；避免在日志中泄漏凭据或私聊内容 |
 

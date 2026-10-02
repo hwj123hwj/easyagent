@@ -60,7 +60,7 @@ type Handler struct {
 func NewHandler(piAgentURL, appID string, client *Client, workspace string) *Handler {
 	h := &Handler{
 		piAgentURL:    piAgentURL,
-		piAgentAPIKey: config.Env("EA_API_KEY"),
+		piAgentAPIKey: config.ServerAPIKey(),
 		appID:         appID,
 		client:        client,
 		routes:        make(map[string]*ChatRoute),
@@ -645,6 +645,17 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 				if updates != nil {
 					updates.update(buf.String(), FooterMetrics{Status: "正在思考", ElapsedMs: time.Since(startTime).Milliseconds()})
 				}
+			case "confirmation":
+				var ev struct {
+					ToolName string `json:"tool_name"`
+				}
+				if json.Unmarshal([]byte(data), &ev) == nil && updates != nil {
+					status := "等待工具审批，请在网页或桌面批准"
+					if len(ev.ToolName) <= 128 && confirmationToolNamePattern.MatchString(ev.ToolName) {
+						status += fmt.Sprintf(" · `%s`", ev.ToolName)
+					}
+					updates.update(buf.String(), FooterMetrics{Status: status, ElapsedMs: time.Since(startTime).Milliseconds()})
+				}
 			case "done":
 				var ev struct {
 					FinalMessage struct {
@@ -677,6 +688,8 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 
 	return buf.String(), fmt.Errorf("agent stream ended before completion: %w", io.ErrUnexpectedEOF)
 }
+
+var confirmationToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 // filePathRegex matches file paths in LLM replies.
 var filePathRegex = regexp.MustCompile(`(?:^|[\s"'` + "`" + `])((?:/[\w\-./]+)|(?:\./[\w\-./]+))\.(png|jpg|jpeg|gif|webp|svg|bmp|pdf|txt|csv|json|zip|py|js|ts|md|go|rs)`)

@@ -8,14 +8,15 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "electron:dev": "tsc -p tsconfig.electron.json && concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "vite build && tsc -p tsconfig.electron.json && electron-builder",
-    "electron:build:arm64": "vite build && tsc -p tsconfig.electron.json && electron-builder --arm64",
-    "electron:build:x64": "vite build && tsc -p tsconfig.electron.json && electron-builder --x64",
-    "typecheck": "tsc --noEmit",
+    "electron:build": "vite build && tsc -p tsconfig.electron.json && electron-builder --publish never",
+    "electron:build:arm64": "vite build && tsc -p tsconfig.electron.json && electron-builder --arm64 --publish never",
+    "electron:build:x64": "vite build && tsc -p tsconfig.electron.json && electron-builder --x64 --publish never",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "android:init": "npm run build && npx cap add android && npx cap sync android",
     "android:sync": "npm run build && npx cap sync android",
     "android:debug": "npm run android:sync && cd android && ./gradlew assembleDebug",
-    "android:release": "npm run android:sync && cd android && ./gradlew assembleRelease"
+    "android:release": "npm run android:sync && cd android && ./gradlew assembleRelease",
+    "test": "tsc -p tsconfig.test.json && node --test test/*.test.cjs"
   },
   "build": {
     "extends": "electron-builder.yml"
@@ -34,12 +35,14 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "semver": "^7.8.4",
+    "ws": "^8.22.0",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^4.3.0",
     "concurrently": "^9.1.0",
     "electron": "^33.0.0",
