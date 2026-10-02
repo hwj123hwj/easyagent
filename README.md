@@ -1,19 +1,21 @@
 # EasyAgent
 
-**Go 驱动的 AI 编程助手与 Agent 工作台，支持 Web、TUI、飞书和动态工作流。**
+**Go 驱动的个人 AI 编程助手与 Agent 工作台，支持桌面、Web、TUI、飞书、MCP 和动态工作流。**
 
-在对话中阅读与修改代码、执行工具、查看过程与结果，并保留可继续的历史会话。日常使用以浏览器工作区为中心，也可以从终端或已配对的飞书账号发起任务。底层 Agent 能力通过公共 Go SDK 复用。
+在对话中阅读与修改代码、执行工具、查看过程与结果，并保留可继续的历史会话。日常使用以桌面或浏览器工作区为中心，也可以从终端或已配对的飞书账号发起任务。底层 Agent 能力通过公共 Go SDK 复用。
 
 ## 能做什么
 
-- **Web 工作区**：流式对话、Slash 命令提示、模型切换、工具结果展开与复制、历史会话，以及飞书设置。
+- **桌面客户端**：青夜界面、此 Mac 与远程主机连接配置、Slash 命令、可搜索模型、工具审批与展开、历史虚拟列表。连接凭据由主进程加密保存，见 [桌面说明](docs/DESKTOP.md)。
+- **Web 工作区**：流式对话、Slash 命令提示、模型切换、工具结果展开与复制、历史会话，以及飞书和 MCP 设置。断线后恢复当前任务，发送确认前保留草稿。
+- **MCP 工具**：官方 Go SDK 传输，支持 stdio、Streamable HTTP、兼容 SSE、用户/项目配置、逐工具过滤与 OAuth。工具进入同一 Agent 执行流程，见 [MCP](docs/MCP.md)。
 - **终端 TUI**：独立全屏界面、Markdown 渲染、多行输入、工具分组折叠、鼠标选区复制。输入框位于快捷键和状态栏上方。
 - **飞书对话**：长连接接收消息，支持文本与富文本，卡片随生成过程更新；首次配对后只接受已授权账号的操作。
 - **动态工作流**：`/workflow` 将任务交给 Agent 编写 TypeScript 流程，支持多个 Actor、分支、循环、并行执行和受控恢复。复用固定版本的 ZCode 引擎。
 - **YAML 流水线**：为预先确定的步骤声明依赖、并发、重试与人工确认门，与动态工作流分别管理。
 - **可复用 SDK**：模型 Provider、工具、会话、上下文压缩、Skills、本地/SSH 执行和 AgentSession。
 
-仓库也保留知识库、音乐应用及 Electron/React 客户端；对应配置与构建独立于主要 Web 界面。
+仓库也保留知识库与音乐应用；桌面客户端使用 Electron/React，共用 Go 服务、会话与命令接口。
 
 ## 从源码开始
 
@@ -37,7 +39,7 @@ EA_MODEL=your-model-id
 EA_API_KEY=your-api-key
 ```
 
-`EA_API_KEY` 当前同时用于 OpenAI 兼容上游鉴权与 EasyAgent HTTP API 的 Bearer 认证。其他 Provider、工具权限、文件路径和运行目录见 [配置说明](docs/CONFIG.md)。
+`EA_API_KEY` 用于 OpenAI 兼容上游鉴权。可用 `EA_SERVER_API_KEY` 单独配置 EasyAgent HTTP API 的 Bearer 令牌；未设置时兼容使用 `EA_API_KEY`。其他 Provider、工具权限、文件路径和运行目录见 [配置说明](docs/CONFIG.md)。
 
 启动网页：
 
@@ -45,7 +47,7 @@ EA_API_KEY=your-api-key
 ./bin/easyagent serve --listen 127.0.0.1:8080
 ```
 
-打开 `http://127.0.0.1:8080`，配置了 API Key 时使用同一令牌登录。局域网部署、开机启动与自动更新见 [迷你主机部署](docs/MINI_DEPLOY.md)。
+打开 `http://127.0.0.1:8080`，使用服务令牌登录。局域网部署、开机启动与自动更新见 [迷你主机部署](docs/MINI_DEPLOY.md)。桌面调试与 macOS 打包见 [桌面客户端](docs/DESKTOP.md)。
 
 构建动态工作流组件：
 
@@ -75,6 +77,8 @@ TUI 中输入 `/help` 查看命令。`Enter` 发送，`Ctrl+J` 换行，`PgUp/Pg
 | 需要做什么 | 文档 |
 |---|---|
 | 配置模型、权限、路径与认证 | [配置](docs/CONFIG.md) |
+| 连接 Mac / 迷你主机、构建桌面应用 | [桌面客户端](docs/DESKTOP.md) |
+| 配置外部工具、项目授权与 OAuth | [MCP](docs/MCP.md) |
 | 接入飞书、配对与排错 | [飞书](docs/FEISHU.md) |
 | 编排多 Agent 动态任务 | [动态工作流](docs/DYNAMIC_WORKFLOW.md) |
 | 运行固定步骤 DAG | [YAML 流水线](docs/WORKFLOW.md) |

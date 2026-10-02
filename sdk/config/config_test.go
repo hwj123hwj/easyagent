@@ -51,6 +51,20 @@ func TestEnvReadsEAPrefixOnly(t *testing.T) {
 	assert.Equal(t, "", Env("EA_PROVIDER"))
 }
 
+func TestServerKeyDoesNotOverrideModelKey(t *testing.T) {
+	t.Setenv("EA_API_KEY", "upstream-key")
+	t.Setenv("EA_SERVER_API_KEY", "desktop-session-key")
+	t.Setenv("EA_MCP_CONFIG", "/tmp/user-mcp.json")
+	cfg := Default()
+	cfg.LoadFromEnv()
+	assert.Equal(t, "upstream-key", cfg.OpenAIAPIKey)
+	assert.Equal(t, "desktop-session-key", cfg.APIKey)
+	assert.Equal(t, "desktop-session-key", ServerAPIKey())
+	assert.Equal(t, "/tmp/user-mcp.json", cfg.MCPConfigPath)
+	t.Setenv("EA_SERVER_API_KEY", "")
+	assert.Equal(t, "upstream-key", ServerAPIKey())
+}
+
 func TestLoadDotEnv(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, ".env")

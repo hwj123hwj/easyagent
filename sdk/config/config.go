@@ -73,6 +73,7 @@ type Config struct {
 	EnableWeb             bool
 	WebTimeoutSeconds     int
 	EnableWebSearch       bool
+	MCPConfigPath         string // User MCP configuration; empty uses ~/.easyagent/mcp.json.
 
 	// Execution backend
 	ExecutionMode string // "local" (default) or "ssh"
@@ -151,6 +152,15 @@ func HomeDir() string {
 	return filepath.Join(home, HomeDirName)
 }
 
+// ServerAPIKey separates the local client credential from the upstream model
+// key while retaining EA_API_KEY compatibility for existing deployments.
+func ServerAPIKey() string {
+	if value := Env("EA_SERVER_API_KEY"); value != "" {
+		return sanitizeConfigString(value)
+	}
+	return sanitizeConfigString(Env("EA_API_KEY"))
+}
+
 // Env reads an EasyAgent-prefixed environment variable (EA_*).
 func Env(name string) string {
 	return os.Getenv(name)
@@ -195,6 +205,9 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := getEnv("EA_WORKSPACE", ""); v != "" {
 		c.Workspace = v
+	}
+	if v := getEnv("EA_MCP_CONFIG", ""); v != "" {
+		c.MCPConfigPath = v
 	}
 	c.EnableBash = getEnvBool("EA_ENABLE_BASH", c.EnableBash)
 	c.AutoApprove = getEnvBool("EA_AUTO_APPROVE", c.AutoApprove)
@@ -301,6 +314,9 @@ func (c *Config) LoadFromEnv() {
 	if v := getEnv("EA_API_KEY", ""); v != "" {
 		c.APIKey = sanitizeConfigString(v)
 	}
+	if v := getEnv("EA_SERVER_API_KEY", ""); v != "" {
+		c.APIKey = sanitizeConfigString(v)
+	}
 }
 
 // LoadDotEnv 从 .env 文件读取键值对，设置到环境变量中。
@@ -352,6 +368,7 @@ type yamlConfig struct {
 	OpenAIBaseURL string `yaml:"openai_base_url,omitempty"`
 
 	Workspace         string `yaml:"workspace,omitempty"`
+	MCPConfigPath     string `yaml:"mcp_config,omitempty"`
 	EnableBash        bool   `yaml:"enable_bash,omitempty"`
 	AutoApprove       bool   `yaml:"auto_approve,omitempty"`
 	EnableWeb         bool   `yaml:"enable_web,omitempty"`
@@ -432,6 +449,9 @@ func (c *Config) LoadFromYAML(path string) error {
 	}
 	if yc.Workspace != "" {
 		c.Workspace = yc.Workspace
+	}
+	if yc.MCPConfigPath != "" {
+		c.MCPConfigPath = yc.MCPConfigPath
 	}
 	if yc.EnableBash {
 		c.EnableBash = true

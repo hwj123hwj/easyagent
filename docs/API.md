@@ -15,11 +15,11 @@ easyagent serve
 
 三级访问控制模型（`/health` 始终开放）：
 
-1. **设置了 `EA_API_KEY`** → 普通 API 请求必须带 `Authorization: Bearer <key>`；WebSocket 用 `?token=<key>` 查询参数。
+1. **设置了 `EA_SERVER_API_KEY` 或兼容的 `EA_API_KEY`** → 普通 API 请求必须带 `Authorization: Bearer <服务令牌>`；独立令牌优先。WebSocket 用 `?token=<服务令牌>` 查询参数。
 2. **未设置（默认）** → 仅放行 loopback 来源；非回环请求返回 401。本机消费方（网页 UI、飞书 bridge、桌面端）零配置可用。
 3. **未配置 Key 且 `EA_ALLOW_NO_AUTH=1`** → 放开普通 API（仅限本机调试，切勿暴露端口）。
 
-飞书设置管理接口始终要求显式 Bearer 认证；静态页面可加载不代表 API 已授权。
+飞书设置与部署管理接口始终要求显式 Bearer 认证；静态页面可加载不代表 API 已授权。
 
 CORS 默认不返回跨域头；需要浏览器跨域访问时配置 `EA_ALLOWED_ORIGINS`（逗号分隔白名单）。
 
@@ -65,15 +65,29 @@ curl -N -X POST http://127.0.0.1:8080/chat/stream \
 GET /ws
 ```
 
-全双工 WebSocket 连接，支持对话、取消、模型切换和流式回复。需要认证时使用 `ws://host:8080/ws?token=<URL 编码后的令牌>`；HTTPS 部署使用 `wss://`。
+全双工 WebSocket 连接，支持对话、恢复订阅、取消、工具审批、模型切换和流式回复。需要认证时使用 `ws://host:8080/ws?token=<URL 编码后的令牌>`；HTTPS 部署使用 `wss://`。
 
 客户端消息示例（继续已有会话；新会话可省略 `session_id`）：
 
 ```json
-{"type":"prompt","session_id":"sess_123","prompt":"分析项目结构"}
+{"type":"prompt","session_id":"sess_123","prompt":"分析项目结构","request_id":"client-generated-unique-id"}
 ```
 
-其他类型为 `cancel`、`switch_model`（`model`，可选 `provider`）、`ping`。服务端类型为 `event`、`session_id`、`status`、`model_info`、`error`、`pong`；Agent 事件放在 `event` 字段，错误说明放在 `message` 字段。结构定义见 [websocket.go](../internal/server/websocket.go)。
+服务先落盘接受凭据，再返回 `accepted`（含 `request_id`、`run_id`、`state`、`duplicate`）。客户端在接受前保留草稿；响应不确定时以同一 `request_id` 和原始 prompt 重试。相同 ID 的不同请求内容返回冲突；同一会话一次只能执行一个任务。
+
+```json
+{"type":"subscribe","session_id":"sess_123","run_id":"run_123","after_seq":12}
+{"type":"cancel","session_id":"sess_123","run_id":"run_123"}
+{"type":"confirm","session_id":"sess_123","run_id":"run_123","confirmation_id":"confirmation_123","approved":true}
+```
+
+`event` 包含递增 `seq`、`run_id` 和 Agent `event`。重连发送 `subscribe`：可重放时返回 `replay`，否则返回 `snapshot`（历史 `messages`、当前 run、已投影事件及 `pending_confirmations`）。客户端按 seq 去重，不将恢复内容当成新请求。序号缺口应重新订阅；`reset:true` 表示历史完整重建，允许序号重新开始。`confirmation` 表示任务等待批准，超时拒绝。旧 run 的取消与批准请求会被拒绝，避免影响后续任务。
+
+任务由会话持有，WS / SSE 连接关闭不会取消任务。服务重启后已接受而未完成的 run 标为 `interrupted`，相同 request ID 不重新执行。凭据保存于 `EA_DATA_DIR/requests`，完整聊天历史仍来自会话 JSONL；硬断电下的外部副作用不保证恰好一次。
+
+任务互斥及幂等恢复覆盖同一核心服务及其重启。多个核心进程不得同时共用同一数据目录；当前没有跨进程的会话锁或执行互斥。桌面托管核心使用独立数据目录，多个客户端应连接同一核心来共享会话。
+
+其他客户端类型为 `unsubscribe`、`switch_model`（`model`，可选 `provider`）、`ping`。服务端还返回 `session_id`、`status`、`model_info`、`error`、`pong`；错误说明在 `message`。SSE `/chat/stream` 同样接受 `request_id`，并增加 `accepted` 与 `confirmation` 事件；HTTP 断线后可通过下面的 run 接口恢复。结构定义见 [websocket.go](../internal/server/websocket.go)。
 
 ---
 
@@ -89,6 +103,9 @@ GET /ws
 | `POST` | `/sessions/{id}/model` | 切换会话模型 |
 | `POST` | `/sessions/{id}/compact` | 压缩会话上下文 |
 | `POST` | `/sessions/{id}/command` | 执行斜杠命令 |
+| `GET` | `/sessions/{id}/run` | 当前 run 与恢复快照 |
+| `POST` | `/sessions/{id}/run/cancel` | body 为 `{"run_id":"..."}` |
+| `POST` | `/sessions/{id}/run/confirm` | body 为 `{"run_id":"...","confirmation_id":"...","approved":true}` |
 | `GET` | `/sessions/{id}/diff` | 获取会话 Git diff |
 | `GET` | `/sessions/{id}/file` | 获取会话文件内容 |
 | `PUT` | `/sessions/{id}/file` | 写入会话文件 |
@@ -116,6 +133,7 @@ POST /sessions/{id}/model
 | `GET` | `/tools` | 列出已注册工具 |
 | `POST` | `/tools/register` | 注册外部工具 |
 | `GET` | `/applications` | 列出可用应用 |
+| `GET` | `/commands` | 共享 Slash 命令和子命令目录 |
 
 ---
 
@@ -181,10 +199,10 @@ serve 模式内嵌网页控制台（浏览器打开 `http://<host>:<port>/`）�
 - **对话**：原有聊天界面（WebSocket 流式 + 会话侧栏 + 模型切换）。
 - **工作流**：动态流程、Actor、脚本、节点结果与恢复。
 - **流水线**：YAML DAG 提交、运行详情、审批与取消。
-- **设置**：托管飞书配置、配对与服务状态。
+- **设置**：托管飞书配置、配对、服务状态与 MCP 工具配置。
 - **会话**：会话列表、消息回看（含工具调用）、删除。
 
-需要令牌时（非本机访问或已配置 `EA_API_KEY`），页面会弹出登录框，令牌保存在浏览器 localStorage；WebSocket 连接自动附带 `?token=`。
+需要令牌时（非本机访问或已配置服务令牌），页面会弹出登录框，令牌保存在浏览器 localStorage；WebSocket 连接自动附带 `?token=`。
 
 ---
 
@@ -216,7 +234,23 @@ GET /health
 
 ## Slash 命令
 
-`POST /sessions/{id}/command` 的 body 为 `{"command":"/help"}`。响应包含 `output`、`should_query`、可选 `query_prompt`；若 `should_query` 为 true，客户端还需通过对话接口提交 `query_prompt`，不能把命令解析成功当成任务已经执行。
+`GET /commands` 返回 `commands` 数组，各项包含 `name`、`description`、可选 `subcommands`。`POST /sessions/{id}/command` 的 body 为 `{"command":"/help"}`。响应包含 `output`、`should_query`、可选 `query_prompt` 和切换后的 `session_id`；若 `should_query` 为 true，客户端还需通过对话接口提交一次 `query_prompt`，不能把命令解析成功当成任务已经执行。
+
+## MCP 管理
+
+沿用 API 认证，服务与工具名须 URL 编码。`workspace` 查询参数选择服务主机上的工作区，空值使用默认工作区；`scope` 为 `user` 或 `project`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/mcp?workspace=...` | 状态、配置来源、工具、授权与错误，不返回秘密 |
+| PUT / DELETE | `/mcp/servers/{name}?workspace=...&scope=user` | 保存字段补丁 / 删除该作用域定义 |
+| POST | `/mcp/servers/{name}/{action}` | enable、disable、trust、untrust、reconnect、refresh、login、logout |
+| POST | `/mcp/servers/{name}/tools/{tool}` | body 为 `{"enabled":true}` |
+| PUT | `/mcp/project-trust` | body 为 `{"workspace":"...","trusted":true}` |
+| POST | `/mcp/servers/{name}/login` | body 为 `{"redirect_url":"..."}`，返回授权地址、state 和到期时间 |
+| POST | `/mcp/servers/{name}/login/complete` | body 为 `{"state":"...","code":"..."}` |
+
+未授权的项目配置编辑返回 403，活动任务期间修改返回 409。配置保存省略秘密字段会保留旧值，显式空对象或 null 清除。传输格式与登录说明见 [MCP](MCP.md)。
 
 ## 飞书管理与语音
 
@@ -227,8 +261,8 @@ GET /health
 | GET | `/settings/feishu/pairing` | 获取当前可用的私聊配对信息；响应禁止缓存 |
 | POST | `/asr/transcribe` | 上传音频并转写，需配置语音服务 |
 
-飞书管理接口要求 `EA_API_KEY` 和托管文件路径；使用前参见 [飞书接入](FEISHU.md)。
+飞书管理接口要求服务令牌（`EA_SERVER_API_KEY`，兼容 `EA_API_KEY`）和托管文件路径；使用前参见 [飞书接入](FEISHU.md)。
 
 ## 部署控制
 
-`GET /admin/deploy` 返回 `active` 和 `draining`。`POST /admin/deploy` 仅在无活动任务时返回 `lease` 与 `expires_at`，忙碌时返回 409；租约期间新执行请求返回 503。`DELETE /admin/deploy` 的 body 为 `{"lease":"原租约"}`，释放该租约。三个操作均要求显式 `EA_API_KEY` 认证，详见 [部署保护](MINI_DEPLOY.md)。
+`GET /admin/deploy` 返回 `active` 和 `draining`。`POST /admin/deploy` 仅在无活动任务时返回 `lease` 与 `expires_at`，忙碌时返回 409；租约期间新执行请求返回 503。`DELETE /admin/deploy` 的 body 为 `{"lease":"原租约"}`，释放该租约。三个操作均要求显式服务令牌认证，详见 [部署保护](MINI_DEPLOY.md)。

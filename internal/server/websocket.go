@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/hwj123hwj/easyagent/sdk/agent"
 )
 
 // newUpgrader 返回带同源校验的 upgrader：无 Origin（原生客户端）放行；
@@ -41,238 +41,172 @@ func (s *Server) newUpgrader() *websocket.Upgrader {
 	}
 }
 
-// wsClientMessage represents a message from the client to the server.
+// Messages carry both run identity and session-local event sequence.
 type wsClientMessage struct {
-	Type      string `json:"type"`       // "prompt", "cancel", "switch_model", "ping"
-	SessionID string `json:"session_id"` // Target session
-	Prompt    string `json:"prompt,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Provider  string `json:"provider,omitempty"` // For switch_model: optional provider change
+	Type           string `json:"type"`
+	SessionID      string `json:"session_id"`
+	Prompt         string `json:"prompt,omitempty"`
+	RequestID      string `json:"request_id,omitempty"`
+	RunID          string `json:"run_id,omitempty"`
+	AfterSeq       uint64 `json:"after_seq,omitempty"`
+	ConfirmationID string `json:"confirmation_id,omitempty"`
+	Approved       bool   `json:"approved"`
+	Reason         string `json:"reason,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Provider       string `json:"provider,omitempty"`
 }
-
-// wsServerMessage represents a message from the server to the client.
 type wsServerMessage struct {
-	Retryable bool   `json:"retryable,omitempty"`
-	Type      string `json:"type"` // "event", "session_id", "status", "model_info", "error", "pong"
-	SessionID string `json:"session_id,omitempty"`
-	Event     any    `json:"event,omitempty"`     // AgentStreamEvent when type="event"
-	Streaming bool   `json:"streaming,omitempty"` // When type="status"
-	Provider  string `json:"provider,omitempty"`  // When type="model_info"
-	Model     string `json:"model,omitempty"`     // When type="model_info"
-	Message   string `json:"message,omitempty"`   // When type="error"
+	Type                 string                 `json:"type"`
+	SessionID            string                 `json:"session_id,omitempty"`
+	RunID                string                 `json:"run_id,omitempty"`
+	RequestID            string                 `json:"request_id,omitempty"`
+	Seq                  uint64                 `json:"seq,omitempty"`
+	Reset                bool                   `json:"reset,omitempty"`
+	State                string                 `json:"state,omitempty"`
+	Duplicate            bool                   `json:"duplicate,omitempty"`
+	Code                 string                 `json:"code,omitempty"`
+	Event                any                    `json:"event,omitempty"`
+	Events               any                    `json:"events,omitempty"`
+	Run                  *sessionRun            `json:"run,omitempty"`
+	Messages             []map[string]any       `json:"messages,omitempty"`
+	PendingConfirmations []*pendingConfirmation `json:"pending_confirmations,omitempty"`
+	Confirmation         *pendingConfirmation   `json:"confirmation,omitempty"`
+	Streaming            bool                   `json:"streaming"`
+	Retryable            bool                   `json:"retryable,omitempty"`
+	Provider             string                 `json:"provider,omitempty"`
+	Model                string                 `json:"model,omitempty"`
+	Message              string                 `json:"message,omitempty"`
 }
 
-// wsConn wraps a WebSocket connection with a mutex for safe concurrent writes.
+// A slow/disconnected subscriber is detached, never allowed to cancel or stall its run.
 type wsConn struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
+	conn     *websocket.Conn
+	outgoing chan []byte
+	done     chan struct{}
+	once     sync.Once
+	legacy   bool
 }
 
 func (w *wsConn) writeJSON(v any) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.conn.WriteJSON(v)
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	select {
+	case <-w.done:
+		return errors.New("websocket closed")
+	default:
+	}
+	select {
+	case w.outgoing <- data:
+		return nil
+	default:
+		w.close()
+		return errors.New("websocket subscriber too slow")
+	}
 }
-
-func (w *wsConn) close() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.conn.WriteMessage(websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+func (w *wsConn) close() {
+	w.once.Do(func() {
+		close(w.done)
+		if w.conn != nil {
+			_ = w.conn.Close()
+		}
+	})
 }
-
-// handleWebSocket handles the WebSocket connection at GET /ws.
+func (w *wsConn) writeLoop() {
+	defer w.close()
+	for {
+		select {
+		case <-w.done:
+			return
+		case data := <-w.outgoing:
+			_ = w.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if w.conn.WriteMessage(websocket.TextMessage, data) != nil {
+				return
+			}
+		}
+	}
+}
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// 升级前鉴权（WS 路由绕过 REST 中间件）；与 REST 同一访问控制模型
 	if !s.wsAuthorized(r) {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
-
 	conn, err := s.newUpgrader().Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("websocket upgrade failed", "error", err)
 		return
 	}
-
-	slog.Info("websocket connected", "remote", conn.RemoteAddr(), "origin", r.Header.Get("Origin"))
-
-	ws := &wsConn{conn: conn}
+	conn.SetReadLimit(1024 * 1024)
+	ws := &wsConn{conn: conn, outgoing: make(chan []byte, 512), done: make(chan struct{})}
+	go ws.writeLoop()
 	defer ws.close()
-
-	// Track active prompts for cancellation
-	var (
-		mu         sync.Mutex
-		cancelFunc context.CancelFunc
-	)
-
+	defer s.unsubscribeRun(ws, "")
 	for {
-		_, message, err := conn.ReadMessage()
+		_, data, err := conn.ReadMessage()
 		if err != nil {
-			// Client disconnected or error
-			slog.Info("websocket read ended", "error", err)
-			break
+			return
 		}
-
 		var msg wsClientMessage
-		if err := json.Unmarshal(message, &msg); err != nil {
-			slog.Debug("websocket invalid message", "error", err)
+		if json.Unmarshal(data, &msg) != nil {
+			_ = ws.writeJSON(wsServerMessage{Type: "error", Code: "invalid_json", Message: "invalid JSON"})
 			continue
 		}
-
 		switch msg.Type {
 		case "ping":
 			_ = ws.writeJSON(wsServerMessage{Type: "pong"})
-
 		case "prompt":
-			s.handleWSPrompt(ws, msg, &mu, &cancelFunc)
-
+			s.handleWSPrompt(ws, msg)
+		case "subscribe":
+			if _, err := s.runSnapshot(msg.SessionID, msg.AfterSeq, msg.RunID, ws); err != nil {
+				s.writeWSError(ws, msg, err)
+			}
+		case "unsubscribe":
+			s.unsubscribeRun(ws, msg.SessionID)
+			_ = ws.writeJSON(wsServerMessage{Type: "unsubscribed", SessionID: msg.SessionID})
 		case "cancel":
-			s.handleWSCancel(&mu, &cancelFunc, msg.SessionID)
-
+			if err := s.cancelRun(msg.SessionID, msg.RunID); err != nil {
+				s.writeWSError(ws, msg, err)
+			} else {
+				_ = ws.writeJSON(wsServerMessage{Type: "cancelled", SessionID: msg.SessionID, RunID: msg.RunID})
+			}
+		case "confirm":
+			if err := s.confirmRun(msg.SessionID, msg.RunID, msg.ConfirmationID, msg.Approved, msg.Reason); err != nil {
+				s.writeWSError(ws, msg, err)
+			} else {
+				_ = ws.writeJSON(wsServerMessage{Type: "confirmed", SessionID: msg.SessionID, RunID: msg.RunID})
+			}
 		case "switch_model":
 			s.handleWSSwitchModel(ws, msg)
-
 		default:
-			_ = ws.writeJSON(wsServerMessage{
-				Type:    "error",
-				Message: "unknown message type: " + msg.Type,
-			})
+			s.writeWSError(ws, msg, &runAdmissionError{"unknown_type", "unknown message type: " + msg.Type})
 		}
 	}
-
-	// Clean up any running prompt
-	mu.Lock()
-	if cancelFunc != nil {
-		cancelFunc()
-	}
-	mu.Unlock()
 }
-
-// handleWSPrompt processes a "prompt" message from the client.
-func (s *Server) handleWSPrompt(ws *wsConn, msg wsClientMessage, mu *sync.Mutex, cancelFuncPtr *context.CancelFunc) {
-	release, ok := s.activity.begin()
-	if !ok {
-		_ = ws.writeJSON(wsServerMessage{Type: "error", SessionID: msg.SessionID, Retryable: true, Message: "服务正在更新，请稍后重试；消息尚未执行"})
-		return
+func (s *Server) writeWSError(ws *wsConn, msg wsClientMessage, err error) {
+	response := wsServerMessage{Type: "error", SessionID: msg.SessionID, RunID: msg.RunID, RequestID: msg.RequestID, Message: err.Error()}
+	var admission *runAdmissionError
+	if errors.As(err, &admission) {
+		response.Code = admission.code
+		response.Retryable = admission.code == "updating"
 	}
-	handedOff := false
-	defer func() {
-		if !handedOff {
-			release()
-		}
-	}()
-	if s.app.DynamicWorkflows().ActiveActorSession(msg.SessionID) {
-		_ = ws.writeJSON(wsServerMessage{Type: "error", Message: "此 Actor 正由工作流管理，请在工作流页取消或等待完成"})
-		return
-	}
-	if msg.Prompt == "" {
-		_ = ws.writeJSON(wsServerMessage{
-			Type:    "error",
-			Message: "prompt is empty",
-		})
-		return
-	}
-
-	// Cancel any existing prompt for this connection
-	mu.Lock()
-	if *cancelFuncPtr != nil {
-		(*cancelFuncPtr)()
-	}
-	mu.Unlock()
-
-	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Minute)
-
-	mu.Lock()
-	*cancelFuncPtr = cancel
-	mu.Unlock()
-
-	// Resolve session
-	sess, err := s.resolveSession(ctx, msg.SessionID)
-	if err != nil {
-		cancel()
-		_ = ws.writeJSON(wsServerMessage{
-			Type:    "error",
-			Message: "session error: " + err.Error(),
-		})
-		return
-	}
-
-	sessionID := sess.SessionID()
-
-	// Send session_id to client (in case it was auto-created)
-	_ = ws.writeJSON(wsServerMessage{
-		Type:      "session_id",
-		SessionID: sessionID,
-	})
-
-	// Send streaming status
-	_ = ws.writeJSON(wsServerMessage{
-		Type:      "status",
-		SessionID: sessionID,
-		Streaming: true,
-	})
-
-	// Start streaming
-	stream, err := sess.PromptStream(ctx, msg.Prompt)
-	if err != nil {
-		cancel()
-		errMsg := err.Error()
-		if err == agent.ErrAgentBusy {
-			errMsg = "agent is busy processing another request"
-		}
-		_ = ws.writeJSON(wsServerMessage{
-			Type:      "error",
-			SessionID: sessionID,
-			Message:   errMsg,
-		})
-		return
-	}
-
-	// Stream events to client in a goroutine
-	handedOff = true
-	go func() {
-		defer release()
-		defer func() {
-			cancel()
-			mu.Lock()
-			*cancelFuncPtr = nil
-			mu.Unlock()
-
-			// Send streaming done status
-			_ = ws.writeJSON(wsServerMessage{
-				Type:      "status",
-				SessionID: sessionID,
-				Streaming: false,
-			})
-		}()
-
-		for event := range stream {
-			serverMsg := wsServerMessage{
-				Type:      "event",
-				SessionID: sessionID,
-				Event:     event,
-			}
-			if err := ws.writeJSON(serverMsg); err != nil {
-				slog.Debug("websocket write failed (client disconnected?)", "error", err)
-				cancel()
-				for range stream {
-				}
-				return
-			}
-		}
-	}()
+	_ = ws.writeJSON(response)
 }
-
-// handleWSCancel cancels an in-progress prompt.
-func (s *Server) handleWSCancel(mu *sync.Mutex, cancelFuncPtr *context.CancelFunc, sessionID string) {
-	mu.Lock()
-	defer mu.Unlock()
-	if *cancelFuncPtr != nil {
-		(*cancelFuncPtr)()
-		*cancelFuncPtr = nil
-		slog.Info("cancelled prompt via websocket", "session", sessionID)
+func (s *Server) handleWSPrompt(ws *wsConn, msg wsClientMessage) {
+	ws.legacy = msg.RequestID == ""
+	run, duplicate, err := s.startRun(msg.SessionID, msg.Prompt, msg.RequestID)
+	if err != nil {
+		s.writeWSError(ws, msg, err)
+		return
 	}
+	s.runs.mu.Lock()
+	ack := wsServerMessage{Type: "accepted", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Duplicate: duplicate}
+	_ = ws.writeJSON(ack)
+	// Existing web/bridge clients keep receiving the original session/status/event messages.
+	_ = ws.writeJSON(wsServerMessage{Type: "session_id", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID})
+	_ = ws.writeJSON(wsServerMessage{Type: "status", SessionID: run.SessionID, RunID: run.ID, State: run.State, Streaming: runActive(run)})
+	s.runs.mu.Unlock()
+	_, _ = s.runSnapshot(run.SessionID, 0, "", ws)
 }
 
 // handleWSSwitchModel changes the model for a session.

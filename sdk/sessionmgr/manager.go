@@ -98,6 +98,11 @@ func readMeta(sessionDir string) (workspace string, application string) {
 	return "", ""
 }
 
+// Metadata restores the workspace and application that own a persisted session.
+func (m *Manager) Metadata(id string) (workspace, application string) {
+	return readMeta(filepath.Join(m.SessionsDir(), id))
+}
+
 // Open opens an existing session by ID.
 // Returns the Session object and the session file path.
 func (m *Manager) Open(ctx context.Context, id string) (*session.Session, string, error) {

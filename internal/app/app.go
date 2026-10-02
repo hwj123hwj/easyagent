@@ -25,6 +25,7 @@ import (
 // It assembles dependencies (providers, session manager, runtime registry, etc.)
 // but does NOT carry session-specific behavior — that belongs to AgentSession.
 type App struct {
+	mcpState          mcpState
 	workflowConfirmMu sync.Mutex
 	flows             *dynamicflow.Manager
 	cfg               config.Config
@@ -110,6 +111,7 @@ func New(opts AppOptions) (*App, error) {
 		return nil, err
 	}
 	result.flows = flows
+	result.initMCP()
 	return result, nil
 }
 
@@ -145,7 +147,14 @@ func (a *App) NewSession(ctx context.Context) (*runtime.AgentSession, error) {
 		Config:    a.cfg,
 		SkillDirs: a.skillDirs,
 	}
-	return a.sessionStore.Create(ctx, opts, deps)
+	sess, err := a.sessionStore.Create(ctx, opts, deps)
+	if err == nil {
+		if err = a.sessionMgr.SaveMeta(sess.SessionID(), sess.Workspace(), "coding"); err != nil {
+			_ = a.sessionStore.Delete(sess.SessionID())
+			return nil, err
+		}
+	}
+	return sess, err
 }
 
 // LoadSession loads an existing AgentSession by ID.
@@ -158,6 +167,13 @@ func (a *App) LoadSession(ctx context.Context, sessionID string) (*runtime.Agent
 	opts := runtime.AgentSessionOptions{
 		Config:    a.cfg,
 		SkillDirs: a.skillDirs,
+	}
+	workspace, application := a.sessionMgr.Metadata(sessionID)
+	if workspace != "" {
+		opts.Config.Workspace = workspace
+	}
+	if application != "" {
+		deps = a.SessionDepsWithApp(application)
 	}
 	return a.sessionStore.Load(ctx, sessionID, opts, deps)
 }
@@ -216,6 +232,7 @@ func (a *App) LoopManager() *scheduler.LoopManager {
 
 // Close cleans up all resources.
 func (a *App) Close() error {
+	a.closeMCP()
 	if a.flows != nil {
 		a.flows.Close()
 	}
@@ -233,11 +250,15 @@ func (a *App) SetExternalTools(tools []agent.ExternalToolDef) {
 // deps constructs the Dependencies struct for AgentSession creation.
 func (a *App) deps() runtime.Dependencies {
 	return runtime.Dependencies{
-		Registry:      a.registry,
-		SessionMgr:    a.sessionMgr,
-		ExtRegistry:   a.extRegistry,
-		Application:   workflowApplication{Application: a.application, app: a},
-		ExternalTools: a.extraTools,
+		Registry:        a.registry,
+		SessionMgr:      a.sessionMgr,
+		ExtRegistry:     a.extRegistry,
+		Application:     workflowApplication{Application: a.application, app: a},
+		ExternalTools:   a.extraTools,
+		AdditionalTools: func(workspace string) []agent.Tool { return a.MCP(workspace).AllTools() },
+		ToolRevision:    func(workspace string) uint64 { return a.mcpRevision(workspace) },
+		PrepareTools:    a.prepareMCP,
+		AcquireTools:    a.acquireMCP,
 		BuildOperations: func(cfg config.Config, workspace string) *operations.Operations {
 			switch cfg.ExecutionMode {
 			case "ssh":
@@ -282,6 +303,9 @@ func (a *App) ToolNames() []string {
 	}
 
 	baseNames = append(baseNames, "create_workflow", "get_workflow", "resume_workflow")
+	for _, tool := range a.MCP(cfg.Workspace).AllTools() {
+		baseNames = append(baseNames, tool.Name())
+	}
 	// Apply filtering
 	if len(cfg.AllowedTools) == 0 && len(cfg.BlockedTools) == 0 {
 		return baseNames

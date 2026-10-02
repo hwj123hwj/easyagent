@@ -159,6 +159,13 @@ guard=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 
 class GuardTest(unittest.TestCase):
+ def test_server_key_is_independent_from_model_key(self):
+  with tempfile.TemporaryDirectory() as td:
+   env=Path(td)/'env'
+   env.write_text('EA_API_KEY=model-only\nEA_SERVER_API_KEY=server-only\n')
+   self.assertEqual(guard.api_key(env),'server-only')
+   env.write_text('EA_API_KEY=legacy-shared\nEA_SERVER_API_KEY=\n')
+   self.assertEqual(guard.api_key(env),'legacy-shared')
  def test_busy_unauthorized_old_server_and_success(self):
   with tempfile.TemporaryDirectory() as td:
    env=Path(td)/'env';env.write_text('EA_API_KEY=test-only\n');lease=Path(td)/'lease'

@@ -1,5 +1,5 @@
 import { copyText } from './clipboard.js';
-import { CommandMenu, commands, parseCommand } from './commands.js';
+import { CommandMenu, commands, parseCommand, mergeCommands } from './commands.js';
 import { Drafts } from './drafts.js';
 import { api, authFetch } from './api.js';
 import { renderMarkdown } from './markdown.js';
@@ -18,9 +18,11 @@ export class ChatPanel {
     this.status = document.getElementById('chat-status');
     this.jump = document.getElementById('jump-latest');
     let storage; try { storage = sessionStorage; } catch {}
-    this.drafts = new Drafts(storage); this.positions = new Map(); this.busy = new Set(); this.views = new Map(); this.follow = true; this.inputRevision = 0;
+    this.drafts = new Drafts(storage); this.intentStorage=storage; this.pendingSends=new Map();
+    try { for (const [id,intent] of JSON.parse(storage?.getItem('easyagent.send-intents') || '[]')) this.pendingSends.set(id,intent); } catch {} this.positions = new Map(); this.busy = new Set(); this.views = new Map(); this.follow = true; this.inputRevision = 0;
     this.input.value = this.drafts.get('');
     this.commandMenu = new CommandMenu(this.input, () => this._inputChanged());
+    api.get('/commands').then(data=>{mergeCommands(data.commands);this.commandMenu.update();}).catch(()=>{});
     new ResizeObserver(() => { this.jump.style.bottom = (document.querySelector('.input-area').offsetHeight + 12) + 'px'; }).observe(document.querySelector('.input-area'));
     this.clear(); this._resizeInput(); this._bindEvents(); this._bindWS(); this._updateButtons();
   }
@@ -53,17 +55,27 @@ export class ChatPanel {
     });
   }
   _bindWS() {
-    this.ws.on('open', () => { this._updateButtons(); this._notice(''); });
+    this.ws.on('open', () => {
+      this._updateButtons(); this._notice('');
+      for (const [id,intent] of this.pendingSends) if (intent.requestId) this.ws.sendPrompt(id,intent.text,intent.requestId);
+      if (this.state.currentSessionId) this.ws.subscribe(this.state.currentSessionId);
+    });
+    this.ws.on('accepted',data=>this._accepted(data));
+    this.ws.on('snapshot',data=>this._snapshot(data));
+    this.ws.on('replay',data=>{this._runState(data);if(data.session_id===this.state.currentSessionId)this._confirmations(data.pending_confirmations || []);});
+    this.ws.on('confirmation',data=>{
+      this.busy.add(data.session_id);
+      if(data.session_id===this.state.currentSessionId){this._showConfirmation(data.confirmation);this.status.textContent='等待你的确认';}
+    });
     this.ws.on('close', () => {
-      this.busy.clear(); this.views.clear(); this._finalizeStream();
-      this._notice('连接已断开，正在重连。草稿已保留；重新连接后请查看任务结果。');
+      this.views.clear(); this._updateButtons();
+      this._notice('连接已断开，正在重连。草稿已保留；任务仍在服务端运行，重连后会恢复输出。');
     });
     this.streamHandlers = {
       text_delta: event => {
         if (!this._currentStreamEl) this._startAssistantStream();
         this._currentStreamText += event.text_delta || '';
-        this._currentStreamEl.querySelector('.stream-text').innerHTML = renderMarkdown(this._currentStreamText) + '<span class="streaming-cursor"></span>';
-        this._scrollToBottom();
+        this._scheduleStreamRender();
       },
       tool_start: event => {
         if (!this._currentStreamEl) this._startAssistantStream();
@@ -85,17 +97,18 @@ export class ChatPanel {
     }
     this.ws.on('error', data => {
       const id = data.session_id || this.state.currentSessionId;
-      this.busy.delete(id);
+      if (data.request_id) { this.pendingSends.delete(id); this._saveIntents(); }
+      if (!['stale_run','stale_confirmation'].includes(data.code)) this.busy.delete(id);
       if (data.retryable) this._restoreRejectedPrompt(id);
       const event = {error: data.message || data.error || '请求失败，请重试。'};
       if (id === this.state.currentSessionId) this._finalizeWithError(event.error);
       else this.views.get(id)?.events.push({type:'error', event});
     });
     this.ws.on('status', data => {
-      if (data.streaming) this.pendingSends?.delete(data.session_id);
       if (data.streaming) this.busy.add(data.session_id); else this.busy.delete(data.session_id);
       if (data.session_id === this.state.currentSessionId) this.state.streaming = !!data.streaming;
       this._updateButtons();
+      if(data.session_id===this.state.currentSessionId && data.state!=='waiting_confirmation') this._confirmations([]);
     });
   }
   async selectSession(id) {
@@ -106,7 +119,7 @@ export class ChatPanel {
     this.commandMenu.close(); document.getElementById('command-result').hidden = true;
     this.drafts.set(this.visibleSession || '', this.input.value);
     this.visibleSession = id; this.input.value = this.drafts.get(id || '') || '';
-    this.loading = false; this._resizeInput(); this.clear(); this._notice('');
+    this.loading = false; this._confirmations([]); this._resizeInput(); this.clear(); this._notice('');
     this.state.streaming = this.busy.has(id); this._updateButtons();
     if (id) {
       this.show();
@@ -118,6 +131,7 @@ export class ChatPanel {
         this._scrollToBottom();
       } else await this.loadHistory(id);
     } else this.hide();
+    if(id) this.ws.subscribe?.(id,true);
     if (id === this.state.currentSessionId) {
       const position = this.positions.get(id);
       if (position && !position.follow) { this.follow = false; requestAnimationFrame(() => { if (id === this.state.currentSessionId) { this.messageList.scrollTop = position.top; this.jump.hidden = false; } }); }
@@ -157,7 +171,8 @@ export class ChatPanel {
     } catch (e) {
       if (id !== this.state.currentSessionId) return;
       this.messageList.replaceChildren(); this._notice(e.message + '，可重新选择此对话重试。');
-    } finally { if (id === this.state.currentSessionId) { this.loading = false; for (const {type,event} of this.loadEvents) this.streamHandlers[type](event); this.loadEvents = []; this._updateButtons(); } }
+    } finally { if (id === this.state.currentSessionId) { this.loading = false; for (const {type,event} of this.loadEvents) this.streamHandlers[type](event); this.loadEvents = [];
+      if(this.pendingSnapshot){const snapshot=this.pendingSnapshot;this.pendingSnapshot=null;this._snapshot(snapshot);}this._updateButtons(); } }
   }
   async _send() {
     if (this.state.restoringSession) return;
@@ -167,7 +182,7 @@ export class ChatPanel {
     if (text.startsWith('/') && !text.startsWith('//') && !(workflow?.name === 'workflow' && workflow.args)) { await this._command(text); return; }
     if (text.startsWith('//')) text = text.slice(1);
     if (!text || this.commandRunning || this.state.streaming || this.creating || this.loading || this.state.modelChanging || this.state.modelInfoLoading) return;
-    if (this.busy.size) { this._notice('另一个对话正在执行，请等待完成或返回该对话停止。'); return; }
+    if (this.pendingSends?.has(this.state.currentSessionId)) { this._notice('正在确认发送结果，消息已保留。'); return; }
     if (!this.ws.connected) { this._notice('尚未连接到服务，消息已保留。'); return; }
     let sessionId = this.state.currentSessionId;
     if (!sessionId) {
@@ -184,17 +199,99 @@ export class ChatPanel {
       this.creating = false; this._updateButtons();
       if (this.state.currentSessionId !== sessionId || revision !== this.inputRevision) return;
     }
-    if (!this.ws.sendPrompt(sessionId, text)) { this._notice('发送失败，消息已保留。'); this._updateButtons(); return; }
-    (this.pendingSends ??= new Map()).set(sessionId, draft);
-    this.show(); this.messageList.querySelector('.empty-conversation')?.remove();
-    this.follow = true; this._addUserMessage(text); this._startAssistantStream();
-    this.commandMenu.close(); this.input.value = ''; this.drafts.delete(this.visibleSession || ''); this.drafts.delete('');
-    this._resizeInput(); this.busy.add(this.state.currentSessionId); this.state.streaming = true;
-    this._notice(''); this._updateButtons(); this._scrollToBottom();
-    this.state.onPromptSent?.(text);
+    const requestId=globalThis.crypto?.randomUUID?.() || `web_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    if (!this.ws.sendPrompt(sessionId, text, requestId)) { this._notice('发送失败，消息已保留。'); this._updateButtons(); return; }
+    (this.pendingSends ??= new Map()).set(sessionId,{draft,text,requestId,revision:this.inputRevision});
+    this._saveIntents(); this.commandMenu.close(); this._notice('正在确认发送…'); this._updateButtons();
   }
+  _saveIntents() {
+    try { this.intentStorage?.setItem('easyagent.send-intents',JSON.stringify([...this.pendingSends])); } catch {}
+  }
+  _accepted(data) {
+    const intent=this.pendingSends?.get(data.session_id);
+    if(intent && intent.requestId===data.request_id){
+      if(data.session_id===this.state.currentSessionId && this.input.value===intent.draft){
+        this.input.value='';this.drafts.delete(data.session_id);this.drafts.delete('');this._resizeInput();
+      }else if(this.drafts.get(data.session_id)===intent.draft)this.drafts.delete(data.session_id);
+      this.pendingSends.delete(data.session_id);this._saveIntents();
+      if(data.session_id===this.state.currentSessionId){this.show();this._notice('');this.state.onPromptSent?.(intent.text);}
+    }
+    this._runState({session_id:data.session_id,run:{state:data.state}});
+  }
+  _runState(data) {
+    const active=['running','waiting_confirmation'].includes(data.run?.state);
+    if(active)this.busy.add(data.session_id);else this.busy.delete(data.session_id);
+    if(data.session_id===this.state.currentSessionId)this.state.streaming=active;
+    this._updateButtons();
+  }
+  _snapshot(data) {
+    this.views.delete(data.session_id);
+    this._runState(data);
+    if(data.session_id!==this.state.currentSessionId)return;
+    if(this.loading){this.pendingSnapshot=data;return;}
+    const follow=this.follow, top=this.messageList.scrollTop;
+    this.clear();this.show();this._renderHistory(data.messages || []);
+    if(data.run?.prompt)this._addUserMessage(data.run.prompt);
+    for(const event of data.events || [])this.streamHandlers[event.type]?.(event);
+    this._runState(data); this._confirmations(data.pending_confirmations || []);
+    if(!this.state.streaming)this._finalizeStream();
+    if(data.run?.state==='interrupted')this._notice('服务重启时任务被中断，未自动重新执行。请先检查已有工具结果，再决定是否发送新的任务。');
+    else if(data.run?.error)this._notice(data.run.error);
+    if(!follow){this.follow=false;this.messageList.scrollTop=top;this.jump.hidden=false;}
+  }
+  _renderHistory(messages) {
+    const completed = new Set(messages.filter(msg=>msg.role==='toolResult'||msg.role==='tool').map(msg=>msg.tool_call_id));
+    for(const msg of messages){
+      if(msg.role==='user')this._addUserMessage(msg.content || '');
+      else if(msg.role==='assistant'){
+        if(msg.content)this._addAssistantMessage(msg.content);
+        if(msg.tool_calls?.length){this._startAssistantStream();for(const tc of msg.tool_calls)this._addToolCall(tc.id,tc.name,completed.has(tc.id)?'done':'unknown',tc.args);}
+      }else if(msg.role==='toolResult'||msg.role==='tool')this._updateToolCall(msg.tool_call_id,msg.is_error?'error':'done',msg.content);
+    }
+    this._finishTools();this._currentStreamEl=null;
+  }
+  _confirmations(items) {
+    if(!this.confirmationArea){if(items.length)for(const item of items)this._showConfirmation(item);return;}
+    this.confirmationArea.replaceChildren();this.confirmationArea.hidden=!items.length;
+    for(const item of items)this._showConfirmation(item);
+  }
+  _showConfirmation(item) {
+    if(!item)return;
+    if(!this.confirmationArea){
+      this.confirmationArea=document.createElement('section');this.confirmationArea.className='tool-confirmations';
+      this.confirmationArea.setAttribute('aria-label','工具执行确认');
+      document.querySelector('.input-area').prepend(this.confirmationArea);
+    }
+    if([...this.confirmationArea.children].some(el=>el.dataset.confirmation===item.confirmation_id))return;
+    this.confirmationArea.hidden=false;
+    const card=document.createElement('article');card.className='tool-confirmation';card.dataset.confirmation=item.confirmation_id;
+    const title=document.createElement('strong');title.textContent=`确认执行 ${item.tool_name}`;
+    const detail=document.createElement('p');detail.textContent=item.description || '此工具需要你的授权。';
+    const args=document.createElement('pre');args.textContent=typeof item.args==='string'?item.args:JSON.stringify(item.args,null,2);
+    const actions=document.createElement('div');
+    for(const [label,approved] of [['拒绝',false],['允许本次',true]]){
+      const button=document.createElement('button');button.textContent=label;button.className=approved?'btn-primary':'btn-secondary';
+      button.onclick=()=>{
+        if(!this.ws.confirm(this.state.currentSessionId,item.confirmation_id,approved)){this._notice('连接已断开，重连后可处理确认。');return;}
+        card.remove();this.confirmationArea.hidden=!this.confirmationArea.children.length;
+      };actions.append(button);
+    }
+    card.append(title,detail,args,actions);this.confirmationArea.append(card);
+  }
+  _scheduleStreamRender() {
+    if(this.renderFrame)return;
+    const render=()=>{this.renderFrame=null;const el=this._currentStreamEl;if(!el)return;
+      const target=el.querySelector('.stream-text');
+      if(this._currentStreamText.length>100000)target.textContent=this._currentStreamText;
+      else target.innerHTML=renderMarkdown(this._currentStreamText)+'<span class="streaming-cursor"></span>';
+      this._scrollToBottom();};
+    if(!this.renderedFirstChunk){this.renderedFirstChunk=true;render();}
+    else this.renderFrame=requestAnimationFrame(render);
+  }
+
   _restoreRejectedPrompt(id) {
-    const draft = this.pendingSends?.get(id);
+    const intent = this.pendingSends?.get(id);
+    const draft = typeof intent==='string' ? intent : intent?.draft;
     if (!draft) return;
     if (id === this.state.currentSessionId) {
       if (this.input.value) return; // Never replace a newer draft.
@@ -202,7 +299,7 @@ export class ChatPanel {
       this._resizeInput();
     } else if (this.drafts.get(id)) return;
     this.drafts.set(id, draft);
-    this.pendingSends.delete(id);
+    this.pendingSends.delete(id);this._saveIntents();
   }
   _addUserMessage(text) {
     const el = document.createElement('div'); el.className = 'user-message';
@@ -229,6 +326,7 @@ export class ChatPanel {
     this._copyButton(el, text); this._scrollToBottom();
   }
   _startAssistantStream() {
+    this.renderedFirstChunk=false;
     this._currentStreamEl = this._assistantElement(); this._currentStreamText = ''; this._currentToolCalls = {};
     this._currentStreamEl.querySelector('.stream-text').innerHTML = '<span class="streaming-cursor"></span>';
   }
@@ -272,6 +370,7 @@ export class ChatPanel {
     });
   }
   _finalizeStream(finalMessage) {
+    if(this.renderFrame){cancelAnimationFrame(this.renderFrame);this.renderFrame=null;}
     if (this._currentStreamEl) {
       const text = finalMessage?.text || this._currentStreamText || '';
       this._currentStreamEl.querySelector('.stream-text').innerHTML = renderMarkdown(text);
@@ -286,7 +385,7 @@ export class ChatPanel {
     document.getElementById('command-trigger').disabled = !!this.state.restoringSession;
     const isCommand = this.input.value.trim().startsWith('/') && !this.input.value.trim().startsWith('//');
     this.sendBtn.style.display = this.state.streaming && !isCommand ? 'none' : 'flex'; this.stopBtn.style.display = this.state.streaming ? 'flex' : 'none';
-    this.sendBtn.disabled = this.state.restoringSession || !this.input.value.trim() || this.commandRunning || this.creating || this.loading || this.state.modelChanging || this.state.modelInfoLoading || (!isCommand && (!this.ws.connected || this.busy.size > 0));
+    this.sendBtn.disabled = this.state.restoringSession || !this.input.value.trim() || this.commandRunning || this.creating || this.loading || this.state.modelChanging || this.state.modelInfoLoading || (!isCommand && (!this.ws.connected || this.busy.has(this.state.currentSessionId) || this.pendingSends?.has(this.state.currentSessionId)));
     this.stopBtn.disabled = !this.ws.connected;
     document.getElementById('model-select').disabled = !!(this.state.streaming || this.state.modelChanging || this.state.modelInfoLoading || this.creating || !this.ws.connected || !this.state.models?.length);
     this.status.textContent = this.state.restoringSession ? '正在恢复对话' : this.commandRunning ? '正在执行命令' : this.state.streaming ? '正在处理' : this.ws.connected ? '准备就绪' : '等待连接';
@@ -302,6 +401,7 @@ export class ChatPanel {
     const id = this.state.currentSessionId, revision = this.inputRevision;
     const consume = () => { if (id === this.state.currentSessionId && revision === this.inputRevision) { this.input.value = ''; this._inputChanged(); } };
     this.commandMenu.close(); this._notice(''); this.commandRunning = true; this._updateButtons();
+    let followUp;
     try {
       let output;
       switch (command.name) {
@@ -309,11 +409,25 @@ export class ChatPanel {
         case 'new': { const next = await this.state.createSession?.(); if (!next) throw new Error('新建对话失败，请重试'); if (id !== this.state.currentSessionId || revision !== this.inputRevision) { this._notice('新对话已创建，可从历史列表打开；当前输入已保留。'); break; } consume(); await this.state.selectSession(next); this.input.focus(); break; }
         case 'model': if (document.getElementById('model-select').disabled) throw new Error('当前无法切换模型，请等待连接或任务完成'); consume(); this.state.openModels?.(); break;
         case 'workflow': consume(); this.state.navigate?.('page-dynamic-workflows'); break;
+        case 'mcp': {
+          if(!parsed.args){consume();this.state.navigate?.('page-settings');break;}
+          if(!id)throw new Error('请先选择会话，或在设置中管理 MCP');
+          const data=await api.post('/sessions/'+encodeURIComponent(id)+'/command',{command:text});output=data.output;break;
+        }
         case 'sessions': case 'settings': consume(); this.state.navigate?.('page-' + command.name); break;
         case 'stop': if (!this.ws.sendCancel(id)) throw new Error('连接已断开，重连后可停止任务'); output = '已请求停止当前任务。'; break;
         case 'tools': { const data = await api.get('/tools'); output = data.tools?.length ? data.tools.join('\n') : '当前没有可用工具。'; break; }
         case 'context': { const data = await api.get('/sessions/' + encodeURIComponent(id) + '/info'); output = `模型：${data.provider} / ${data.model}\n工作区：${data.workspace}\n工作区外访问：${data.allow_outside_workspace ? '已开启' : '已限制'}\n会话：${data.id}`; break; }
         case 'compact': { const data = await api.post('/sessions/' + encodeURIComponent(id) + '/compact', {custom_instructions:parsed.args}); output = `上下文已压缩：${data.trimmed_from} → ${data.trimmed_to} 条消息\n\n${data.summary}`; this.state.onSessionUpdated?.(); break; }
+        default: {
+          const data=await api.post('/sessions/'+encodeURIComponent(id)+'/command',{command:text});output=data.output;
+          if(id!==this.state.currentSessionId || revision!==this.inputRevision)break;
+          if(data.session_id && data.session_id!==id)await this.state.selectSession(data.session_id);
+          if(revision===this.inputRevision && this.state.currentSessionId===(data.session_id || id) && data.should_query && data.query_prompt){
+            this.input.value=data.query_prompt;this._inputChanged();
+            followUp={sessionId:this.state.currentSessionId,revision:this.inputRevision};
+          }
+        }
       }
       consume();
       if (output && id === this.state.currentSessionId) {
@@ -323,9 +437,10 @@ export class ChatPanel {
       }
     } catch (error) { if (id === this.state.currentSessionId) this._notice('命令未完成：' + error.message + '。输入已保留。'); }
     finally { this.commandRunning = false; this._updateButtons(); }
+    if(followUp && followUp.sessionId===this.state.currentSessionId && followUp.revision===this.inputRevision)await this._send();
   }
   _inputChanged() { this.inputRevision++; this.drafts.set(this.visibleSession || '', this.input.value); this._resizeInput(); this._updateButtons(); }
   _resizeInput() { this.input.style.height = 'auto'; this.input.style.height = Math.min(this.input.scrollHeight, 200) + 'px'; }
   _notice(text) { this.notice.textContent = text; this.notice.hidden = !text; }
-  _scrollToBottom() { if (this.follow) requestAnimationFrame(() => { if (this.follow) { this.messageList.scrollTop = this.messageList.scrollHeight; this.jump.hidden = true; } }); }
+  _scrollToBottom() { if (this.follow && !this.scrollFrame) this.scrollFrame=requestAnimationFrame(() => { this.scrollFrame=null; if (this.follow) { this.messageList.scrollTop = this.messageList.scrollHeight; this.jump.hidden = true; } }); }
 }

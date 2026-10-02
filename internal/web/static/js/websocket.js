@@ -13,10 +13,15 @@ export class PiWebSocket {
     this.maxDelay = 30000;
     this.connected = false;
     this.connecting = false;
+    this.subscriptions = new Set();
+    this.sequences = new Map(); this.runIds = new Map();
+    this.stopped = false; this.reconnectTimer = null;
     this.onStatusChange = null; // callback(connected)
   }
 
   connect() {
+    this.stopped = false;
+    clearTimeout(this.reconnectTimer);
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -40,22 +45,13 @@ export class PiWebSocket {
       this.reconnectAttempts = 0;
       this._notifyStatus();
       this._dispatch('open');
+      for (const id of this.subscriptions) this.subscribe(id);
     };
 
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        this._dispatch('message', data);
-
-        // Dispatch by type
-        if (data.type) {
-          this._dispatch(data.type, data);
-        }
-
-        // Dispatch by event type for stream events
-        if (data.type === 'event' && data.event?.type) {
-          this._dispatch('event:' + data.event.type, data.event, data.session_id);
-        }
+        this._receive(data);
       } catch (e) {
         console.error('Failed to parse WebSocket message:', e);
       }
@@ -84,12 +80,42 @@ export class PiWebSocket {
     }
   }
 
-  sendPrompt(sessionId, prompt) {
-    return this.send({ type: 'prompt', session_id: sessionId, prompt });
+  sendPrompt(sessionId, prompt, requestId) {
+    return this.send({ type: 'prompt', session_id: sessionId, prompt, request_id: requestId });
+  }
+
+  subscribe(id, reset = false) {
+    if (!id) return false;
+    this.subscriptions.add(id);
+    return this.send({type:'subscribe', session_id:id, after_seq:reset ? 0 : this.sequences.get(id) || 0, run_id:this.runIds.get(id)});
+  }
+  unsubscribe(id) { this.subscriptions.delete(id); this.send({type:'unsubscribe',session_id:id}); }
+  confirm(id, confirmationId, approved) {
+    return this.send({type:'confirm', session_id:id, run_id:this.runIds.get(id), confirmation_id:confirmationId, approved});
+  }
+  _receive(data) {
+    const id = data.session_id;
+    if (data.type === 'replay') {
+      for (const event of data.events || []) this._receive(event);
+      this.sequences.set(id, data.seq || 0);
+      if (data.run) this.runIds.set(id,data.run.run_id);
+      this._dispatch('replay',data); return;
+    }
+    if (data.type === 'snapshot') this.sequences.set(id,data.seq || 0);
+    else if (data.seq) {
+      const seq=this.sequences.get(id) || 0;
+      if (data.seq <= seq) return;
+      if (seq && data.seq !== seq+1) { this.subscribe(id); return; }
+      this.sequences.set(id,data.seq);
+    }
+    if (data.run_id) this.runIds.set(id,data.run_id);
+    this._dispatch('message',data);
+    if (data.type) this._dispatch(data.type,data);
+    if (data.type === 'event' && data.event?.type) this._dispatch('event:' + data.event.type,data.event,id);
   }
 
   sendCancel(sessionId) {
-    return this.send({ type: 'cancel', session_id: sessionId });
+    return this.send({ type: 'cancel', session_id: sessionId, run_id:this.runIds.get(sessionId) });
   }
 
   sendSwitchModel(sessionId, model, provider) {
@@ -124,6 +150,7 @@ export class PiWebSocket {
   }
 
   _scheduleReconnect() {
+    if (this.stopped || this.reconnectTimer) return;
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error('Max reconnect attempts reached');
       return;
@@ -135,10 +162,11 @@ export class PiWebSocket {
     );
     this.reconnectAttempts++;
     console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-    setTimeout(() => this.connect(), delay);
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer=null; this.connect(); }, delay);
   }
 
   disconnect() {
+    this.stopped = true; clearTimeout(this.reconnectTimer); this.reconnectTimer=null;
     if (this.ws) {
       this.ws.close();
       this.ws = null;

@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getBaseUrl } from '../../store';
+import { apiRequest } from '../../store';
 import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
 import { useT, type TFunc } from '../../i18n/useT';
@@ -69,11 +69,7 @@ interface KbTagCluster {
 
 // ── API helpers ────────────────────────────────────────────────────────────
 
-async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${getBaseUrl()}${path}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
+async function apiGet<T>(path:string):Promise<T> { return apiRequest('GET',path); }
 
 async function fetchStats(): Promise<KbStats> {
   return apiGet<KbStats>('/kb/stats');

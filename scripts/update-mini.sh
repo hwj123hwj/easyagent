@@ -64,7 +64,11 @@ if [[ "$workflow_runtime" == true ]]; then
   cp -R workflow-runtime/vendor/ZCODE-* workflow-runtime/vendor/SOURCE.md "$release/"
 fi
 if [[ -n "$BRIDGE_BIN" ]]; then install -m 755 easyagent-bridge "$release/easyagent-bridge"; fi
-if [[ -f scripts/web-test.mjs ]]; then node --test scripts/web-test.mjs; fi
+if [[ -f scripts/web-test.mjs ]]; then
+  WEB_TESTS=(scripts/web-test.mjs)
+  if [[ -f scripts/mcp-settings-test.mjs ]]; then WEB_TESTS+=(scripts/mcp-settings-test.mjs); fi
+  node --test "${WEB_TESTS[@]}"
+fi
 if [[ -f scripts/test_update_mini.py ]]; then python3 scripts/test_update_mini.py; fi
 # Prevent an older branch from silently removing capabilities enabled on this host.
 if [[ ${EA_DEPLOY_REQUIRE_PATH_POLICY:-false} == true ]]; then

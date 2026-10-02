@@ -25,12 +25,15 @@ EA_API_KEY=your-api-key
 
 Anthropic 使用 `EA_PROVIDER=anthropic` 和 `ANTHROPIC_API_KEY`、`ANTHROPIC_MODEL`、`ANTHROPIC_BASE_URL`。CLI 当前支持 `openai` / `anthropic`；开发测试注入 mock 或使用本地模拟接口，`EA_PROVIDER=mock` 不是有效的 CLI 配置。Provider 默认为空，正常使用需配置。
 
-**当前 `EA_API_KEY` 同时设置 HTTP API Bearer 令牌和 OpenAI 兼容上游密钥**，不是两个独立配置。使用 Anthropic 时，上游密钥来自 `ANTHROPIC_API_KEY`，API 认证仍由 `EA_API_KEY` 控制。
+`EA_SERVER_API_KEY` 单独设置 HTTP API Bearer 令牌，不改变上游模型密钥。未设置时兼容使用 `EA_API_KEY` 作为服务令牌。使用 Anthropic 时，上游密钥来自 `ANTHROPIC_API_KEY`。
+
+桌面客户端启动自己的本地服务时生成独立的随机 `EA_SERVER_API_KEY`，保留用户模型配置；远程连接使用目标服务的令牌。
 
 | 服务配置 | 默认 / 行为 |
 |---|---|
 | `EA_HOST` / `EA_PORT` | `127.0.0.1` / `8080`；`serve --listen` 可指定监听地址 |
-| `EA_API_KEY` | 设置后 API 请求要求同一令牌；`/health` 公开 |
+| `EA_SERVER_API_KEY` | HTTP API 独立令牌，优先于 `EA_API_KEY`；`/health` 公开 |
+| `EA_API_KEY` | OpenAI 兼容上游密钥，兼容作为未单独配置时的服务令牌 |
 | 未设置 API Key | 默认仅接受 loopback 来源的 API 请求 |
 | `EA_ALLOW_NO_AUTH=1` | 显式放开普通 API；不能用于绕过飞书设置管理接口的认证 |
 | `EA_ALLOWED_ORIGINS` | 逗号分隔的允许来源，按部署需求配置 |
@@ -56,7 +59,7 @@ Web 页面可加载不代表 API 已获授权。远程使用需要登录；WebSo
 
 `easyagent serve --allow-outside-workspace` 与环境开关等效。默认检查绝对路径、相对路径及符号链接，防止文件工具逃出工作区；放开后仍受运行用户的系统权限限制。此开关与 `-y`、API 认证独立。HTTP 工作区文件接口仍有自己的路径检查，不能把文件工具开关理解为所有 API 的任意路径访问许可。
 
-Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。serve 模式没有终端交互确认入口，不能依赖 TUI 的确认提示保护远程服务。
+Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。serve 模式的 Web 与桌面客户端提供工具审批，等待批准会在两分钟后自动拒绝。SDK 调用者须提供自己的确认回调；不能依赖 TUI 的提示保护服务。`-y` / `EA_AUTO_APPROVE=true` 会显式跳过审批，包括未信任的 MCP 工具。
 
 ## 可选能力
 
@@ -64,6 +67,7 @@ Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。ser
 |---|---|
 | `EA_EXECUTION_MODE=ssh`、`EA_SSH_HOST`、`EA_SSH_PORT`、`EA_SSH_WORKDIR` | SSH 执行后端；端口默认 22 |
 | `EA_WORKFLOW_RUNTIME` | 动态工作流 bundle 绝对路径，见 [构建说明](DYNAMIC_WORKFLOW.md) |
+| `EA_MCP_CONFIG` / `--mcp-config` / YAML `mcp_config` | 用户 MCP 配置文件，默认 `EA_HOME/mcp.json`；项目文件与授权见 [MCP](MCP.md) |
 | `EA_KB_REPO_PATH` | 知识库目录；未设置时运行入口使用 `~/agent-lessons` |
 | `SILICONFLOW_API_KEY`、`SILICONFLOW_EMBEDDING_MODEL`、`SILICONFLOW_BASE_URL` | 可选知识库向量搜索 |
 | `ASR_API_KEY`、`ASR_MODEL`、`ASR_BASE_URL` | 语音识别；未设置 ASR Key 时可回退到 SiliconFlow Key |

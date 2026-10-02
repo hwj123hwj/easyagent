@@ -9,7 +9,7 @@ export function loadStoredTheme(): ThemeMode {
   } catch {
     /* localStorage unavailable */
   }
-  return 'system';
+  return 'dark';
 }
 
 export function persistTheme(mode: ThemeMode): void {

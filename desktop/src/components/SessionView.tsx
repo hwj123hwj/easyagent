@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
-import { useStore, type SessionView as SV, type ViewDensity } from '../store';
-import { ChatPane } from './panes/ChatPane';
-import { PromptBar } from './PromptBar';
-import { Icon } from './Icon';
-import { WorkspaceToggles } from './workspace/WorkspaceToggles';
-import { useT, type TFunc } from '../i18n/useT';
-import { BottomTerminal } from './workspace/BottomTerminal';
-import { Resizer } from './workspace/Resizer';
-import { isElectron } from '../platform';
+import { useEffect, useState } from "react";
+import { useStore, type SessionView as SV, type ViewDensity } from "../store";
+import { ChatPane } from "./panes/ChatPane";
+import { PromptBar } from "./PromptBar";
+import { Icon } from "./Icon";
+import { WorkspaceToggles } from "./workspace/WorkspaceToggles";
+import { useT } from "../i18n/useT";
+import { BottomTerminal } from "./workspace/BottomTerminal";
+import { Resizer } from "./workspace/Resizer";
+import { isElectron } from "../platform";
+import { copyText } from "../client/clipboard";
+import { isActiveRun } from "../client/protocol";
 
 export function SessionView() {
   const activeId = useStore((s) => s.activeSessionId);
@@ -23,6 +25,22 @@ export function SessionView() {
   }
 
   const meta = view.meta;
+  async function copyConversation() {
+    try {
+      await copyText(
+        view!.transcript
+          .map((item) =>
+            item.kind === "tool"
+              ? `工具 · ${item.title}\n${JSON.stringify(item.rawInput || {})}\n${item.terminalOutput || item.content.map((c) => c.text || "").join("\n")}`
+              : `${item.kind === "user" ? "你" : item.kind === "assistant" ? "EasyAgent" : item.kind}\n${item.text}`,
+          )
+          .join("\n\n"),
+      );
+      useStore.setState({ connectionError: undefined });
+    } catch (error) {
+      useStore.setState({ connectionError: (error as Error).message });
+    }
+  }
 
   return (
     <main className="main">
@@ -36,20 +54,37 @@ export function SessionView() {
         )}
         <span className="toolbar-status">
           <span className={`status-dot ${meta.status}`} />
-          {t(`status.${meta.status}` as any)}
+          {isActiveRun(view.run) && view.phase === "responding"
+            ? t("chat.aiResponding")
+            : isActiveRun(view.run) && view.phase === "tool"
+              ? t("tool.status.in_progress")
+              : isActiveRun(view.run) && view.phase === "approval"
+                ? t("status.needs_approval")
+                : t(`status.${meta.status}` as any)}
         </span>
         <span className="grow" />
 
+        <button
+          className="icon-btn"
+          aria-label="复制完整会话"
+          title="复制完整会话"
+          disabled={!view.transcript.length}
+          onClick={() => void copyConversation()}
+        >
+          <Icon name="copy" size={14} />
+        </button>
         <WorkspaceToggles />
 
         {/* Density toggle (summary / normal / verbose) — desktop only on mobile */}
-        <div className={`views-menu ${isElectron ? 'toolbar-density' : 'toolbar-density-mobile'}`}>
-          {(['summary', 'normal', 'verbose'] as ViewDensity[]).map((d) => (
+        <div
+          className={`views-menu ${isElectron ? "toolbar-density" : "toolbar-density-mobile"}`}
+        >
+          {(["summary", "normal", "verbose"] as ViewDensity[]).map((d) => (
             <button
               key={d}
-              className={view.density === d ? 'active' : ''}
+              className={view.density === d ? "active" : ""}
               onClick={() => setDensity(meta.id, d)}
-              title={t('density.title')}
+              title={t("density.title")}
             >
               {t(`density.${d}`)}
             </button>
@@ -57,11 +92,11 @@ export function SessionView() {
         </div>
       </div>
 
-      <div className={`workspace ${bottomOpen ? 'with-bottom' : ''}`}>
+      <div className={`workspace ${bottomOpen ? "with-bottom" : ""}`}>
         <div className="pane">
           <div className="pane-head">
             <Icon name="chat" size={15} />
-            <span>{t('pane.chat')}</span>
+            <span>{t("pane.chat")}</span>
             <span className="grow" />
           </div>
           <ChatPane view={view} />
@@ -73,9 +108,9 @@ export function SessionView() {
           <Resizer
             axis="y"
             sign={1}
-            title={t('terminal.resize')}
+            title={t("terminal.resize")}
             getValue={() => useStore.getState().workspace.bottomHeight}
-            onChange={(v) => setWorkspaceSize('bottomHeight', v)}
+            onChange={(v) => setWorkspaceSize("bottomHeight", v)}
           />
           <BottomTerminal view={view} height={bottomHeight} />
         </>
@@ -87,158 +122,82 @@ export function SessionView() {
 }
 
 function baseName(cwd: string): string {
-  const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/);
+  const parts = cwd.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || cwd;
 }
 
 function EmptyState() {
-  const createSession = useStore((s) => s.createSession);
-  const sendPrompt = useStore((s) => s.sendPrompt);
-  const pickFolder = useStore((s) => s.pickFolder);
-  const models = useStore((s) => s.models);
-  const currentModel = useStore((s) => s.currentModel);
-  const t = useT();
-
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [cwd, setCwd] = useState<string | null>(null);
-  const [model, setModel] = useState('');
-  const [menuOpen, setMenuOpen] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
+  const currentModel = useStore((s) => s.currentModel),
+    connected = useStore((s) => s.connected);
+  const [cwd, setCwd] = useState(""),
+    [model, setModel] = useState("");
   useEffect(() => {
-    taRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    if (currentModel && !model) setModel(currentModel);
+    if (!model && currentModel) setModel(currentModel);
   }, [currentModel, model]);
-
-  // Dismiss the project menu on outside click / Escape.
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenuOpen(false);
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menuOpen]);
-
-  const handlePickFolder = async () => {
-    const folder = await pickFolder();
-    if (folder) setCwd(folder);
-    setMenuOpen(false);
+  const view: SV = {
+    meta: {
+      id: "__new__",
+      title: "新对话",
+      cwd,
+      status: "idle",
+      model,
+      availableModels: [],
+      createdAt: 0,
+      updatedAt: 0,
+    },
+    transcript: [],
+    seq: 0,
+    confirmations: [],
+    phase: "idle",
+    plan: [],
+    diffs: [],
+    density: "normal",
+    panes: ["chat"],
+    activePane: "chat",
   };
-
-  const submit = async () => {
-    const trimmed = text.trim();
-    if (!trimmed || busy) return;
-    setBusy(true);
-    try {
-      const id = await createSession({
-        cwd: cwd || undefined,
-        model: model || undefined,
-      });
-      await sendPrompt(id, trimmed);
-      setText('');
-    } catch {
-      setBusy(false);
-    }
-  };
-
-  const targetLabel = cwd ? baseName(cwd) : t('session.emptyChatTarget');
-
+  async function start() {
+    const text = useStore.getState().drafts.__new__ || "";
+    const id = await useStore
+      .getState()
+      .createSession({ cwd: cwd || undefined, model: model || undefined });
+    useStore.getState().setDraft(id, text);
+    return id;
+  }
   return (
     <main className="main">
-      <div className="empty-titlebar" />
-      <div className="empty">
-        <div className="empty-inner">
-          <div className="empty-title">{t('session.emptyPrompt')}</div>
-          <div className="empty-card">
-            <textarea
-              ref={taRef}
-              className="empty-input"
-              rows={2}
-              placeholder={t('session.emptyPlaceholder')}
-              value={text}
-              disabled={busy}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void submit();
-                }
-              }}
-            />
-            <div className="empty-controls">
-              {/* Project / directory selector — desktop only (no folder picker on mobile) */}
-              {isElectron && (
-              <div className="empty-target" ref={menuRef}>
-                <button
-                  className="chip interactive"
-                  onClick={() => setMenuOpen((o) => !o)}
-                  title={cwd ?? t('session.emptyChatTarget')}
-                >
-                  <Icon name="folder" size={14} />
-                  {targetLabel}
-                  <Icon name="chevron-down" size={12} />
-                </button>
-                {menuOpen && (
-                  <div className="empty-menu">
-                    <button
-                      className={`empty-menu-item ${!cwd ? 'active' : ''}`}
-                      onClick={() => {
-                        setCwd(null);
-                        setMenuOpen(false);
-                      }}
-                    >
-                      <Icon name="sparkle" size={14} />
-                      {t('session.emptyChatTarget')}
-                    </button>
-                    <div className="empty-menu-sep" />
-                    <button className="empty-menu-item" onClick={() => void handlePickFolder()}>
-                      <Icon name="folder-open" size={14} />
-                      {t('session.emptyPickFolder')}
-                    </button>
-                  </div>
-                )}
-              </div>
-              )}
-
-              {/* Model selector */}
-              <span className="chip">
-                <Icon name="cpu" size={14} />
-                <select value={model} onChange={(e) => setModel(e.target.value)}>
-                  <option value="">{t('prompt.defaultModel')}</option>
-                  {models.map((m) => (
-                    <option key={m.modelId} value={m.modelId}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
-              </span>
-
-              <span className="grow" />
-
-              <button
-                className="btn primary empty-send"
-                disabled={!text.trim() || busy}
-                onClick={() => void submit()}
-                title={t('session.emptySend')}
-              >
-                {busy ? <span className="spinner" /> : <Icon name="send" size={16} />}
-              </button>
-            </div>
-          </div>
-          <div className="empty-hint">{t('session.emptyHint')}</div>
-        </div>
+      <div className="toolbar">
+        <span className="toolbar-title">新对话</span>
+        <span className="grow" />
+        <button
+          className="btn"
+          disabled={!connected}
+          onClick={() =>
+            void useStore
+              .getState()
+              .pickFolder()
+              .then((path) => {
+                if (path) setCwd(path);
+              })
+              .catch((error) =>
+                useStore.setState({ connectionError: error.message }),
+              )
+          }
+        >
+          <Icon name="folder" size={14} />
+          {cwd ? baseName(cwd) : "选择项目"}
+        </button>
+        {cwd && (
+          <button
+            className="icon-btn"
+            aria-label="清除项目"
+            onClick={() => setCwd("")}
+          >
+            <Icon name="x" size={13} />
+          </button>
+        )}
       </div>
+      <ChatPane view={view} />
+      <PromptBar view={view} onStart={start} onModelChange={setModel} />
     </main>
   );
 }

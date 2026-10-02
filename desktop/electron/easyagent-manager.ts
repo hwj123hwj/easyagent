@@ -1,211 +1,160 @@
-// easyagent-manager.ts — Manages the easyagent backend process lifecycle.
-import { ChildProcess, spawn, execSync } from 'child_process';
-import * as http from 'http';
-import * as path from 'path';
-import * as fs from 'fs';
-import { app } from 'electron';
+import { ChildProcess, spawn } from "child_process";
+import * as path from "path";
+import * as fs from "fs";
+import * as net from "net";
+import { randomBytes } from "crypto";
+import { app } from "electron";
 
 export interface EasyAgentServerInfo {
   url: string;
   port: number;
 }
-
-// Default .env content created on first run (for packaged app)
-const DEFAULT_ENV_CONTENT = `# EasyAgent Configuration
-# Edit this file to change the AI provider and model.
-
-# Use OpenAI-compatible provider to connect to local gateway
-EA_PROVIDER=openai
-OPENAI_API_KEY=
-OPENAI_BASE_URL=http://localhost:4001
-OPENAI_MODEL=mimo-opus
-
-# Enable bash tool
-EA_ENABLE_BASH=true
-`;
-
-// Find an available port
-function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = require('net').createServer();
-    server.listen(0, '127.0.0.1', () => {
-      const port = server.address().port;
-      server.close(() => resolve(port));
-    });
-    server.on('error', reject);
-  });
-}
-
-// Health check — poll until server is ready
-function healthCheck(url: string, maxAttempts = 30, intervalMs = 500): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let attempts = 0;
-    const check = () => {
-      attempts++;
-      http
-        .get(`${url}/health`, (res) => {
-          if (res.statusCode === 200) {
-            resolve();
-          } else {
-            retry();
-          }
-        })
-        .on('error', () => {
-          retry();
-        });
-
-      function retry() {
-        if (attempts >= maxAttempts) {
-          reject(new Error(`EasyAgent server not ready after ${maxAttempts} attempts`));
-        } else {
-          setTimeout(check, intervalMs);
-        }
-      }
-    };
-    check();
-  });
+export interface BackendStatus {
+  state: "stopped" | "starting" | "ready" | "error";
+  message?: string;
 }
 
 export class EasyAgentManager {
-  private process: ChildProcess | null = null;
-  private serverInfo: EasyAgentServerInfo | null = null;
-
-  async start(): Promise<EasyAgentServerInfo> {
-    const port = await findFreePort();
-    const url = `http://127.0.0.1:${port}`;
-    const isPackaged = app.isPackaged;
-
-    // Find easyagent binary
-    const binary = this.findBinary(isPackaged);
-
-    console.log(`[easyagent-manager] Starting ${binary} on port ${port} (packaged: ${isPackaged})`);
-
-    // Prepare environment variables
-    const envVars: Record<string, string> = {
-      ...process.env as Record<string, string>,
-    };
-
-    let spawnCwd: string;
-
-    if (isPackaged) {
-      // --- Packaged mode ---
-      const userDataPath = app.getPath('userData');
-      const dataDir = path.join(userDataPath, 'data');
-
-      // Ensure data directory exists
-      fs.mkdirSync(dataDir, { recursive: true });
-
-      // Setup .env in userData if not exists
-      const envFile = path.join(userDataPath, '.env');
-      if (!fs.existsSync(envFile)) {
-        fs.writeFileSync(envFile, DEFAULT_ENV_CONTENT, 'utf-8');
-        console.log(`[easyagent-manager] Created default .env at ${envFile}`);
-      }
-
-      // Tell Go process where to find data and config
-      envVars.EA_DATA_DIR = dataDir;
-      envVars.EA_ENV_FILE = envFile;
-
-      // macOS: remove quarantine attributes from the binary
-      if (process.platform === 'darwin') {
-        try {
-          execSync(`xattr -cr "${binary}"`, { stdio: 'ignore' });
-        } catch (e) {
-          console.warn('[easyagent-manager] Failed to remove quarantine attributes:', e);
+  private child: ChildProcess | null = null;
+  private info: EasyAgentServerInfo | null = null;
+  private pending: Promise<EasyAgentServerInfo> | null = null;
+  private stopping = false;
+  private status: BackendStatus = { state: "stopped" };
+  readonly token = randomBytes(32).toString("hex");
+  onStatus: (status: BackendStatus) => void = () => {};
+  getStatus(): BackendStatus {
+    return this.status;
+  }
+  private report(status: BackendStatus): void {
+    this.status = status;
+    this.onStatus(status);
+  }
+  start(): Promise<EasyAgentServerInfo> {
+    if (this.info) return Promise.resolve(this.info);
+    if (this.pending) return this.pending;
+    this.pending = this.launch().finally(() => {
+      this.pending = null;
+    });
+    return this.pending;
+  }
+  private async launch(): Promise<EasyAgentServerInfo> {
+    this.stopping = false;
+    this.report({ state: "starting", message: "正在启动本地 Agent" });
+    try {
+      const port = await new Promise<number>((resolve, reject) => {
+        const server = net.createServer();
+        server.on("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          const port = (server.address() as net.AddressInfo).port;
+          server.close(() => resolve(port));
+        });
+      });
+      const url = `http://127.0.0.1:${port}`;
+      const root = path.resolve(__dirname, "../../..");
+      const binary = app.isPackaged
+        ? path.join(process.resourcesPath, "easyagent")
+        : [
+            path.join(root, "bin/easyagent"),
+            path.join(root, "easyagent"),
+            path.join(app.getPath("home"), ".easyagent/bin/easyagent"),
+          ].find((p) => fs.existsSync(p)) || "easyagent";
+      if (app.isPackaged && !fs.existsSync(binary))
+        throw new Error("安装包缺少 Agent 核心，请重新安装");
+      // A managed process must never open another service's run receipts.
+      const dataDirectory = path.join(app.getPath("userData"), "core-data");
+      fs.mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+      const env = {
+        ...process.env,
+        EA_DATA_DIR: dataDirectory,
+        EA_SERVER_API_KEY: this.token,
+        EA_ALLOW_NO_AUTH: "0",
+        EA_ALLOWED_ORIGINS: "",
+        ...(app.isPackaged
+          ? {
+              PATH:
+                path.join(process.resourcesPath, "runtime/bin") +
+                path.delimiter +
+                (process.env.PATH || ""),
+              EA_WORKFLOW_RUNTIME: path.join(
+                process.resourcesPath,
+                "workflow-runtime.mjs",
+              ),
+            }
+          : {}),
+      };
+      this.child = spawn(binary, ["serve", "--listen", `127.0.0.1:${port}`], {
+        cwd: app.isPackaged ? app.getPath("home") : root,
+        env,
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+      const child = this.child;
+      let failure: Error | undefined;
+      child.once("error", (error) => {
+        failure = error;
+        this.info = null;
+        this.report({
+          state: "error",
+          message: `本地 Agent 启动失败：${error.message}`,
+        });
+      });
+      child.once("exit", (code) => {
+        if (this.child === child) {
+          this.child = null;
+          this.info = null;
         }
+        if (!this.stopping) {
+          failure = new Error(`本地 Agent 已退出（${code ?? "signal"}）`);
+          this.report({ state: "error", message: failure.message });
+        }
+      });
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        if (failure) throw failure;
+        try {
+          const response = await fetch(`${url}/health`, {
+            signal: AbortSignal.timeout(700),
+          });
+          if (response.ok) {
+            this.info = { url, port };
+            this.report({ state: "ready" });
+            return this.info;
+          }
+        } catch {
+          /* Readiness poll has a bounded per-request timeout. */
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
       }
-
-      // Ensure binary is executable
-      try {
-        fs.chmodSync(binary, 0o755);
-      } catch (e) {
-        console.warn('[easyagent-manager] Failed to chmod binary:', e);
-      }
-
-      // cwd can be userDataPath for relative path resolution
-      spawnCwd = userDataPath;
-    } else {
-      // --- Development mode ---
-      // cwd is easyagent root so .env is loaded automatically
-      spawnCwd = path.resolve(__dirname, '..', '..', '..');
-
-      envVars.EA_PROVIDER = process.env.EA_PROVIDER || process.env.PI_GO_PROVIDER || 'openai';
-      envVars.OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-      envVars.OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'http://localhost:4001';
-      envVars.OPENAI_MODEL = process.env.OPENAI_MODEL || 'mimo-opus';
+      throw new Error("本地 Agent 15 秒内未就绪，可切换迷你主机或重试启动");
+    } catch (error) {
+      await this.stop();
+      this.report({
+        state: "error",
+        message: error instanceof Error ? error.message : "启动失败",
+      });
+      throw error;
     }
-
-    this.process = spawn(binary, ['-mode', 'serve', '-listen', `127.0.0.1:${port}`], {
-      cwd: spawnCwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: envVars,
-    });
-
-    this.process.stdout?.on('data', (data: Buffer) => {
-      try {
-        console.log(`[easyagent] ${data.toString().trim()}`);
-      } catch (e) {
-        // Ignore EPIPE when the process exits and the pipe breaks
-      }
-    });
-
-    this.process.stderr?.on('data', (data: Buffer) => {
-      try {
-        console.error(`[easyagent] ${data.toString().trim()}`);
-      } catch (e) {
-        // Ignore EPIPE when the process exits and the pipe breaks
-      }
-    });
-
-    this.process.on('exit', (code) => {
-      console.log(`[easyagent-manager] Process exited with code ${code}`);
-    });
-
-    // Wait for server to be ready
-    await healthCheck(url);
-
-    this.serverInfo = { url, port };
-    console.log(`[easyagent-manager] Server ready at ${url}`);
-
-    return this.serverInfo;
   }
-
   async stop(): Promise<void> {
-    if (this.process) {
-      this.process.kill('SIGTERM');
-      this.process = null;
-      this.serverInfo = null;
+    this.stopping = true;
+    const child = this.child;
+    this.child = null;
+    this.info = null;
+    if (child && child.exitCode === null) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          resolve();
+        }, 16000);
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        child.kill("SIGTERM");
+      });
     }
+    this.report({ state: "stopped" });
   }
-
   getServerInfo(): EasyAgentServerInfo | null {
-    return this.serverInfo;
-  }
-
-  private findBinary(isPackaged: boolean): string {
-    if (isPackaged) {
-      // Packaged: binary is in Contents/Resources/easyagent
-      const binaryPath = path.join(process.resourcesPath, 'easyagent');
-      if (fs.existsSync(binaryPath)) {
-        return binaryPath;
-      }
-      console.error(`[easyagent-manager] Binary not found at ${binaryPath}, falling back to PATH`);
-      return 'easyagent';
-    }
-
-    // Development: try to find easyagent in the parent directory's build output
-    const possiblePaths = [
-      path.resolve(__dirname, '..', '..', '..', 'easyagent'),         // dist/electron → desktop → easyagent
-      path.resolve(__dirname, '..', '..', '..', 'cmd', 'easyagent', 'easyagent'),
-      'easyagent',  // Rely on PATH
-    ];
-
-    for (const p of possiblePaths) {
-      if (fs.existsSync(p)) {
-        return p;
-      }
-    }
-
-    return 'easyagent';
+    return this.info;
   }
 }

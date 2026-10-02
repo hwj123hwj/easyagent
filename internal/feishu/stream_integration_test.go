@@ -9,6 +9,7 @@ import (
 	"github.com/hwj123hwj/easyagent/sdk/config"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ func TestStreamChatThroughCoreHandler(t *testing.T) {
 	defer llm.Close()
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
+	cfg.MCPConfigPath = filepath.Join(cfg.DataDir, "mcp.json")
 	cfg.Workspace = t.TempDir()
 	cfg.Provider = "openai"
 	cfg.OpenAIAPIKey = "fake"
@@ -89,6 +91,7 @@ func TestCardReceivesProgressBeforeProviderCompletes(t *testing.T) {
 	defer llm.Close()
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
+	cfg.MCPConfigPath = filepath.Join(cfg.DataDir, "mcp.json")
 	cfg.Workspace = t.TempDir()
 	cfg.Provider = "openai"
 	cfg.OpenAIAPIKey = "fake"

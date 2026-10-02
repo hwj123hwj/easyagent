@@ -1,42 +1,33 @@
-// preload.ts — Electron preload script for secure IPC bridge.
-import { contextBridge, ipcRenderer } from 'electron';
-
-export interface UpdateInfo {
-  version: string;
-  downloadUrl: string;
-  releaseNotes: string;
-}
-
-export interface DirEntry {
-  name: string;
-  path: string;
-  isDir: boolean;
-}
-
-export interface FileBase64 {
-  data: string;
-  mimeType: string;
-}
-
-export interface PiAPI {
-  getServerUrl: () => Promise<string | null>;
-  startServer: () => Promise<{ url: string; port: number } | { error: string }>;
-  checkForUpdate: () => Promise<UpdateInfo | null>;
-  openDownloadPage: (url: string) => Promise<void>;
-  pickFolder: () => Promise<string | null>;
-  // Workspace helpers
-  revealInFolder: (path: string) => Promise<void>;
-  openInTerminal: (dir: string) => Promise<void>;
-  openExternal: (url: string) => Promise<void>;
-}
-
-contextBridge.exposeInMainWorld('piAPI', {
-  getServerUrl: () => ipcRenderer.invoke('get-server-url'),
-  startServer: () => ipcRenderer.invoke('start-server'),
-  checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
-  openDownloadPage: (url: string) => ipcRenderer.invoke('open-download-page', url),
-  pickFolder: () => ipcRenderer.invoke('pick-folder'),
-  revealInFolder: (path: string) => ipcRenderer.invoke('reveal-in-folder', path),
-  openInTerminal: (dir: string) => ipcRenderer.invoke('open-in-terminal', dir),
-  openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
+import { contextBridge, ipcRenderer } from "electron";
+const call = (channel: string, ...args: unknown[]) =>
+  ipcRenderer.invoke(channel, ...args);
+contextBridge.exposeInMainWorld("piAPI", {
+  profiles: () => call("profiles-list"),
+  saveProfile: (profile: unknown) => call("profiles-save", profile),
+  selectProfile: (id: string) => call("profiles-select", id),
+  request: (method: string, path: string, body?: unknown) =>
+    call("agent-request", method, path, body),
+  connect: () => call("agent-connect"),
+  disconnect: () => call("agent-disconnect"),
+  send: (value: unknown) => call("agent-send", value),
+  onAgentEvent: (handler: (value: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown) =>
+      handler(value);
+    ipcRenderer.on("agent-event", listener);
+    return () => ipcRenderer.removeListener("agent-event", listener);
+  },
+  backendStatus: () => call("backend-status"),
+  getServerUrl: () => call("get-server-url"),
+  startServer: () => call("start-server"),
+  checkForUpdate: () => call("check-for-update"),
+  openDownloadPage: (url: string) => call("open-download-page", url),
+  pickFolder: () => call("pick-folder"),
+  revealInFolder: (path: string) => call("reveal-in-folder", path),
+  openInTerminal: (dir: string) => call("open-in-terminal", dir),
+  openExternal: (url: string) => call("open-external", url),
+  uploadAudio: (data: string, mimeType: string, filename: string) =>
+    call("upload-audio", data, mimeType, filename),
+  copyText: (text: string) => call("copy-text", text),
+  loginMCP: (name: string, workspace: string) =>
+    call("mcp-login", name, workspace),
 });
