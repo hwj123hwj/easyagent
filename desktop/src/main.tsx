@@ -6,6 +6,7 @@ import './styles/personal.css';
 import './styles/workspace-layout.css';
 import './styles/composer-files.css';
 import './styles/model-settings.css';
+import './styles/settings-workspace.css';
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

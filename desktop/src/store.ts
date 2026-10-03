@@ -204,6 +204,8 @@ export interface SessionView extends RunProjection {
   commandOutput?: string;
 }
 
+export type SettingsTab = "general" | "appearance" | "connections" | "models" | "mcp" | "feishu";
+
 interface StoreState {
   ready: boolean;
   connected: boolean;
@@ -212,7 +214,7 @@ interface StoreState {
   profiles: ConnectionProfile[];
   selectedProfile: string;
   settingsOpen: boolean;
-  settingsTab: "connections" | "models" | "mcp";
+  settingsTab: SettingsTab;
   loadingSession?: string;
   drafts: Record<string, string>;
   pending: Record<string, boolean>;
@@ -225,7 +227,7 @@ interface StoreState {
     url: string;
     token?: string;
   }) => Promise<void>;
-  openSettings: (open?: boolean, tab?: "connections" | "models" | "mcp") => void;
+  openSettings: (open?: boolean, tab?: SettingsTab) => void;
   confirm: (
     id: string,
     confirmation: string,
@@ -427,7 +429,7 @@ export const useStore = create<StoreState>((set, get) => ({
   profiles: [],
   selectedProfile: "",
   settingsOpen: false,
-  settingsTab: "connections",
+  settingsTab: "general",
   drafts: {},
   pending: {},
   setDraft: (id, text) => {
@@ -442,8 +444,8 @@ export const useStore = create<StoreState>((set, get) => ({
       /* Memory retains draft when storage is unavailable. */
     }
   },
-  openSettings: (open = true, tab = "connections") =>
-    set({ settingsOpen: open, settingsTab: tab }),
+  openSettings: (open = true, tab) =>
+    set((s) => ({ settingsOpen: open, settingsTab: tab ?? s.settingsTab })),
   setCommandOutput: (id, output, profileId = get().selectedProfile) => {
     if (profileId !== get().selectedProfile) return;
     updateView(set, id, (view) => ({ ...view, commandOutput: output }));

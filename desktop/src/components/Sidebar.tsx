@@ -327,6 +327,8 @@ export function Sidebar() {
       <div className="sidebar-foot">
         <Icon name="shield" size={14} />
         <span className="sidebar-foot-label">个人 Agent</span>
+        <button className="icon-btn" title="飞书机器人" aria-label="飞书机器人" onClick={() => useStore.getState().openSettings(true, "feishu")}><Icon name="feishu" size={16} /></button>
+        <button className="icon-btn" title="设置" aria-label="设置" onClick={() => useStore.getState().openSettings(true)}><Icon name="settings" size={16} /></button>
         {/* Mobile: check-for-update button */}
         {Capacitor.isNativePlatform() && (
           <button

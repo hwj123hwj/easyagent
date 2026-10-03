@@ -16,6 +16,28 @@ function view() {
     activePane: "chat",
   };
 }
+test("settings navigation preserves the conversation, draft and workspace layout", () => {
+  const before = useStore.getState();
+  const workspace = { ...before.workspace, rightOpen: true, rightView: "files", sidebarOpen: true };
+  const drafts = { s: "尚未发送的任务" };
+  useStore.setState({ activeSessionId: "s", drafts, workspace });
+  try {
+    useStore.getState().openSettings(true, "feishu");
+    assert.equal(useStore.getState().settingsTab, "feishu");
+    useStore.getState().openSettings(false);
+    assert.equal(useStore.getState().settingsOpen, false);
+    assert.equal(useStore.getState().activeSessionId, "s");
+    assert.equal(useStore.getState().drafts, drafts);
+    assert.equal(useStore.getState().workspace, workspace);
+    useStore.getState().openSettings();
+    assert.equal(useStore.getState().settingsTab, "feishu");
+    useStore.getState().openSettings(true, "appearance");
+    assert.equal(useStore.getState().settingsTab, "appearance");
+  } finally {
+    useStore.setState({ activeSessionId: before.activeSessionId, drafts: before.drafts, workspace: before.workspace, settingsOpen: before.settingsOpen, settingsTab: before.settingsTab });
+  }
+});
+
 test("deselecting any right feature closes the entire workspace and persists it", () => {
   const workspace = useStore.getState().workspace;
   const storage = global.localStorage;

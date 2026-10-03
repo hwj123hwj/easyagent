@@ -1,7 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { apiRequest, useStore } from "../store";
+import { apiRequest, useStore, type SettingsTab } from "../store";
 import { Icon } from "./Icon";
 import { ModelSettings } from "./ModelSettings";
+import { FeishuSettings } from "./FeishuSettings";
+import { type IconName } from "./Icon";
+
+const settingGroups: Array<{ title: string; items: Array<{ id: SettingsTab; label: string; icon: IconName; description: string }> }> = [
+  { title: "基础设置", items: [
+    { id: "general", label: "常规", icon: "settings", description: "设置界面语言，查看版本与常用快捷键。" },
+    { id: "appearance", label: "外观", icon: "sparkle", description: "选择适合你的界面配色。" },
+    { id: "models", label: "模型连接", icon: "cpu", description: "连接模型服务，选择默认模型。" },
+  ] },
+  { title: "连接与能力", items: [
+    { id: "connections", label: "运行主机", icon: "laptop", description: "选择任务运行的位置，管理远程 Agent 连接。" },
+    { id: "mcp", label: "MCP 工具", icon: "wrench", description: "为当前主机接入工具服务，管理信任与授权。" },
+    { id: "feishu", label: "飞书机器人", icon: "feishu", description: "配置应用凭据、查看桥接状态，并完成私聊配对。" },
+  ] },
+];
 interface MCPServer {
   name: string;
   source: string;
@@ -29,9 +44,19 @@ export function AgentSettings() {
     active = useStore((s) => s.activeSessionId),
     cwd = useStore((s) => (active ? s.sessions[active]?.meta.cwd : ""));
   const tab = useStore((s) => s.settingsTab),
-    setTab = (tab: "connections" | "models" | "mcp") =>
+    setTab = (tab: SettingsTab) =>
       useStore.getState().openSettings(true, tab);
   const connected = useStore((s) => s.connected);
+  const page = settingGroups.flatMap((g) => g.items).find((item) => item.id === tab)!;
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { heading.current?.focus(); setNotice(""); }, [tab]);
+  useEffect(() => () => {
+    requestAnimationFrame(() => {
+      const close = document.querySelector<HTMLButtonElement>('.workspace-right[role="dialog"]:not([hidden]) .rsidebar-mobile-close');
+      if (close?.getClientRects().length) close.focus();
+      else document.querySelector<HTMLButtonElement>(".connection-settings")?.focus();
+    });
+  }, []);
   const [editing, setEditing] = useState("mini"),
     [name, setName] = useState("迷你主机"),
     [url, setUrl] = useState("http://192.168.5.16:8080"),
@@ -127,41 +152,68 @@ export function AgentSettings() {
     }
   }
   return (
-    <main className="main settings-main">
-      <div className="settings-heading">
-        <div>
-          <h1>工作区设置</h1>
-          <p>连接你的 Agent，让能力在正确的主机上运行。</p>
-        </div>
-        <button
-          className="btn"
-          onClick={() => useStore.getState().openSettings(false)}
-        >
-          返回对话
+    <main className="settings-workspace" aria-label="设置">
+      <aside className="settings-navigation">
+        <button className="settings-return" onClick={() => useStore.getState().openSettings(false)}>
+          <Icon name="arrow-left" size={17} />返回工作区
         </button>
-      </div>
-      <nav className="settings-tabs" aria-label="设置分类">
-        <button
-          aria-current={tab === "connections" ? "page" : undefined}
-          onClick={() => setTab("connections")}
-        >
-          连接与运行
-        </button>
-        <button
-          aria-current={tab === "models" ? "page" : undefined}
-          onClick={() => setTab("models")}
-        >
-          模型连接
-        </button>
-        <button
-          aria-current={tab === "mcp" ? "page" : undefined}
-          onClick={() => setTab("mcp")}
-        >
-          MCP 工具
-        </button>
-      </nav>
-      <div className="settings-scroll">
-        {tab === "connections" ? (
+        <nav aria-label="设置分类">
+          {settingGroups.map((group) => <div className="settings-nav-group" key={group.title}>
+            <p>{group.title}</p>
+            {group.items.map((item) => <button key={item.id}
+              aria-current={tab === item.id ? "page" : undefined}
+              onClick={() => setTab(item.id)}>
+              <Icon name={item.icon} size={18} /><span>{item.label}</span>
+            </button>)}
+          </div>)}
+        </nav>
+        <div className="settings-nav-foot"><span className="brand-word">ea·</span><span>EasyAgent<small>{__APP_VERSION__}</small></span></div>
+      </aside>
+      <div className="settings-content" key={selected}>
+        <header className="settings-page-heading">
+          <h1 ref={heading} tabIndex={-1}>{page.label}</h1>
+          <p>{page.description}</p>
+          {["connections", "models", "mcp", "feishu"].includes(tab) && <div className="settings-host-context">
+            <Icon name={profiles.find((p) => p.id === selected)?.kind === "local" ? "laptop" : "globe"} size={14} />
+            {profiles.find((p) => p.id === selected)?.name || "当前主机"}
+            <span>{connected ? "已连接" : "未连接"}</span>
+          </div>}
+        </header>
+        <div className="settings-scroll">
+        {tab === "general" ? (
+          <section className="settings-section">
+            <div className="settings-row-group">
+              <label className="settings-preference-row"><span><strong>界面语言</strong><small>选择应用的显示语言。</small></span>
+                <select value={lang} onChange={(e) => useStore.getState().setLang(e.target.value as "zh" | "en")}>
+                  <option value="zh">中文</option><option value="en">English</option>
+                </select>
+              </label>
+              <div className="settings-preference-row"><span><strong>桌面版本</strong><small>EasyAgent {__APP_VERSION__}</small></span>
+                {window.piAPI && <button className="btn" onClick={() => void useStore.getState().checkUpdate()}>检查更新</button>}
+              </div>
+            </div>
+            {update?.phase === "idle" && <p className="settings-note" role="status">当前没有可安装的桌面更新</p>}
+            <h2>常用快捷键</h2>
+            <dl className="settings-shortcuts">
+              <div><dt>发送消息</dt><dd><kbd>Enter</kbd></dd></div>
+              <div><dt>输入换行</dt><dd><kbd>Shift</kbd> + <kbd>Enter</kbd></dd></div>
+              <div><dt>打开命令菜单</dt><dd><kbd>/</kbd></dd></div>
+              <div><dt>文件工作台</dt><dd><kbd>⌘ / Ctrl</kbd> + <kbd>P</kbd></dd></div>
+              <div><dt>代码审查</dt><dd><kbd>⌘ / Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>G</kbd></dd></div>
+            </dl>
+          </section>
+        ) : tab === "appearance" ? (
+          <section className="settings-section">
+            <h2>配色主题</h2><p>立即应用到当前界面，选择会保留在此设备。</p>
+            <div className="settings-themes" role="group" aria-label="配色主题">
+              {([{ id: "dark", label: "青夜", detail: "深青背景 · 柔和浅青" }, { id: "light", label: "浅色", detail: "明亮表面 · 清晰文字" }, { id: "system", label: "跟随系统", detail: "随系统外观自动切换" }] as const).map((option) => <button key={option.id} className={"settings-theme-choice " + option.id} aria-pressed={theme === option.id} onClick={() => useStore.getState().setTheme(option.id)}>
+                <span className="settings-theme-preview" aria-hidden="true"><i /><b><em /><em /></b></span>
+                <span><strong>{option.label}</strong>{theme === option.id && <Icon name="circle-check" size={17} />}</span><small>{option.detail}</small>
+              </button>)}
+            </div>
+          </section>
+        ) : tab === "feishu" ? <FeishuSettings /> : tab === "connections" ? (
+
           <section className="settings-section">
             <h2>运行主机</h2>
             <p>
@@ -273,49 +325,6 @@ export function AgentSettings() {
             >
               {busy ? "正在保存…" : "保存并连接"}
             </button>
-            <h2>桌面版本</h2>
-            <p>EasyAgent {__APP_VERSION__}</p>
-            {window.piAPI && (
-              <button
-                className="btn"
-                onClick={() => void useStore.getState().checkUpdate()}
-              >
-                检查桌面更新
-              </button>
-            )}
-            {update?.phase === "idle" && (
-              <p role="status">当前没有可安装的桌面更新</p>
-            )}
-            <h2>界面</h2>
-            <div className="settings-fields">
-              <label>
-                主题
-                <select
-                  value={theme}
-                  onChange={(e) =>
-                    useStore
-                      .getState()
-                      .setTheme(e.target.value as "dark" | "light" | "system")
-                  }
-                >
-                  <option value="dark">青夜</option>
-                  <option value="light">浅色</option>
-                  <option value="system">跟随系统</option>
-                </select>
-              </label>
-              <label>
-                语言
-                <select
-                  value={lang}
-                  onChange={(e) =>
-                    useStore.getState().setLang(e.target.value as "zh" | "en")
-                  }
-                >
-                  <option value="zh">中文</option>
-                  <option value="en">English</option>
-                </select>
-              </label>
-            </div>
           </section>
         ) : tab === "models" ? (
           <ModelSettings />
@@ -596,6 +605,7 @@ export function AgentSettings() {
             {notice}
           </p>
         )}
+        </div>
       </div>
     </main>
   );

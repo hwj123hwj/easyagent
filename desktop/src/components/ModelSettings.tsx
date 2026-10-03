@@ -88,7 +88,7 @@ export function ModelSettings() {
     <section className="settings-section model-settings">
       <div className="settings-section-title">
         <div>
-          <h2>模型连接</h2>
+          <h2>当前模型</h2>
           <p>{profile?.name || "当前 Agent"} · 当前模型：{currentModel || "尚未配置"}</p>
         </div>
         <button className="btn" disabled={busy} onClick={() => void useStore.getState().refreshModels()}>
@@ -131,7 +131,7 @@ export function ModelSettings() {
                   <input type="password" value={key} onChange={(e) => { setKey(e.target.value); setResult(null); }} placeholder={config?.hasKey && provider === config.provider ? "已保存；留空保留现有密钥" : "填写模型服务的密钥"} autoComplete="new-password" />
                 </label>
               </div>
-              <p className="settings-note">密钥由系统安全存储加密，保存在此 Mac。此处填写模型服务的密钥，连接远程 Agent 的 API 令牌在「连接与运行」设置。</p>
+              <p className="settings-note">密钥由系统安全存储加密，保存在此 Mac。此处填写模型服务的密钥，连接远程 Agent 的 API 令牌在「运行主机」设置。</p>
             </fieldset>
           )}
           <div className="model-config-actions">
