@@ -10,6 +10,7 @@ function fixture(options = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "easyagent-main-provider-"));
   const handlers = new Map(),
     requests = [],
+    dockIcons = [],
     events = {};
   const frame = {},
     contents = {
@@ -25,7 +26,8 @@ function fixture(options = {}) {
   let providerStore, manager, windowOptions, currentWindow;
   const electron = {
     app: {
-      isPackaged: false,
+      isPackaged: options.packaged === true,
+      dock: { setIcon: (icon) => dockIcons.push(icon) },
       requestSingleInstanceLock: () => true,
       whenReady: () => Promise.resolve(),
       on: (name, cb) => {
@@ -162,7 +164,7 @@ function fixture(options = {}) {
       module,
       exports: module.exports,
       require: (name) => fakes[name] || require(name),
-      __dirname: "/tmp/easyagent-main-test",
+      __dirname: options.electronDirectory || "/tmp/easyagent-main-test",
       process: { ...process, platform: options.platform || process.platform },
       Buffer,
       URL,
@@ -179,6 +181,7 @@ function fixture(options = {}) {
   return {
     handlers,
     requests,
+    dockIcons,
     store: () => providerStore,
     manager: () => manager,
     windowOptions: () => windowOptions,
@@ -188,6 +191,24 @@ function fixture(options = {}) {
     ready: () => new Promise((resolve) => setImmediate(resolve)),
   };
 }
+test("only unpackaged macOS uses the source PNG for its Dock icon", async (t) => {
+  for (const platform of ["darwin", "win32", "linux"]) {
+    for (const packaged of [false, true]) {
+      const f = fixture({
+        platform,
+        packaged,
+        electronDirectory: path.resolve(__dirname, "../dist/electron"),
+      });
+      t.after(f.cleanup);
+      await f.ready();
+      const expected = platform === "darwin" && !packaged
+        ? [path.resolve(__dirname, "../src/assets/app-icon.png")]
+        : [];
+      assert.deepEqual(f.dockIcons, expected, `${platform}, packaged=${packaged}`);
+      assert.ok(f.window(), "icon setup does not interrupt window creation");
+    }
+  }
+});
 test("macOS integrates native window controls without changing other platforms or renderer isolation", async (t) => {
   for (const platform of ["darwin", "win32", "linux"]) {
     const f = fixture({ platform });

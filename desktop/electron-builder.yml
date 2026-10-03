@@ -39,7 +39,7 @@ mac:
   sign: ./scripts/sign-adhoc.cjs
   hardenedRuntime: false
   gatekeeperAssess: false
-  # icon: build/icon.icns
+  icon: src/assets/app-icon.png
 
 dmg:
   title: "${productName} ${version}"

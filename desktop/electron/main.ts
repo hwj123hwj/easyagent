@@ -432,6 +432,9 @@ else {
     mainWindow?.focus();
   });
   app.whenReady().then(async () => {
+    if (process.platform === "darwin" && !app.isPackaged) {
+      app.dock?.setIcon(path.join(__dirname, "../../src/assets/app-icon.png"));
+    }
     profiles = new ProfileStore();
     providerStore = new ProviderStore();
     await createWindow();
