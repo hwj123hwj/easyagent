@@ -376,17 +376,6 @@
   width: 100% !important;
   flex: 1 1 100% !important;
 }
-.workspace-launcher {
-  flex-basis: 48px;
-  width: 48px;
-}
-.workspace-launcher .rsidebar-rail {
-  width: 48px;
-}
-.workspace-launcher .rail-label,
-.workspace-launcher .rail-shortcut {
-  display: none;
-}
 .workbench-backdrop {
   position: absolute;
   inset: 0;

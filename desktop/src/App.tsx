@@ -225,7 +225,7 @@ export function App() {
           <ErrorBoundary label="session">
             {settingsOpen ? <AgentSettings /> : <SessionView />}
           </ErrorBoundary>
-          {workspace.rightOpen && !settingsOpen && (
+          {workspace.rightOpen && workspace.rightView && !settingsOpen && (
             <>
               {floatingWorkbench && (
                 <button
@@ -244,7 +244,7 @@ export function App() {
                 />
               )}
               <div
-                className={`workspace-right ${workspace.rightView ? "" : "workspace-launcher"}`}
+                className="workspace-right"
                 ref={rightPanel}
                 tabIndex={floatingWorkbench ? -1 : undefined}
                 role={floatingWorkbench ? "dialog" : undefined}
