@@ -39,6 +39,7 @@ export function ChatPane({ view }: { view: SessionView }) {
   const container = useRef<HTMLDivElement>(null),
     heights = useRef(new Map<string, number>()),
     follow = useRef(true),
+    jumpingToLatest = useRef(false),
     previous = useRef("");
   const [viewport, setViewport] = useState({ top: 0, height: 600 }),
     [version, setVersion] = useState(0),
@@ -125,7 +126,8 @@ export function ChatPane({ view }: { view: SessionView }) {
   const onScroll = useCallback(() => {
     const el = container.current;
     if (!el) return;
-    follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    follow.current =
+      jumpingToLatest.current || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     setJump(!follow.current);
     setViewport({ top: el.scrollTop, height: el.clientHeight });
     positions.set(positionKey, { top: el.scrollTop, follow: follow.current });
@@ -134,6 +136,7 @@ export function ChatPane({ view }: { view: SessionView }) {
     const el = container.current;
     if (!el) return;
     if (previous.current !== positionKey) {
+      jumpingToLatest.current = false;
       const saved = positions.get(positionKey);
       follow.current = saved?.follow ?? true;
       el.scrollTop = saved?.top ?? el.scrollHeight;
@@ -345,10 +348,24 @@ export function ChatPane({ view }: { view: SessionView }) {
           className="jump-latest"
           onClick={() => {
             follow.current = true;
+            jumpingToLatest.current = true;
             const el = container.current;
             if (el) {
               el.scrollTop = el.scrollHeight;
               onScroll();
+              // Final virtual rows mount after the first scroll. Settle their
+              // measured heights before releasing the explicit follow intent.
+              requestAnimationFrame(() => {
+                if (container.current !== el || previous.current !== positionKey) return;
+                el.scrollTop = el.scrollHeight;
+                onScroll();
+                requestAnimationFrame(() => {
+                  if (container.current !== el || previous.current !== positionKey) return;
+                  el.scrollTop = el.scrollHeight;
+                  onScroll();
+                  jumpingToLatest.current = false;
+                });
+              });
             }
           }}
         >
