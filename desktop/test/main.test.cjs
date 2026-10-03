@@ -21,7 +21,7 @@ function fixture(options = {}) {
   let url = "https://first.example",
     token = "private-api-token",
     callback;
-  let providerStore, manager;
+  let providerStore, manager, windowOptions;
   const electron = {
     app: {
       isPackaged: false,
@@ -34,7 +34,8 @@ function fixture(options = {}) {
       getPath: () => directory,
     },
     BrowserWindow: class {
-      constructor() {
+      constructor(options) {
+        windowOptions = options;
         this.webContents = contents;
       }
       async loadURL() {}
@@ -154,7 +155,7 @@ function fixture(options = {}) {
       exports: module.exports,
       require: (name) => fakes[name] || require(name),
       __dirname: "/tmp/easyagent-main-test",
-      process,
+      process: { ...process, platform: options.platform || process.platform },
       Buffer,
       URL,
       FormData,
@@ -171,11 +172,25 @@ function fixture(options = {}) {
     requests,
     store: () => providerStore,
     manager: () => manager,
+    windowOptions: () => windowOptions,
     cleanup: () => fs.rmSync(directory, { recursive: true, force: true }),
     event: { sender: contents, senderFrame: frame },
     ready: () => new Promise((resolve) => setImmediate(resolve)),
   };
 }
+test("macOS integrates native window controls without changing other platforms or renderer isolation", async (t) => {
+  for (const platform of ["darwin", "win32", "linux"]) {
+    const f = fixture({ platform });
+    t.after(f.cleanup);
+    await f.ready();
+    const options = f.windowOptions();
+    assert.equal(options.titleBarStyle, platform === "darwin" ? "hiddenInset" : undefined);
+    assert.notEqual(options.frame, false, "native window controls remain available");
+    assert.equal(options.webPreferences.contextIsolation, true);
+    assert.equal(options.webPreferences.nodeIntegration, false);
+    assert.equal(options.webPreferences.sandbox, true);
+  }
+});
 test("main process supplies authentication without exposing it or accepting child-frame IPC", async (t) => {
   const f = fixture();
   t.after(f.cleanup);

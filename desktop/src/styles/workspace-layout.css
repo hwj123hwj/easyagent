@@ -549,6 +549,9 @@
     gap: 8px;
     padding: 0 12px;
   }
+  [data-platform="darwin"] .connection-bar {
+    padding-left: 82px;
+  }
   .connection-brand > span {
     display: none;
   }

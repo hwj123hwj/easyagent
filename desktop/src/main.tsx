@@ -8,6 +8,9 @@ import './styles/composer-files.css';
 import './styles/model-settings.css';
 import './styles/settings-workspace.css';
 
+// Reserve native window controls before the first renderer frame.
+if (window.piAPI?.platform) document.documentElement.dataset.platform = window.piAPI.platform;
+
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />

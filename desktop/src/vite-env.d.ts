@@ -24,6 +24,7 @@ declare const __APP_VERSION__: string;
 
 // ── window.piAPI type augmentation ──────────────────────────────────────────
 interface PiAPI {
+  readonly platform?: string;
   profiles: () => Promise<{profiles: import('./client/protocol').ConnectionProfile[]; selected: string}>;
   saveProfile: (profile: {id:string;name:string;url:string;token?:string;clearToken?:boolean}) => Promise<{profiles: import('./client/protocol').ConnectionProfile[];selected:string}>;
   selectProfile: (id:string) => Promise<{profiles: import('./client/protocol').ConnectionProfile[];selected:string}>;
