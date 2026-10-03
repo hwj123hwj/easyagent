@@ -127,7 +127,9 @@ export function ChatPane({ view }: { view: SessionView }) {
     const el = container.current;
     if (!el) return;
     follow.current =
-      jumpingToLatest.current || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      follow.current ||
+      jumpingToLatest.current ||
+      el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     setJump(!follow.current);
     setViewport({ top: el.scrollTop, height: el.clientHeight });
     positions.set(positionKey, { top: el.scrollTop, follow: follow.current });
@@ -149,10 +151,13 @@ export function ChatPane({ view }: { view: SessionView }) {
   useEffect(() => {
     const el = container.current;
     if (!el) return;
-    const observer = new ResizeObserver(() =>
-      setViewport((v) => ({ ...v, height: el.clientHeight })),
-    );
+    const observer = new ResizeObserver(() => {
+      if (follow.current) el.scrollTop = el.scrollHeight;
+      setViewport({ top: el.scrollTop, height: el.clientHeight });
+    });
     observer.observe(el);
+    // Result cards and expanded tools can resize independently of text deltas.
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
@@ -248,6 +253,22 @@ export function ChatPane({ view }: { view: SessionView }) {
         className="pane-body personal-transcript-scroll"
         ref={container}
         onScroll={onScroll}
+        onWheel={(event) => {
+          if (event.deltaY < 0) follow.current = false;
+        }}
+        onTouchMove={() => {
+          follow.current = false;
+        }}
+        onPointerDown={(event) => {
+          const el = event.currentTarget;
+          // A scrollbar drag expresses reading intent; content clicks do not.
+          if (event.clientX >= el.getBoundingClientRect().right - 18)
+            follow.current = false;
+        }}
+        onKeyDown={(event) => {
+          if (["ArrowUp", "PageUp", "Home", "PageDown", "End"].includes(event.key))
+            follow.current = false;
+        }}
         tabIndex={0}
         aria-label="会话消息"
       >
