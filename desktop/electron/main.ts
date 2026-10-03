@@ -378,6 +378,10 @@ async function createWindow() {
     minHeight: 580,
     title: "EasyAgent",
     backgroundColor: "#101b1c",
+    ...(process.platform === "darwin" ? {
+      titleBarStyle: "hiddenInset" as const,
+      trafficLightPosition: { x: 14, y: 17 },
+    } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

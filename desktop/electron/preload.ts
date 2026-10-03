@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 const call = (channel: string, ...args: unknown[]) =>
   ipcRenderer.invoke(channel, ...args);
 contextBridge.exposeInMainWorld("piAPI", {
+  platform: process.platform,
   profiles: () => call("profiles-list"),
   saveProfile: (profile: unknown) => call("profiles-save", profile),
   selectProfile: (id: string) => call("profiles-select", id),
