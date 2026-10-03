@@ -54,7 +54,10 @@ export function RightSidebar() {
     >
       <button
         className="rsidebar-mobile-close"
-        onClick={() => useStore.getState().toggleWorkspaceRight()}
+        onClick={() => {
+          useStore.getState().toggleWorkspaceRight();
+          document.querySelector<HTMLButtonElement>('.connection-workbench')?.focus();
+        }}
         aria-label={t('common.close')}
       >
         <Icon name="arrow-left" size={18} />
@@ -65,7 +68,11 @@ export function RightSidebar() {
       <RightRail
         items={RAIL}
         rightView={rightView}
-        onSelect={(item) => toggleView(item.view)}
+        onSelect={(item) => {
+          toggleView(item.view);
+          if (rightView === item.view)
+            document.querySelector<HTMLButtonElement>('.connection-workbench')?.focus();
+        }}
         t={t}
       />
     </div>
