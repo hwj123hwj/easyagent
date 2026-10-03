@@ -42,7 +42,7 @@ export function FeishuSettings() {
       <div className="feishu-connection-summary">
         <span className="feishu-host-label">配置所在主机</span>
         <strong>{profile?.name || "当前运行主机"}</strong>
-        <p>机器人在此主机运行。飞书消息交给这里的 Agent 处理。</p>
+        <p>配置与配对均针对这台主机。启用飞书后，消息由这里的 Agent 处理。</p>
         <button className="btn" disabled={!connected || state.loading || state.saving}
           onClick={() => void controller.refresh()}>
           <Icon name="refresh" size={14} />{state.loading ? "正在刷新…" : "刷新状态"}
