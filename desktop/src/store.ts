@@ -445,7 +445,7 @@ export const useStore = create<StoreState>((set, get) => ({
     }
   },
   openSettings: (open = true, tab) =>
-    set((s) => ({ settingsOpen: open, settingsTab: tab ?? s.settingsTab })),
+    set((s) => ({ settingsOpen: open, settingsTab: open ? (tab ?? "general") : s.settingsTab })),
   setCommandOutput: (id, output, profileId = get().selectedProfile) => {
     if (profileId !== get().selectedProfile) return;
     updateView(set, id, (view) => ({ ...view, commandOutput: output }));

@@ -127,16 +127,6 @@ textarea::placeholder {
   align-items: center;
   gap: 8px;
 }
-.connection-picker select {
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  max-width: 160px;
-  cursor: pointer;
-}
-.connection-picker option {
-  background: var(--bg-elev);
-}
 .connection-dot {
   width: 7px;
   height: 7px;

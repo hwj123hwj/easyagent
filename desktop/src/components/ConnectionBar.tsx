@@ -1,5 +1,6 @@
 import { useStore } from "../store";
 import { Icon } from "./Icon";
+import { HostPicker } from "./HostPicker";
 export function ConnectionBar() {
   const profiles = useStore((s) => s.profiles),
     selected = useStore((s) => s.selectedProfile),
@@ -33,27 +34,7 @@ export function ConnectionBar() {
       <span className="connection-brand">
         <b>ea·</b><span>EasyAgent</span>
       </span>
-      <label className="connection-picker" title="切换运行主机">
-        <span
-          className={"connection-dot " + (connected ? "online" : "")}
-          aria-hidden="true"
-        />
-        <span className="sr-only">运行主机</span>
-        <select
-          aria-label="选择运行主机"
-          value={selected}
-          disabled={state === "connecting"}
-          onChange={(e) =>
-            void useStore.getState().connectProfile(e.target.value)
-          }
-        >
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      <HostPicker />
       <span className="connection-caption" role="status">
         {connectionLabel}
       </span>
