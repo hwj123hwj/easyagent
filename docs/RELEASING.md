@@ -55,7 +55,7 @@ git push origin refs/tags/v0.1.1-rc.1
 
 ## 安装与核验
 
-macOS 桌面从 Release 下载 `EasyAgent-版本-arm64.dmg`（Apple Silicon）或 `EasyAgent-版本-x64.dmg`（Intel）。桌面更新检查只提示正式版；RC 需手动下载。当前 RC 使用 ad hoc 测试签名，未进行 Developer ID 签名或 Apple 公证，应在 Release 中明确说明；完整测试签名与 GitHub SHA-256 校验均不代替 Apple 的开发者认证和公证。
+macOS 桌面从 Release 下载 `EasyAgent-版本-arm64.dmg`（Apple Silicon）或 `EasyAgent-版本-x64.dmg`（Intel）。桌面更新检查只提示正式版；RC 需手动下载。当前 macOS 安装包使用 ad hoc 测试签名，未进行 Developer ID 签名或 Apple 公证，应在 Release 中明确说明；完整测试签名与 GitHub SHA-256 校验均不代替 Apple 的开发者认证和公证。
 
 安装脚本默认选择最新正式 Release，也可显式指定已有版本：
 
