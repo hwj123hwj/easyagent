@@ -1,0 +1,334 @@
+/* The composer follows the reading column and adapts to its own chat pane. */
+.personal-composer {
+  min-width: 0;
+  padding: 12px 20px 14px;
+}
+
+.personal-composer .promptbar-inner {
+  min-width: 0;
+  max-width: calc(var(--conversation-width, 816px) - 40px);
+}
+
+.personal-input-wrap {
+  min-width: 0;
+  padding: 13px 14px 10px;
+}
+
+.personal-input-wrap .prompt-input {
+  display: block;
+  min-width: 0;
+  min-height: 40px;
+  max-height: 200px;
+  box-sizing: border-box;
+}
+
+.personal-composer .composer-actions {
+  min-width: 0;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.personal-composer .model-trigger {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 240px;
+  min-height: 30px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.personal-composer .model-trigger > span {
+  min-width: 0;
+}
+
+.personal-composer .model-trigger > .ic,
+.personal-composer .composer-actions > button:not(.model-trigger),
+.personal-composer .composer-actions > button > .ic {
+  flex-shrink: 0;
+}
+
+.personal-composer .model-trigger:hover:not(:disabled),
+.composer-command:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.personal-composer .composer-command {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  color: var(--text-dim);
+}
+
+.composer-command-icon {
+  font-family: var(--mono);
+  font-size: 15px;
+}
+
+.personal-composer .composer-spacer {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.personal-composer .composer-voice {
+  width: 30px;
+  height: 30px;
+}
+
+.personal-composer .composer-send,
+.personal-composer .composer-stop {
+  flex: 0 0 auto;
+  min-width: 36px;
+  height: 36px;
+  margin-left: 2px;
+}
+
+.personal-composer .composer-foot {
+  min-width: 0;
+  margin-top: 8px;
+  gap: 12px;
+  line-height: 1.5;
+}
+
+.personal-composer .composer-foot > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.composer-host-hint {
+  flex-shrink: 0;
+}
+
+.personal-composer .slash-heading {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.personal-composer .slash-menu [role='option'] > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@container session (max-width: 600px) {
+  .personal-composer .composer-host-hint {
+    display: none;
+  }
+}
+
+@container session (max-width: 520px) {
+  .personal-composer {
+    padding-inline: 16px;
+  }
+  .personal-composer .promptbar-inner {
+    max-width: calc(var(--conversation-width, 816px) - 32px);
+  }
+  .personal-composer .composer-command-label {
+    display: none;
+  }
+  .personal-composer .model-trigger {
+    max-width: 200px;
+  }
+}
+
+@container session (max-width: 400px) {
+  .personal-composer {
+    padding-inline: 12px;
+  }
+  .personal-composer .promptbar-inner {
+    max-width: calc(var(--conversation-width, 816px) - 24px);
+  }
+  .personal-input-wrap {
+    padding-inline: 10px;
+  }
+  .personal-composer .composer-actions {
+    gap: 4px;
+  }
+  .personal-composer .composer-stop {
+    padding-inline: 9px;
+  }
+  .personal-composer .composer-stop-label {
+    display: none;
+  }
+  .personal-composer .slash-menu [role='option'] {
+    gap: 10px;
+    padding-inline: 12px;
+  }
+}
+
+/* Files use one full-width pane: explore first, then read or edit a file. */
+.files-panel {
+  min-width: 0;
+}
+
+.files-topbar {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 38px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+
+.files-tree-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  min-height: 28px;
+  margin: 4px 5px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.files-tree-toggle.active {
+  color: var(--accent);
+}
+
+.files-tree-toggle:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.files-tree-toggle:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.files-topbar .file-tabs {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  border-bottom: 0;
+  padding-inline: 0 4px;
+}
+
+.files-topbar .file-tab {
+  min-width: 80px;
+  padding: 0 4px 0 0;
+  border-radius: 5px;
+}
+
+.file-tab-select {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 30px;
+  padding: 5px 6px 5px 9px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.files-topbar .file-tab-close {
+  flex-shrink: 0;
+  opacity: 1;
+  width: 20px;
+  height: 24px;
+}
+
+.files-panel .files-body,
+.files-panel .files-main,
+.files-explorer {
+  min-width: 0;
+}
+
+.files-explorer {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.files-panel .files-main[hidden],
+.files-panel .files-explorer[hidden] {
+  display: none;
+}
+
+.files-explorer .file-tree {
+  display: flex !important;
+  flex: 1;
+  width: 100% !important;
+  min-width: 0;
+  border: 0;
+  background: var(--bg);
+}
+
+.files-panel .file-tree-head {
+  padding: 14px 12px 8px;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.files-panel .file-tree-head > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-panel .file-search {
+  min-width: 0;
+  min-height: 32px;
+  margin: 0 10px 10px;
+  background: var(--bg-elev);
+}
+
+.files-panel .file-search-input {
+  min-width: 0;
+  width: 100%;
+}
+
+.files-panel .tree-row {
+  min-height: 28px;
+}
+
+.files-panel .file-toolbar {
+  min-width: 0;
+  min-height: 34px;
+  padding-inline: 10px;
+}
+
+.files-panel .file-breadcrumb {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.files-panel .file-breadcrumb .crumb {
+  flex-shrink: 0;
+}
+
+.files-panel .file-open-in {
+  flex-shrink: 0;
+}
+
+.files-panel .file-content-toolbar {
+  min-height: 34px;
+  padding-inline: 10px;
+}
+
+.files-panel .file-tree-error {
+  padding: 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.files-panel .file-tree-error p {
+  margin: 0 0 8px;
+}

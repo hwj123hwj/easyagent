@@ -1,5 +1,5 @@
 /**
- * FilesPanel.tsx — VSCode-style file browser for the right sidebar.
+ * FilesPanel.tsx — project explorer and file preview for the right workspace.
  * Features: lazy-loading explorer tree, multiple open-file tabs, breadcrumb,
  * per-extension icons, Markdown preview, code highlighting with line numbers,
  * fuzzy file search, and "Open in" menu (reveal in folder / open in terminal).
@@ -18,7 +18,6 @@ import { Icon } from '../Icon';
 import { copyText } from '../../client/clipboard';
 import { FileIcon } from './FileIcons';
 import { Markdown } from '../Markdown';
-import { Resizer } from './Resizer';
 import { highlightCode } from './codeHighlight';
 import { useT, type TFunc } from '../../i18n/useT';
 
@@ -49,11 +48,17 @@ function breadcrumb(root: string, file: string): string[] {
 
 // ── REST API helpers (talk to easyagent backend) ────────────────────────────────
 
-async function listDir(path:string):Promise<DirEntry[]> { return apiRequest('GET', '/workspace/list-dir?path='+encodeURIComponent(path)); }
-async function searchFiles(root:string):Promise<string[]> { return apiRequest('GET', '/workspace/search-files?path='+encodeURIComponent(root)); }
-async function readFileText(path:string):Promise<string> { const value=await apiRequest<{content:string}>('GET','/workspace/read-file?path='+encodeURIComponent(path)); return value.content; }
-async function readFileBase64(path:string):Promise<{data:string;mimeType:string}|null> { return apiRequest('GET','/workspace/read-file-base64?path='+encodeURIComponent(path)); }
-async function writeFileText(path:string,content:string):Promise<boolean> { await apiRequest('PUT','/workspace/write-file?path='+encodeURIComponent(path),{content}); return true; }
+function workspaceResource(resource: string, path: string): string {
+  const params = new URLSearchParams({ path });
+  const sessionId = useStore.getState().activeSessionId;
+  if (sessionId) params.set('session_id', sessionId);
+  return '/workspace/' + resource + '?' + params;
+}
+async function listDir(path:string):Promise<DirEntry[]> { return apiRequest('GET', workspaceResource('list-dir', path)); }
+async function searchFiles(root:string):Promise<string[]> { return apiRequest('GET', workspaceResource('search-files', root)); }
+async function readFileText(path:string):Promise<string> { const value=await apiRequest<{content:string}>('GET', workspaceResource('read-file', path)); return value.content; }
+async function readFileBase64(path:string):Promise<{data:string;mimeType:string}|null> { return apiRequest('GET', workspaceResource('read-file-base64', path)); }
+async function writeFileText(path:string,content:string):Promise<boolean> { await apiRequest('PUT', workspaceResource('write-file', path),{content}); return true; }
 
 export function FilesPanel() {
   const activeId = useStore((s) => s.activeSessionId);
@@ -62,12 +67,25 @@ export function FilesPanel() {
   const activeTab = useStore((s) => s.workspace.activeFileTab);
   const openFileTab = useStore((s) => s.openFileTab);
   const closeFileTab = useStore((s) => s.closeFileTab);
-  const setActiveFileTab = useStore((s) => s.setActiveFileTab);
-  const fileTreeWidth = useStore((s) => s.workspace.fileTreeWidth);
-  const setWorkspaceSize = useStore((s) => s.setWorkspaceSize);
+  const [showTree, setShowTree] = useState(false);
   const t = useT();
 
   const root = meta?.cwd;
+  const previousRoot = useRef(root);
+  const browsing = !activeTab || showTree;
+  useEffect(() => {
+    setShowTree(false);
+    if (previousRoot.current !== root) {
+      previousRoot.current = root;
+      useStore.setState((state) => ({ workspace: {
+        ...state.workspace, fileTabs: [], activeFileTab: undefined,
+      } }));
+    }
+  }, [root]);
+  const openFile = (path: string) => {
+    openFileTab(path);
+    setShowTree(false);
+  };
 
   if (!root) {
     return (
@@ -83,30 +101,38 @@ export function FilesPanel() {
 
   return (
     <div className="ws-panel files-panel">
-      <FileTabs
-        tabs={tabs}
-        activeTab={activeTab}
-        onSelect={setActiveFileTab}
-        onClose={closeFileTab}
-        t={t}
-      />
+      <div className="files-topbar">
+        <button
+          className={`files-tree-toggle ${browsing ? 'active' : ''}`}
+          aria-label={browsing && activeTab ? '返回文件预览' : '浏览项目目录'}
+          title={browsing && activeTab ? '返回文件预览' : '浏览项目目录'}
+          aria-pressed={browsing}
+          onClick={() => setShowTree((value) => !value)}
+          disabled={!activeTab}
+        >
+          <Icon name={browsing && activeTab ? 'arrow-left' : 'folder'} size={14} />
+          <span>{browsing && activeTab ? '返回文件' : '目录'}</span>
+        </button>
+        <FileTabs
+          tabs={tabs}
+          activeTab={activeTab}
+          onSelect={openFile}
+          onClose={closeFileTab}
+          t={t}
+        />
+      </div>
       <div className="files-body">
-        <div className="files-main">
-          {activeTab ? (
+        <div className="files-main" hidden={browsing}>
+          {activeTab && (
             <>
               <FileToolbar root={root} file={activeTab} t={t} />
               <FileContent path={activeTab} t={t} />
             </>
-          ) : (
-            <div className="empty">{t('files.noOpenTabs')}</div>
           )}
         </div>
-        <Resizer
-          axis="x"
-          getValue={() => useStore.getState().workspace.fileTreeWidth}
-          onChange={(v) => setWorkspaceSize('fileTreeWidth', v)}
-        />
-        <FileTree root={root} activeTab={activeTab} onOpen={openFileTab} width={fileTreeWidth} />
+        <div className="files-explorer" hidden={!browsing}>
+          <FileTree key={root} root={root} activeTab={activeTab} onOpen={openFile} />
+        </div>
       </div>
     </div>
   );
@@ -144,13 +170,15 @@ function FileTabs({
           key={p}
           className={`file-tab ${activeTab === p ? 'active' : ''}`}
           title={p}
-          onClick={() => onSelect(p)}
         >
-          <FileIcon name={baseName(p)} size={14} />
-          <span className="file-tab-name">{baseName(p)}</span>
+          <button className="file-tab-select" onClick={() => onSelect(p)} aria-pressed={activeTab === p}>
+            <FileIcon name={baseName(p)} size={14} />
+            <span className="file-tab-name">{baseName(p)}</span>
+          </button>
           <button
             className="file-tab-close"
             title={t('files.closeTab')}
+            aria-label={`${t('files.closeTab')} · ${baseName(p)}`}
             onClick={(e) => {
               e.stopPropagation();
               onClose(p);
@@ -190,7 +218,7 @@ function FileToolbar({ root, file, t }: { root: string; file: string; t: TFunc }
 
   return (
     <div className="file-toolbar">
-      <div className="file-breadcrumb">
+      <div className="file-breadcrumb" title={file}>
         {crumbs.map((c, i) => (
           <span key={i} className="crumb">
             {i > 0 && <Icon name="chevron-right" size={12} />}
@@ -247,35 +275,37 @@ function FileTree({
   root,
   activeTab,
   onOpen,
-  width,
 }: {
   root: string;
   activeTab?: string;
   onOpen: (p: string) => void;
-  width: number;
 }) {
   const t = useT();
   const [query, setQuery] = useState('');
   const [files, setFiles] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     setFiles(null);
     setQuery('');
+    setLoading(false);
+    setError(false);
   }, [root]);
 
   const searching = query.trim().length > 0;
   // Loading entries when filters change
   useEffect(() => {
-    if (!searching || files !== null || loading) return;
+    if (!searching || files !== null) return;
     let alive = true;
     setLoading(true);
+    setError(false);
     void searchFiles(root)
       .then((list) => alive && setFiles(list))
-      .catch(() => alive && setFiles([]))
+      .catch(() => { if (alive) { setFiles([]); setError(true); } })
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
-  }, [searching, files, loading, root]);
+  }, [searching, files, root]);
 
   const results = useMemo(() => {
     if (!searching || !files) return [];
@@ -283,16 +313,17 @@ function FileTree({
   }, [query, files, searching]);
 
   return (
-    <div className="file-tree" style={{ width }}>
+    <div className="file-tree">
       <div className="file-tree-head">
         <Icon name="folder" size={13} />
-        <span>{t('files.explorer')}</span>
+        <span title={root}>{baseName(root)}</span>
       </div>
       <div className="file-search">
         <Icon name="search" size={13} />
         <input
           className="file-search-input"
           placeholder={t('files.searchPlaceholder')}
+          aria-label={t('files.searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           spellCheck={false}
@@ -308,6 +339,11 @@ function FileTree({
           loading && !files ? (
             <div className="tree-row tree-loading" style={{ paddingLeft: 10 }}>
               <Icon name="loader" size={13} spin />
+            </div>
+          ) : error ? (
+            <div className="file-tree-error" role="status">
+              <p>无法搜索项目文件，请检查访问权限或服务连接。</p>
+              <button className="btn" onClick={() => setFiles(null)}>重试</button>
             </div>
           ) : results.length === 0 ? (
             <div className="empty file-search-empty">{t('files.searchNoResults')}</div>
@@ -360,14 +396,16 @@ function TreeNode({
   const [open, setOpen] = useState(!!defaultOpen);
   const [children, setChildren] = useState<DirEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     if (!isDir || !open || children) return;
     let alive = true;
     setLoading(true);
+    setError(false);
     void listDir(path)
       .then((entries) => alive && setChildren(entries))
-      .catch(() => alive && setChildren([]))
+      .catch(() => { if (alive) { setChildren([]); setError(true); } })
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
   }, [isDir, open, children, path]);
@@ -405,6 +443,11 @@ function TreeNode({
         (loading && !children ? (
           <div className="tree-row tree-loading" style={{ paddingLeft: indent + 19 }}>
             <Icon name="loader" size={13} spin />
+          </div>
+        ) : error ? (
+          <div className="file-tree-error" role="status">
+            <p>无法读取目录，请检查所选项目和访问权限。</p>
+            <button className="btn" onClick={() => setChildren(null)}>重试</button>
           </div>
         ) : (
           (children ?? []).map((c) => (

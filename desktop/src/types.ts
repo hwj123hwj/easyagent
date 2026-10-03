@@ -18,6 +18,35 @@ export interface ModelInfo {
   name: string;
 }
 
+export interface ModelCatalog {
+  models: Array<{ id: string; name: string; provider: string }>;
+  current?: { id: string };
+  source?: "gateway" | "configured" | "unconfigured";
+  discovery_error?: string;
+}
+
+export interface ProviderConfig {
+  mode: "inherit" | "override";
+  provider?: "openai" | "anthropic";
+  baseUrl?: string;
+  model?: string;
+  hasKey: boolean;
+}
+
+export interface ProviderConfigInput {
+  mode: ProviderConfig["mode"];
+  provider?: ProviderConfig["provider"];
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+}
+
+export interface ProviderCheckResult {
+  ok: boolean;
+  models: Array<{ id: string; name: string }>;
+  message: string;
+}
+
 export interface SessionMeta {
   id: string;
   title: string;

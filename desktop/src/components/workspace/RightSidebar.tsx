@@ -53,18 +53,16 @@ export function RightSidebar() {
       className={`rsidebar ${hasContent ? '' : 'launcher'}`}
       style={hasContent ? { flexBasis: rightWidth, width: rightWidth } : undefined}
     >
+      {/* Keep the mobile exit available even after collapsing to the launcher. */}
+      <button
+        className="rsidebar-mobile-close"
+        onClick={() => useStore.getState().toggleWorkspaceRight()}
+        aria-label={t('common.close')}
+      >
+        <Icon name="arrow-left" size={18} />
+      </button>
       {hasContent && (
         <div className="rsidebar-content">
-          {/* Mobile close button — floating X in top-left of the panel */}
-          <button
-            className="rsidebar-mobile-close"
-            onClick={() => {
-              useStore.getState().toggleWorkspaceRight();
-            }}
-            aria-label="Close panel"
-          >
-            <Icon name="arrow-left" size={18} />
-          </button>
           {content}
         </div>
       )}

@@ -131,7 +131,8 @@ type ErrorResponse struct {
 // It also wires the LoopManager's trigger resolver so /loop can inject prompts.
 func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	srv := &Server{app: application, slashCmds: slashCmds, ctx: ctx, cancel: cancel, runs: newRunRegistry()}
+	srv := &Server{app: application, slashCmds: slashCmds, ctx: ctx, cancel: cancel, runs: newRunRegistry(),
+		allowedOrigins: envAllowedOrigins(), allowNoAuth: envAllowNoAuth()}
 	srv.restoreRunReceipts()
 
 	// Wire loop trigger: when a /loop fires, inject the prompt into the target session
@@ -207,8 +208,8 @@ func (s *Server) Handler() http.Handler {
 	NewASRHandler(s.app.Config()).Register(restMux)
 
 	var restHandler http.Handler = s.admissionMiddleware(restMux)
+	restHandler = s.authMiddleware(restHandler)
 	restHandler = corsMiddleware(s)(restHandler)
-	restHandler = s.authMiddleware(restHandler) // auth check after CORS, before recovery
 	restHandler = recoveryMiddleware(restHandler)
 	restHandler = loggingMiddleware(restHandler)
 
@@ -581,8 +582,10 @@ type ModelInfo struct {
 
 // ModelsResponse is the response for the models list endpoint.
 type ModelsResponse struct {
-	Models  []ModelInfo `json:"models"`
-	Current *ModelInfo  `json:"current,omitempty"`
+	Models         []ModelInfo `json:"models"`
+	Current        *ModelInfo  `json:"current,omitempty"`
+	Source         string      `json:"source"`
+	DiscoveryError string      `json:"discovery_error,omitempty"`
 }
 
 // gatewayModel represents a single model entry from the gateway /v1/models API.
@@ -613,62 +616,65 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		current = &ModelInfo{ID: modelID, Provider: provider, Name: modelID}
 	}
 
-	// Try to fetch models dynamically from the gateway (OpenAI-compatible /v1/models)
-	var models []ModelInfo
-	if cfg.OpenAIBaseURL != "" && cfg.OpenAIAPIKey != "" {
-		models = s.fetchGatewayModels(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey)
-	}
-
-	// Fallback to hardcoded list if gateway is unreachable
-	if len(models) == 0 {
-		models = []ModelInfo{
-			{ID: "deepseek-v4-flash", Provider: "openai", Name: "DeepSeek V4 Flash"},
-			{ID: "glm-5", Provider: "openai", Name: "GLM-5"},
-			{ID: "claude-sonnet-4-6", Provider: "openai", Name: "Claude Sonnet 4.6"},
+	result := ModelsResponse{Models: []ModelInfo{}, Current: current, Source: "unconfigured"}
+	if provider == "openai" && cfg.OpenAIBaseURL != "" {
+		models, err := s.fetchGatewayModels(r.Context(), cfg.OpenAIBaseURL, cfg.OpenAIAPIKey)
+		if err != nil {
+			result.DiscoveryError = err.Error()
+		} else if len(models) > 0 {
+			result.Models, result.Source = models, "gateway"
 		}
+	}
+	// A configured model can still be used when discovery is unsupported. Do
+	// not invent selectable models or treat this fallback as a connection test.
+	if len(result.Models) == 0 && current != nil {
+		result.Models, result.Source = []ModelInfo{*current}, "configured"
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(ModelsResponse{Models: models, Current: current})
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // fetchGatewayModels queries an OpenAI-compatible /v1/models endpoint and returns
-// the list of available models. Returns nil on any error.
-func (s *Server) fetchGatewayModels(baseURL, apiKey string) []ModelInfo {
-	// Normalize base URL: ensure it ends with /
-	if !strings.HasSuffix(baseURL, "/") {
-		baseURL += "/"
-	}
-
-	url := baseURL + "v1/models"
-	req, err := http.NewRequest("GET", url, nil)
+// the list advertised by the gateway; it does not perform inference.
+func (s *Server) fetchGatewayModels(ctx context.Context, baseURL, apiKey string) ([]ModelInfo, error) {
+	baseURL = strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
+	url := baseURL + "/v1/models"
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		slog.Debug("failed to create gateway models request", "error", err)
-		return nil
+		return nil, fmt.Errorf("model discovery URL is invalid")
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
 	resp, err := client.Do(req)
 	if err != nil {
 		slog.Debug("failed to fetch gateway models", "url", url, "error", err)
-		return nil
+		return nil, fmt.Errorf("model discovery could not connect")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Debug("gateway models returned non-200", "status", resp.StatusCode)
-		return nil
+		return nil, fmt.Errorf("model discovery returned HTTP %d", resp.StatusCode)
 	}
 
 	var gwResp gatewayModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&gwResp); err != nil {
 		slog.Debug("failed to decode gateway models response", "error", err)
-		return nil
+		return nil, fmt.Errorf("model discovery returned invalid JSON")
 	}
 
 	models := make([]ModelInfo, 0, len(gwResp.Data))
 	for _, m := range gwResp.Data {
+		if strings.TrimSpace(m.ID) == "" {
+			continue
+		}
 		name := m.DisplayName
 		if name == "" {
 			name = m.ID
@@ -679,7 +685,7 @@ func (s *Server) fetchGatewayModels(baseURL, apiKey string) []ModelInfo {
 			Name:     name,
 		})
 	}
-	return models
+	return models, nil
 }
 
 // ─── GET /sessions/{id}/info ──────────────────────────────────────────────────
@@ -1180,6 +1186,31 @@ func gitDiff(cwd string) ([]fileDiff, error) {
 
 // ─── GET /workspace/list-dir?path=... ───────────────────────────────────────
 
+// workspaceRoot uses the selected session's project when explicitly supplied.
+// An explicitly selected missing or invalid session never falls back to the global workspace.
+func (s *Server) workspaceRoot(w http.ResponseWriter, r *http.Request) (string, bool) {
+	query := r.URL.Query()
+	if !query.Has("session_id") {
+		return s.app.Config().Workspace, true
+	}
+	id := query.Get("session_id")
+	if id == "" || id == "." || id == ".." || filepath.Base(id) != id || strings.ContainsAny(id, "/\\") {
+		writeError(w, http.StatusNotFound, "session not found")
+		return "", false
+	}
+	manager := s.app.SessionManager()
+	if _, err := securePath(manager.SessionsDir(), id); err != nil || !manager.Exists(id) {
+		writeError(w, http.StatusNotFound, "session not found")
+		return "", false
+	}
+	sess, err := s.app.LoadSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return "", false
+	}
+	return sess.Workspace(), true
+}
+
 // DirEntry represents a single entry in a directory listing.
 type DirEntry struct {
 	Name  string `json:"name"`
@@ -1188,11 +1219,15 @@ type DirEntry struct {
 }
 
 func (s *Server) listDir(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	dirPath := r.URL.Query().Get("path")
 	if dirPath == "" {
-		dirPath = s.app.Config().Workspace
+		dirPath = root
 	}
-	safePath, err := securePath(s.app.Config().Workspace, dirPath)
+	safePath, err := securePath(root, dirPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1250,11 +1285,15 @@ func (s *Server) listDir(w http.ResponseWriter, r *http.Request) {
 // ─── GET /workspace/search-files?path=... ────────────────────────────────────
 
 func (s *Server) searchFiles(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	rootPath := r.URL.Query().Get("path")
 	if rootPath == "" {
-		rootPath = s.app.Config().Workspace
+		rootPath = root
 	}
-	safeRoot, err := securePath(s.app.Config().Workspace, rootPath)
+	safeRoot, err := securePath(root, rootPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1322,13 +1361,17 @@ func (s *Server) searchFiles(w http.ResponseWriter, r *http.Request) {
 // ─── GET /workspace/read-file?path=... ───────────────────────────────────────
 
 func (s *Server) workspaceReadFile(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
 
-	safePath, err := securePath(s.app.Config().Workspace, path)
+	safePath, err := securePath(root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1346,13 +1389,17 @@ func (s *Server) workspaceReadFile(w http.ResponseWriter, r *http.Request) {
 // ─── GET /workspace/read-file-base64?path=... ────────────────────────────────
 
 func (s *Server) workspaceReadFileBase64(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
 
-	safePath, err := securePath(s.app.Config().Workspace, path)
+	safePath, err := securePath(root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1391,6 +1438,10 @@ func (s *Server) workspaceReadFileBase64(w http.ResponseWriter, r *http.Request)
 // ─── PUT /workspace/write-file?path=... ──────────────────────────────────────
 
 func (s *Server) workspaceWriteFile(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
@@ -1403,7 +1454,7 @@ func (s *Server) workspaceWriteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	safePath, err := securePath(s.app.Config().Workspace, path)
+	safePath, err := securePath(root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

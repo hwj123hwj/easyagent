@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld("piAPI", {
     return () => ipcRenderer.removeListener("agent-event", listener);
   },
   backendStatus: () => call("backend-status"),
+  providerConfig: () => call("provider-config"),
+  saveProviderConfig: (input: unknown) => call("provider-save", input),
+  checkProviderConfig: (input?: unknown) => call("provider-check", input),
   getServerUrl: () => call("get-server-url"),
   startServer: () => call("start-server"),
   checkForUpdate: () => call("check-for-update"),

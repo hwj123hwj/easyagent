@@ -31,6 +31,7 @@ import type {
   DesktopSessionEvent,
   GitFileDiff,
   ModelInfo,
+  ModelCatalog,
   PlanEntry,
   SessionMeta,
   SessionRunStatus,
@@ -186,8 +187,8 @@ export interface WorkspaceUiState {
 
 /** Clamp ranges for the draggable regions. */
 export const WORKSPACE_SIZE_LIMITS = {
-  sidebarWidth: { min: 200, max: 480, default: 260 },
-  rightWidth: { min: 340, max: 900, default: 520 },
+  sidebarWidth: { min: 200, max: 480, default: 224 },
+  rightWidth: { min: 340, max: 900, default: 440 },
   bottomHeight: { min: 120, max: 720, default: 280 },
   fileTreeWidth: { min: 160, max: 480, default: 220 },
 } as const;
@@ -202,6 +203,8 @@ export interface SessionView extends RunProjection {
   activePane: PaneKind;
   draftAssistantId?: string;
   openFile?: { path: string; content: string };
+  /** Client-only slash command feedback, retained across session switches. */
+  commandOutput?: string;
 }
 
 interface StoreState {
@@ -212,11 +215,12 @@ interface StoreState {
   profiles: ConnectionProfile[];
   selectedProfile: string;
   settingsOpen: boolean;
-  settingsTab: "connections" | "mcp";
+  settingsTab: "connections" | "models" | "mcp";
   loadingSession?: string;
   drafts: Record<string, string>;
   pending: Record<string, boolean>;
   setDraft: (id: string, text: string) => void;
+  setCommandOutput: (id: string, output: string, profileId?: string) => void;
   connectProfile: (id: string, token?: string) => Promise<void>;
   saveProfile: (input: {
     id: string;
@@ -224,7 +228,7 @@ interface StoreState {
     url: string;
     token?: string;
   }) => Promise<void>;
-  openSettings: (open?: boolean, tab?: "connections" | "mcp") => void;
+  openSettings: (open?: boolean, tab?: "connections" | "models" | "mcp") => void;
   confirm: (
     id: string,
     confirmation: string,
@@ -240,6 +244,9 @@ interface StoreState {
 
   // Models fetched dynamically from backend
   models: ModelInfo[];
+  modelSource?: ModelCatalog["source"];
+  modelsNotice?: string;
+  refreshModels: () => Promise<void>;
   currentModel?: string;
   commands: Command[];
   pickFolder: () => Promise<string | null>;
@@ -339,23 +346,11 @@ function emptyView(meta: SessionMeta): SessionView {
 }
 
 function defaultModels(): ModelInfo[] {
-  if (cachedModels.length > 0) return cachedModels;
-  return [
-    { modelId: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
-    { modelId: "glm-5", name: "GLM-5" },
-    { modelId: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-  ];
+  return cachedModels;
 }
 
-async function fetchModels(): Promise<void> {
-  const resp = await apiRequest<{
-    models: Array<{ id: string; name: string; provider: string }>;
-    current?: { id: string };
-  }>("GET", "/models");
-  if (resp.models && resp.models.length > 0) {
-    cachedModels = resp.models.map((m) => ({ modelId: m.id, name: m.name }));
-    cachedCurrentModel = resp.current?.id;
-  }
+async function fetchModels(): Promise<ModelCatalog> {
+  return apiRequest<ModelCatalog>("GET", "/models");
 }
 
 // ── Workspace layout persistence ────────────────────────────────────────────
@@ -449,6 +444,10 @@ export const useStore = create<StoreState>((set, get) => ({
   },
   openSettings: (open = true, tab = "connections") =>
     set({ settingsOpen: open, settingsTab: tab }),
+  setCommandOutput: (id, output, profileId = get().selectedProfile) => {
+    if (profileId !== get().selectedProfile) return;
+    updateView(set, id, (view) => ({ ...view, commandOutput: output }));
+  },
   saveProfile: async (input) => {
     if (window.piAPI) {
       const result = await window.piAPI.saveProfile(input);
@@ -502,6 +501,8 @@ export const useStore = create<StoreState>((set, get) => ({
         pending: {},
         models: [],
         currentModel: undefined,
+        modelSource: undefined,
+        modelsNotice: undefined,
         selectedProfile: id,
         sessions: {},
         order: [],
@@ -513,9 +514,8 @@ export const useStore = create<StoreState>((set, get) => ({
         },
       });
       await wsService.connect(baseUrl, browserToken);
-      await fetchModels();
+      await get().refreshModels();
       if (epoch !== connectionEpoch) return;
-      set({ models: cachedModels, currentModel: cachedCurrentModel });
       try {
         const catalog = await apiRequest<{
           commands: Array<{
@@ -576,6 +576,19 @@ export const useStore = create<StoreState>((set, get) => ({
   order: [],
   models: [],
   currentModel: undefined,
+  refreshModels: async () => {
+    const epoch = connectionEpoch;
+    try {
+      const catalog = await fetchModels();
+      if (epoch !== connectionEpoch) return;
+      cachedModels = (catalog.models || []).map((m) => ({ modelId: m.id, name: m.name || m.id }));
+      cachedCurrentModel = catalog.current?.id;
+      set({ models: cachedModels, currentModel: cachedCurrentModel, modelSource: catalog.source, modelsNotice: catalog.discovery_error });
+    } catch {
+      if (epoch !== connectionEpoch) return;
+      set({ modelsNotice: "模型列表暂不可用，可在设置中检查模型连接。" });
+    }
+  },
   commands: localCommands,
   workspace: loadWorkspaceUi(),
   pickFolder: async () => {
@@ -974,7 +987,10 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setActive: async (id) => {
     const epoch = connectionEpoch;
-    set({ activeSessionId: id, settingsOpen: false, loadingSession: id });
+    set((s) => ({
+      activeSessionId: id, settingsOpen: false, loadingSession: id,
+      workspace: workspaceForSession(s, s.sessions[id]?.meta.cwd),
+    }));
     try {
       const [snapshot, info] = await Promise.all([
         apiRequest<Envelope>("GET", `/sessions/${encodeURIComponent(id)}/run`),
@@ -1020,6 +1036,7 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   createSession: async (opts) => {
+    const epoch = connectionEpoch;
     const body: Record<string, string> = {};
     if (opts?.cwd) body.cwd = opts.cwd;
     if (opts?.model) body.model = opts.model;
@@ -1029,6 +1046,8 @@ export const useStore = create<StoreState>((set, get) => ({
       "/sessions",
       body,
     );
+    if (epoch !== connectionEpoch)
+      throw new Error("运行主机已切换，原服务的会话创建结果已忽略");
     const lang = get().lang;
     const meta: SessionMeta = {
       id: result.id,
@@ -1050,6 +1069,7 @@ export const useStore = create<StoreState>((set, get) => ({
       sessions: { ...s.sessions, [result.id]: emptyView(meta) },
       order: [result.id, ...s.order],
       activeSessionId: result.id,
+      workspace: workspaceForSession(s, meta.cwd),
     }));
     return result.id;
   },
@@ -1219,6 +1239,13 @@ export const useStore = create<StoreState>((set, get) => ({
 type SetFn = (
   partial: Partial<StoreState> | ((s: StoreState) => Partial<StoreState>),
 ) => void;
+
+function workspaceForSession(s: StoreState, cwd?: string): WorkspaceUiState {
+  const previousCwd = s.activeSessionId ? s.sessions[s.activeSessionId]?.meta.cwd : undefined;
+  return previousCwd === cwd
+    ? s.workspace
+    : { ...s.workspace, fileTabs: [], activeFileTab: undefined };
+}
 
 function updateView(
   setFn: SetFn,

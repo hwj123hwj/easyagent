@@ -20,6 +20,7 @@ export class EasyAgentManager {
   private pending: Promise<EasyAgentServerInfo> | null = null;
   private stopping = false;
   private status: BackendStatus = { state: "stopped" };
+  constructor(private readonly providerEnvironment: () => NodeJS.ProcessEnv = () => ({})) {}
   readonly token = randomBytes(32).toString("hex");
   onStatus: (status: BackendStatus) => void = () => {};
   getStatus(): BackendStatus {
@@ -65,6 +66,7 @@ export class EasyAgentManager {
       fs.mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
       const env = {
         ...process.env,
+        ...this.providerEnvironment(),
         EA_DATA_DIR: dataDirectory,
         EA_SERVER_API_KEY: this.token,
         EA_ALLOW_NO_AUTH: "0",
@@ -90,18 +92,18 @@ export class EasyAgentManager {
       const child = this.child;
       let failure: Error | undefined;
       child.once("error", (error) => {
-        failure = error;
+        if (this.child !== child) return;
+        failure = new Error("本地 Agent 启动失败，请检查核心安装和模型配置");
         this.info = null;
         this.report({
           state: "error",
-          message: `本地 Agent 启动失败：${error.message}`,
+          message: failure.message,
         });
       });
       child.once("exit", (code) => {
-        if (this.child === child) {
-          this.child = null;
-          this.info = null;
-        }
+        if (this.child !== child) return;
+        this.child = null;
+        this.info = null;
         if (!this.stopping) {
           failure = new Error(`本地 Agent 已退出（${code ?? "signal"}）`);
           this.report({ state: "error", message: failure.message });
@@ -114,7 +116,7 @@ export class EasyAgentManager {
           const response = await fetch(`${url}/health`, {
             signal: AbortSignal.timeout(700),
           });
-          if (response.ok) {
+          if (response.ok && !failure && this.child === child) {
             this.info = { url, port };
             this.report({ state: "ready" });
             return this.info;
@@ -133,6 +135,11 @@ export class EasyAgentManager {
       });
       throw error;
     }
+  }
+  async restart(): Promise<EasyAgentServerInfo> {
+    if (this.pending) await this.pending.catch(() => {});
+    await this.stop();
+    return this.start();
   }
   async stop(): Promise<void> {
     this.stopping = true;

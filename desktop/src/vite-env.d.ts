@@ -33,6 +33,9 @@ interface PiAPI {
   send: (value:object) => Promise<boolean>;
   onAgentEvent: (handler:(value:any)=>void) => () => void;
   backendStatus: () => Promise<{state:string;message?:string}>;
+  providerConfig: () => Promise<import('./types').ProviderConfig>;
+  saveProviderConfig: (input: import('./types').ProviderConfigInput) => Promise<import('./types').ProviderConfig>;
+  checkProviderConfig: (input?: import('./types').ProviderConfigInput) => Promise<import('./types').ProviderCheckResult>;
   uploadAudio: (data:string,mimeType:string,filename:string) => Promise<{text?:string}>;
   copyText: (text:string) => Promise<void>;
   loginMCP: (name:string,workspace:string) => Promise<void>;
