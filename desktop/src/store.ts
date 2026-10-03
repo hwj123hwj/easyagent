@@ -171,10 +171,7 @@ export interface WorkspaceUiState {
   /** Width (px) of the left session-list sidebar. */
   sidebarWidth: number;
   rightOpen: boolean;
-  /**
-   * Which feature panel is open, or null for "launcher" mode: the right rail
-   * is shown with full labels and no content panel.
-   */
+  /** Selected feature, or null when the entire right sidebar is closed. */
   rightView: RightView | null;
   bottomOpen: boolean;
   rightWidth: number;
@@ -382,12 +379,15 @@ function loadWorkspaceUi(): WorkspaceUiState {
     const raw = localStorage.getItem(WORKSPACE_KEY);
     if (raw) {
       const p = JSON.parse(raw) as Partial<WorkspaceUiState>;
+      const rightView = p.rightView &&
+        ["review", "files", "plan", "tasks", "kb", "profile"].includes(p.rightView)
+        ? p.rightView : null;
       return {
         ...base,
         sidebarOpen: p.sidebarOpen ?? true,
         sidebarWidth: clampSize(p.sidebarWidth, "sidebarWidth"),
-        rightOpen: !!p.rightOpen,
-        rightView: p.rightView ?? null,
+        rightOpen: !!p.rightOpen && rightView != null,
+        rightView,
         bottomOpen: !!p.bottomOpen,
         rightWidth: clampSize(p.rightWidth, "rightWidth"),
         bottomHeight: clampSize(p.bottomHeight, "bottomHeight"),
@@ -736,10 +736,9 @@ export const useStore = create<StoreState>((set, get) => ({
   },
   toggleWorkspaceView: (view) => {
     set((s) => {
-      // If the clicked view is already active, collapse to launcher (rightView = null).
-      // Otherwise, open the selected view.
-      if (s.workspace.rightView === view) {
-        const workspace = { ...s.workspace, rightView: null };
+      // Clicking the visible selected feature closes the entire sidebar.
+      if (s.workspace.rightOpen && s.workspace.rightView === view) {
+        const workspace = { ...s.workspace, rightOpen: false, rightView: null };
         persistWorkspaceUi(workspace);
         return { workspace };
       }

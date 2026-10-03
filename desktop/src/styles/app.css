@@ -547,19 +547,6 @@ body.resizing .resizer {
 .rail-shortcut {
   display: none;
 }
-/* launcher mode: show labels and shortcuts */
-.rsidebar.launcher .rsidebar-rail {
-  width: 180px;
-}
-.rsidebar.launcher .rail-label {
-  display: inline;
-  flex: 1;
-}
-.rsidebar.launcher .rail-shortcut {
-  display: inline;
-  font-size: 10px;
-  opacity: .5;
-}
 
 /* ── ws-panel (shared panel styling) ── */
 .ws-panel {
@@ -5426,14 +5413,6 @@ body.resizing .resizer {
     overflow-y: auto !important;
     -webkit-overflow-scrolling: touch;
     padding-top: calc(env(safe-area-inset-top) + 56px);
-  }
-
-  /* Launcher mode (no panel selected): show hint + push rail to bottom */
-  .rsidebar.launcher {
-    justify-content: flex-end;
-  }
-  .rsidebar.launcher .rsidebar-rail {
-    width: 100% !important;
   }
 
   /* Mobile close button — floating back arrow in top-left of panel */

@@ -16,6 +16,64 @@ function view() {
     activePane: "chat",
   };
 }
+test("deselecting any right feature closes the entire workspace and persists it", () => {
+  const workspace = useStore.getState().workspace;
+  const storage = global.localStorage;
+  let saved;
+  global.localStorage = { getItem: () => null, setItem: (key, value) => {
+    if (key === "pi-go.workspace") saved = JSON.parse(value);
+  } };
+  try {
+    for (const feature of ["review", "files", "plan", "tasks", "kb", "profile"]) {
+      useStore.getState().openWorkspaceView(feature);
+      useStore.getState().toggleWorkspaceView(feature);
+      assert.equal(useStore.getState().workspace.rightOpen, false);
+      assert.equal(useStore.getState().workspace.rightView, null);
+      assert.equal(saved.rightOpen, false);
+      assert.equal(saved.rightView, null);
+    }
+    useStore.getState().toggleWorkspaceRight();
+    assert.equal(useStore.getState().workspace.rightOpen, true);
+    assert.equal(useStore.getState().workspace.rightView, "files");
+    useStore.getState().toggleWorkspaceView("plan");
+    assert.equal(useStore.getState().workspace.rightView, "plan");
+    useStore.getState().toggleWorkspaceRight();
+    assert.equal(useStore.getState().workspace.rightOpen, false);
+    assert.equal(useStore.getState().workspace.rightView, "plan");
+    // A remembered but hidden feature is not an active selection.
+    useStore.getState().toggleWorkspaceView("plan");
+    assert.equal(useStore.getState().workspace.rightOpen, true);
+    assert.equal(useStore.getState().workspace.rightView, "plan");
+  } finally {
+    global.localStorage = storage;
+    useStore.setState({ workspace });
+  }
+});
+
+test("restoring an old empty launcher does not reopen a right sidebar", () => {
+  const modulePath = require.resolve("../.test-output/src/store.js");
+  const cached = require.cache[modulePath];
+  const storage = global.localStorage;
+  try {
+    for (const [input, open, selected] of [
+      [{ rightOpen: true, rightView: null }, false, null],
+      [{ rightOpen: true }, false, null],
+      [{ rightOpen: true, rightView: "removed-feature" }, false, null],
+      [{ rightOpen: true, rightView: "files" }, true, "files"],
+      [{ rightOpen: false, rightView: "plan" }, false, "plan"],
+    ]) {
+      global.localStorage = { getItem: (key) => key === "pi-go.workspace" ? JSON.stringify(input) : null, setItem() {} };
+      delete require.cache[modulePath];
+      const restored = require(modulePath).useStore.getState().workspace;
+      assert.equal(restored.rightOpen, open);
+      assert.equal(restored.rightView, selected);
+    }
+  } finally {
+    global.localStorage = storage;
+    require.cache[modulePath] = cached;
+  }
+});
+
 test("retry after an uncertain acknowledgement keeps request identity and draft", async () => {
   const requests = [];
   let fail = true;

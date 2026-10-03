@@ -37,6 +37,7 @@ export function RightSidebar() {
   const rightWidth = useStore((s) => s.workspace.rightWidth);
   const toggleView = useStore((s) => s.toggleWorkspaceView);
   const t = useT();
+  if (!rightView) return null;
 
   let content: ReactNode = null;
   if (rightView === 'review') content = <ReviewPanel />;
@@ -46,14 +47,11 @@ export function RightSidebar() {
   else if (rightView === 'kb') content = <KbPanel />;
   else if (rightView === 'profile') content = <ProfilePanel />;
 
-  const hasContent = rightView != null;
-
   return (
     <div
-      className={`rsidebar ${hasContent ? '' : 'launcher'}`}
-      style={hasContent ? { flexBasis: rightWidth, width: rightWidth } : undefined}
+      className="rsidebar"
+      style={{ flexBasis: rightWidth, width: rightWidth }}
     >
-      {/* Keep the mobile exit available even after collapsing to the launcher. */}
       <button
         className="rsidebar-mobile-close"
         onClick={() => useStore.getState().toggleWorkspaceRight()}
@@ -61,15 +59,12 @@ export function RightSidebar() {
       >
         <Icon name="arrow-left" size={18} />
       </button>
-      {hasContent && (
-        <div className="rsidebar-content">
-          {content}
-        </div>
-      )}
+      <div className="rsidebar-content">
+        {content}
+      </div>
       <RightRail
         items={RAIL}
         rightView={rightView}
-        collapsed={hasContent}
         onSelect={(item) => toggleView(item.view)}
         t={t}
       />
@@ -80,18 +75,16 @@ export function RightSidebar() {
 function RightRail({
   items,
   rightView,
-  collapsed,
   onSelect,
   t,
 }: {
   items: RailItem[];
   rightView: RightView | null;
-  collapsed: boolean;
   onSelect: (item: RailItem) => void;
   t: TFunc;
 }) {
   return (
-    <nav className={`rsidebar-rail ${collapsed ? 'collapsed' : ''}`}>
+    <nav className="rsidebar-rail collapsed">
       {items.map((item) => {
         const active = rightView === item.view;
         return (
