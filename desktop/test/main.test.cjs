@@ -5,6 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const http = require("node:http");
 const os = require("node:os");
+const { EventEmitter } = require("node:events");
 function fixture(options = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "easyagent-main-provider-"));
   const handlers = new Map(),
@@ -21,7 +22,7 @@ function fixture(options = {}) {
   let url = "https://first.example",
     token = "private-api-token",
     callback;
-  let providerStore, manager, windowOptions;
+  let providerStore, manager, windowOptions, currentWindow;
   const electron = {
     app: {
       isPackaged: false,
@@ -33,14 +34,21 @@ function fixture(options = {}) {
       quit() {},
       getPath: () => directory,
     },
-    BrowserWindow: class {
+    BrowserWindow: class extends EventEmitter {
       constructor(options) {
+        super();
         windowOptions = options;
+        currentWindow = this;
         this.webContents = contents;
+        this.buttonPositions = [];
+        this.destroyed = false;
+        this.fullScreen = false;
       }
       async loadURL() {}
       async loadFile() {}
-      on() {}
+      setWindowButtonPosition(position) { this.buttonPositions.push({ ...position }); }
+      isDestroyed() { return this.destroyed; }
+      isFullScreen() { return this.fullScreen; }
     },
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
     shell: {
@@ -164,6 +172,7 @@ function fixture(options = {}) {
       fetch: fakeFetch,
       setTimeout,
       clearTimeout,
+      setImmediate,
     },
     { filename: "main.js" },
   );
@@ -173,6 +182,7 @@ function fixture(options = {}) {
     store: () => providerStore,
     manager: () => manager,
     windowOptions: () => windowOptions,
+    window: () => currentWindow,
     cleanup: () => fs.rmSync(directory, { recursive: true, force: true }),
     event: { sender: contents, senderFrame: frame },
     ready: () => new Promise((resolve) => setImmediate(resolve)),
@@ -189,6 +199,82 @@ test("macOS integrates native window controls without changing other platforms o
     assert.equal(options.webPreferences.contextIsolation, true);
     assert.equal(options.webPreferences.nodeIntegration, false);
     assert.equal(options.webPreferences.sandbox, true);
+  }
+});
+test("completed macOS resize, zoom, unzoom and fullscreen exit restore the native button position", async (t) => {
+  const f = fixture({ platform: "darwin" });
+  t.after(f.cleanup);
+  await f.ready();
+  const window = f.window();
+  for (const event of ["resized", "maximize", "unmaximize", "leave-full-screen"]) {
+    window.buttonPositions.length = 0;
+    window.emit(event);
+    assert.equal(window.buttonPositions.length, 0, "restore waits until after the native layout event");
+    await f.ready();
+    assert.deepEqual(window.buttonPositions, [{ x: 14, y: 16 }], event);
+  }
+});
+test("macOS fullscreen transition resize and fullscreen events do not reposition native controls", async (t) => {
+  const f = fixture({ platform: "darwin" });
+  t.after(f.cleanup);
+  await f.ready();
+  const window = f.window();
+  // Native entry is asynchronous: isFullScreen can still be false during resize.
+  window.emit("resize");
+  await f.ready();
+  assert.equal(window.buttonPositions.length, 0);
+  window.fullScreen = true;
+  window.emit("enter-full-screen");
+  for (const event of ["resized", "maximize", "unmaximize", "leave-full-screen"])
+    window.emit(event);
+  await f.ready();
+  assert.equal(window.buttonPositions.length, 0);
+  window.fullScreen = false;
+  window.emit("leave-full-screen");
+  await f.ready();
+  assert.deepEqual(window.buttonPositions, [{ x: 14, y: 16 }]);
+});
+test("a queued macOS button restore is skipped when the window enters fullscreen before it runs", async (t) => {
+  const f = fixture({ platform: "darwin" });
+  t.after(f.cleanup);
+  await f.ready();
+  const window = f.window();
+  window.emit("resized");
+  window.fullScreen = true;
+  await f.ready();
+  assert.equal(window.buttonPositions.length, 0);
+});
+test("a queued macOS button restore is skipped when its window is destroyed before it runs", async (t) => {
+  const f = fixture({ platform: "darwin" });
+  t.after(f.cleanup);
+  await f.ready();
+  const window = f.window();
+  window.emit("maximize");
+  window.destroyed = true;
+  await f.ready();
+  assert.equal(window.buttonPositions.length, 0);
+});
+test("destroyed macOS windows ignore native button restoration events", async (t) => {
+  const f = fixture({ platform: "darwin" });
+  t.after(f.cleanup);
+  await f.ready();
+  const window = f.window();
+  window.destroyed = true;
+  for (const event of ["resized", "maximize", "unmaximize", "leave-full-screen"])
+    window.emit(event);
+  await f.ready();
+  assert.equal(window.buttonPositions.length, 0);
+});
+test("Windows and Linux never reposition native window buttons", async (t) => {
+  for (const platform of ["win32", "linux"]) {
+    const f = fixture({ platform });
+    t.after(f.cleanup);
+    await f.ready();
+    const window = f.window();
+    for (const event of ["resize", "resized", "maximize", "unmaximize", "enter-full-screen", "leave-full-screen"])
+      window.emit(event);
+    await f.ready();
+    assert.equal(window.buttonPositions.length, 0, platform);
   }
 });
 test("main process supplies authentication without exposing it or accepting child-frame IPC", async (t) => {
