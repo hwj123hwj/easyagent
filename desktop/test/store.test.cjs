@@ -16,25 +16,47 @@ function view() {
     activePane: "chat",
   };
 }
-test("settings navigation preserves the conversation, draft and workspace layout", () => {
+test("normal settings opens general after Feishu while explicit shortcuts preserve conversation, draft and layout", () => {
   const before = useStore.getState();
   const workspace = { ...before.workspace, rightOpen: true, rightView: "files", sidebarOpen: true };
   const drafts = { s: "尚未发送的任务" };
-  useStore.setState({ activeSessionId: "s", drafts, workspace });
+  const sessions = { s: view() };
+  useStore.setState({ activeSessionId: "s", sessions, drafts, workspace });
+  const assertConversationPreserved = () => {
+    assert.equal(useStore.getState().activeSessionId, "s");
+    assert.equal(useStore.getState().sessions, sessions);
+    assert.equal(useStore.getState().drafts, drafts);
+    assert.equal(useStore.getState().workspace, workspace);
+  };
   try {
     useStore.getState().openSettings(true, "feishu");
     assert.equal(useStore.getState().settingsTab, "feishu");
     useStore.getState().openSettings(false);
     assert.equal(useStore.getState().settingsOpen, false);
-    assert.equal(useStore.getState().activeSessionId, "s");
-    assert.equal(useStore.getState().drafts, drafts);
-    assert.equal(useStore.getState().workspace, workspace);
-    useStore.getState().openSettings();
     assert.equal(useStore.getState().settingsTab, "feishu");
-    useStore.getState().openSettings(true, "appearance");
-    assert.equal(useStore.getState().settingsTab, "appearance");
+    assertConversationPreserved();
+    useStore.getState().openSettings();
+    assert.equal(useStore.getState().settingsOpen, true);
+    assert.equal(useStore.getState().settingsTab, "general");
+    assertConversationPreserved();
+
+    for (const tab of ["models", "mcp", "connections", "appearance", "feishu"]) {
+      // Explicit quick entries and page category navigation still select their destination.
+      useStore.getState().openSettings(true, tab);
+      assert.equal(useStore.getState().settingsTab, tab);
+      assert.equal(useStore.getState().settingsOpen, true);
+      assertConversationPreserved();
+      // Closing keeps the viewed category even if a caller supplied another tab.
+      useStore.getState().openSettings(false, "general");
+      assert.equal(useStore.getState().settingsTab, tab);
+      assert.equal(useStore.getState().settingsOpen, false);
+      assertConversationPreserved();
+      useStore.getState().openSettings(true);
+      assert.equal(useStore.getState().settingsTab, "general");
+      assertConversationPreserved();
+    }
   } finally {
-    useStore.setState({ activeSessionId: before.activeSessionId, drafts: before.drafts, workspace: before.workspace, settingsOpen: before.settingsOpen, settingsTab: before.settingsTab });
+    useStore.setState({ activeSessionId: before.activeSessionId, sessions: before.sessions, drafts: before.drafts, workspace: before.workspace, settingsOpen: before.settingsOpen, settingsTab: before.settingsTab });
   }
 });
 

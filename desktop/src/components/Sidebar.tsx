@@ -327,8 +327,10 @@ export function Sidebar() {
       <div className="sidebar-foot">
         <Icon name="shield" size={14} />
         <span className="sidebar-foot-label">个人 Agent</span>
-        <button className="icon-btn" title="飞书机器人" aria-label="飞书机器人" onClick={() => useStore.getState().openSettings(true, "feishu")}><Icon name="feishu" size={16} /></button>
-        <button className="icon-btn" title="设置" aria-label="设置" onClick={() => useStore.getState().openSettings(true)}><Icon name="settings" size={16} /></button>
+        <div className="sidebar-foot-actions">
+          <button className="sidebar-foot-action" title="飞书机器人" aria-label="飞书机器人" onClick={() => useStore.getState().openSettings(true, "feishu")}><Icon name="feishu" size={15} /><span>飞书</span></button>
+          <button className="sidebar-foot-action" title="设置" aria-label="设置" onClick={() => useStore.getState().openSettings(true)}><Icon name="settings" size={15} /><span>设置</span></button>
+        </div>
         {/* Mobile: check-for-update button */}
         {Capacitor.isNativePlatform() && (
           <button
