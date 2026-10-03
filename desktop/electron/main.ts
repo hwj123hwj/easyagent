@@ -370,6 +370,8 @@ handle("mcp-login", async (name: string, workspace: string) => {
   });
 });
 
+const macWindowButtonPosition = { x: 14, y: 16 };
+
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -380,7 +382,7 @@ async function createWindow() {
     backgroundColor: "#101b1c",
     ...(process.platform === "darwin" ? {
       titleBarStyle: "hiddenInset" as const,
-      trafficLightPosition: { x: 14, y: 17 },
+      trafficLightPosition: macWindowButtonPosition,
     } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -389,6 +391,21 @@ async function createWindow() {
       sandbox: true,
     },
   });
+  if (process.platform === "darwin") {
+    const window = mainWindow;
+    const alignWindowButtons = () => {
+      setImmediate(() => {
+        if (!window.isDestroyed() && !window.isFullScreen()) {
+          window.setWindowButtonPosition(macWindowButtonPosition);
+        }
+      });
+    };
+    // Wait for AppKit's layout to finish before restoring the header alignment.
+    window.on("resized", alignWindowButtons);
+    window.on("maximize", alignWindowButtons);
+    window.on("unmaximize", alignWindowButtons);
+    window.on("leave-full-screen", alignWindowButtons);
+  }
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void openExternal(url).catch(() => {});
     return { action: "deny" };

@@ -36,6 +36,13 @@
   font-size: 24px;
   line-height: 1;
 }
+[data-platform="darwin"] .connection-brand b {
+  /* The lowercase wordmark sits below the icon's optical centre. */
+  transform: translateY(-3px);
+}
+[data-platform="darwin"] .connection-brand > span {
+  transform: translateY(-1px);
+}
 .connection-picker {
   border-left: 1px solid var(--border);
   padding-left: 14px;
