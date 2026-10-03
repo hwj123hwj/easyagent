@@ -740,44 +740,6 @@ textarea::placeholder {
   gap: 10px;
   justify-content: flex-end;
 }
-.settings-main {
-  min-width: 0;
-}
-.settings-heading {
-  padding: 30px 36px 22px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-.settings-heading h1 {
-  font-size: 22px;
-  letter-spacing: -0.02em;
-  font-weight: 500;
-  margin: 0 0 8px;
-}
-.settings-heading p {
-  font-size: 13px;
-  color: var(--text-dim);
-  margin: 0;
-}
-.settings-tabs {
-  display: flex;
-  gap: 20px;
-  padding: 0 36px;
-  border-bottom: 1px solid var(--border);
-}
-.settings-tabs button {
-  padding: 12px 0;
-  background: transparent;
-  border: 0;
-  color: var(--text-dim);
-  font-size: 13px;
-}
-.settings-tabs button[aria-current] {
-  color: var(--accent);
-  border-bottom: 2px solid var(--accent);
-}
 .settings-scroll {
   overflow: auto;
   padding: 24px 36px 64px;
@@ -1039,18 +1001,6 @@ textarea::placeholder {
   }
   .composer-actions {
     gap: 8px;
-  }
-  .settings-heading {
-    padding: 24px 20px 16px;
-  }
-  .settings-heading h1 {
-    font-size: 19px;
-  }
-  .settings-heading p {
-    font-size: 12px;
-  }
-  .settings-tabs {
-    padding: 0 20px;
   }
   .settings-scroll {
     padding: 24px 20px 48px;

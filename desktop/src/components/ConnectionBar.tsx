@@ -20,7 +20,7 @@ export function ConnectionBar() {
         : "正在重连";
   return (
     <header className="connection-bar">
-      <button
+      {!settings && <button
         className="icon-btn connection-sidebar-toggle"
         aria-label={workspace.sidebarOpen ? "收起会话列表" : "展开会话列表"}
         aria-expanded={workspace.sidebarOpen}
@@ -29,7 +29,7 @@ export function ConnectionBar() {
         onClick={() => useStore.getState().toggleSidebar()}
       >
         <Icon name="panel" size={17} />
-      </button>
+      </button>}
       <span className="connection-brand">
         <b>ea·</b><span>EasyAgent</span>
       </span>
@@ -77,14 +77,14 @@ export function ConnectionBar() {
           <Icon name="panel-right" size={17} />
         </button>
       )}
-      <button
-        className={"btn connection-settings " + (settings ? "active" : "")}
-        aria-pressed={settings}
-        onClick={() => useStore.getState().openSettings(!settings)}
+      {!settings && <button
+        className="btn connection-settings"
+        aria-label="设置"
+        onClick={() => useStore.getState().openSettings(true)}
       >
-        <Icon name={settings ? "arrow-left" : "settings"} size={15} />
-        <span>{settings ? "返回对话" : "设置"}</span>
-      </button>
+        <Icon name="settings" size={15} />
+        <span>设置</span>
+      </button>}
       {error && (
         <div className="connection-notice" role="alert">
           <span>{error}</span>

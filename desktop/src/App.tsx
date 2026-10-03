@@ -45,7 +45,7 @@ export function App() {
 
   // Auto-reveal collapsed sidebar on hover (VSCode-style) — desktop only
   const [revealed, setRevealed] = useState(false);
-  const sidebarOpen = workspace.sidebarOpen;
+  const sidebarOpen = workspace.sidebarOpen && !settingsOpen;
   useEffect(() => {
     setRevealed(false);
   }, [sidebarOpen]);
@@ -115,7 +115,7 @@ export function App() {
           el.tagName === "TEXTAREA" ||
           el.isContentEditable);
       const mod = e.ctrlKey || e.metaKey;
-      if (!mod) return;
+      if (!mod || useStore.getState().settingsOpen) return;
       let view: RightView | null = null;
       if (e.shiftKey && (e.key === "G" || e.key === "g")) view = "review";
       else if (!e.shiftKey && !e.altKey && (e.key === "p" || e.key === "P"))
@@ -165,7 +165,7 @@ export function App() {
       <div className="desktop-shell">
         <ConnectionBar />
         <div
-          className={`app ${sidebarOpen ? "" : "sidebar-collapsed"} ${musicActive ? "music-active" : ""} ${floatingWorkbench ? "workbench-floating" : ""}`}
+          className={`app ${sidebarOpen ? "" : "sidebar-collapsed"} ${musicActive && !settingsOpen ? "music-active" : ""} ${settingsOpen ? "settings-active" : ""} ${floatingWorkbench ? "workbench-floating" : ""}`}
           style={
             {
               "--sidebar-w": `${sidebarWidth}px`,
@@ -201,7 +201,7 @@ export function App() {
           ) : (
             <>
               {/* Far-left hot zone: hovering it floats the collapsed sidebar out — desktop only */}
-              {isElectron && (
+              {isElectron && !settingsOpen && (
                 <>
                   <div
                     className="sidebar-reveal-zone"
@@ -222,10 +222,13 @@ export function App() {
             </>
           )}
           {/* The workspace shell wraps the session view (chat + optional right sidebar) */}
-          <ErrorBoundary label="session">
-            {settingsOpen ? <AgentSettings /> : <SessionView />}
-          </ErrorBoundary>
-          {workspace.rightOpen && workspace.rightView && !settingsOpen && (
+          <div className="settings-session" hidden={settingsOpen} inert={settingsOpen}>
+            <ErrorBoundary label="session">
+              <SessionView />
+            </ErrorBoundary>
+          </div>
+          {settingsOpen && <ErrorBoundary label="settings"><AgentSettings /></ErrorBoundary>}
+          {workspace.rightOpen && workspace.rightView && (
             <>
               {floatingWorkbench && (
                 <button
@@ -236,7 +239,7 @@ export function App() {
                   tabIndex={-1}
                 />
               )}
-              {isElectron && workspace.rightView && !floatingWorkbench && !mobile && (
+              {isElectron && !settingsOpen && workspace.rightView && !floatingWorkbench && !mobile && (
                 <Resizer
                   axis="x"
                   getValue={() => rightWidth}
@@ -245,6 +248,8 @@ export function App() {
               )}
               <div
                 className="workspace-right"
+                hidden={settingsOpen}
+                inert={settingsOpen}
                 ref={rightPanel}
                 tabIndex={floatingWorkbench ? -1 : undefined}
                 role={floatingWorkbench ? "dialog" : undefined}
