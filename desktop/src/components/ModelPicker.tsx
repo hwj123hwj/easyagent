@@ -33,7 +33,7 @@ export function ModelPicker({
   useEffect(() => {
     if (!open) return;
     setQuery("");
-    setIndex(0);
+    setIndex(Math.max(0, models.findIndex((model) => model.modelId === value)));
     const position = () => setRect(button.current!.getBoundingClientRect());
     position();
     requestAnimationFrame(() => search.current?.focus());
@@ -83,7 +83,7 @@ export function ModelPicker({
               left: Math.max(12, Math.min(rect.left, innerWidth - 340)),
               bottom: Math.max(12, innerHeight - rect.top + 8),
               width: Math.min(328, innerWidth - 24),
-              maxHeight: Math.max(120, rect.top - 24),
+              maxHeight: Math.max(120, Math.min(420, rect.top - 24)),
             }}
           >
             <label className="model-search">
@@ -146,7 +146,7 @@ export function ModelPicker({
                 >
                   <span>
                     <strong>{m.name}</strong>
-                    <small>{m.modelId}</small>
+                    {m.name !== m.modelId && <small>{m.modelId}</small>}
                   </span>
                   {value === m.modelId && <Icon name="check" size={14} />}
                 </button>
