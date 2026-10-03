@@ -19,8 +19,9 @@ import (
 
 // fakeWFFactory 服务端测试用 RunnerFactory，返回确定性输出。
 type fakeWFFactory struct {
-	mu    sync.Mutex
-	calls []string
+	mu      sync.Mutex
+	calls   []string
+	started chan string // 设置后让步骤等待取消，避免取消测试与瞬时完成竞争。
 }
 
 func (f *fakeWFFactory) NewRunner(ctx context.Context, opts workflow.RunnerOptions) (workflow.Runner, error) {
@@ -39,6 +40,11 @@ func (r *fakeWFRunner) Prompt(ctx context.Context, prompt string) (string, error
 	r.f.mu.Lock()
 	r.f.calls = append(r.f.calls, prompt)
 	r.f.mu.Unlock()
+	if r.f.started != nil {
+		r.f.started <- prompt
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
 	return "OUT(" + prompt + ")", nil
 }
 
@@ -214,7 +220,9 @@ steps:
 }
 
 func TestServer_WorkflowCancel(t *testing.T) {
-	srv, _ := newWorkflowTestServer(t)
+	srv, f := newWorkflowTestServer(t)
+	f.started = make(chan string, 1)
+	t.Cleanup(srv.workflowRegistry().CancelAll)
 
 	yamlSrc := `
 name: cancel-me
@@ -222,7 +230,7 @@ steps:
   - id: a
     prompt: "a"
   - id: b
-    prompt: "b"
+    prompt: "b {{steps.a.output}}"
 `
 	req := localReq(http.MethodPost, "/workflows", strings.NewReader(yamlSrc))
 	w := httptest.NewRecorder()
@@ -233,14 +241,21 @@ steps:
 	}
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&startResp))
 
-	// 立即取消（运行可能已完成，两种终态都合法）
+	// 确认第一步已执行且仍在等待，再验证取消及后续步骤不执行。
+	select {
+	case prompt := <-f.started:
+		require.Equal(t, "a", prompt)
+	case <-time.After(5 * time.Second):
+		t.Fatal("workflow did not start its first step")
+	}
 	req = localReq(http.MethodPost, "/workflows/"+startResp.RunID+"/cancel", nil)
 	w = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
 	// Cancellation completes asynchronously; wait for its persisted terminal state.
-	waitForRunStatus(t, srv, startResp.RunID, workflow.StatusCompleted, workflow.StatusCancelled)
+	waitForRunStatus(t, srv, startResp.RunID, workflow.StatusCancelled)
+	assert.Equal(t, 1, f.count(), "取消后不得执行依赖步骤")
 }
 
 func TestServer_WorkflowGetUnknownID(t *testing.T) {
