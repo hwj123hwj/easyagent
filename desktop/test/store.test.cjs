@@ -75,3 +75,78 @@ test("remote projects use an in-app picker and never resolve into another host",
   assert.equal(await stale, null);
   assert.equal(useStore.getState().pathPicker, undefined);
 });
+
+test("empty model discovery clears stale models and does not invent choices", async () => {
+  window.piAPI = { request: async () => ({ models: [], source: "unconfigured" }) };
+  try {
+    useStore.setState({ models: [{ modelId: "stale", name: "Stale" }], currentModel: "stale" });
+    await useStore.getState().refreshModels();
+    assert.deepEqual(useStore.getState().models, []);
+    assert.equal(useStore.getState().currentModel, undefined);
+    assert.equal(useStore.getState().modelSource, "unconfigured");
+  } finally { delete window.piAPI; }
+});
+
+test("model discovery failure does not block session restoration", async () => {
+  const connect = wsService.connect, disconnect = wsService.disconnect;
+  wsService.connect = async () => {};
+  wsService.disconnect = async () => {};
+  window.piAPI = {
+    selectProfile: async () => ({ profiles: [] }),
+    getServerUrl: async () => "http://local",
+    request: async (_method, path) => {
+      if (path === "/models") throw new Error("HTTP 503");
+      if (path === "/sessions") return [];
+      return { commands: [] };
+    },
+  };
+  try {
+    await useStore.getState().connectProfile("local");
+    assert.equal(useStore.getState().connectionError, undefined);
+    assert.match(useStore.getState().modelsNotice, /模型列表暂不可用/);
+    assert.deepEqual(useStore.getState().models, []);
+    assert.deepEqual(useStore.getState().order, []);
+  } finally {
+    wsService.connect = connect;
+    wsService.disconnect = disconnect;
+    delete window.piAPI;
+  }
+});
+
+test("a late model catalog from another host cannot overwrite the active host", async () => {
+  const connect = wsService.connect, disconnect = wsService.disconnect;
+  wsService.connect = async () => {};
+  wsService.disconnect = async () => {};
+  let resolveOld;
+  let issuedOld;
+  const oldIssued = new Promise((resolve) => { issuedOld = resolve; });
+  window.piAPI = {
+    selectProfile: async () => ({ profiles: [] }),
+    getServerUrl: async () => "http://local",
+    request: async (_method, path) => {
+      if (path === "/models") {
+        if (useStore.getState().selectedProfile === "old") {
+          issuedOld();
+          return new Promise((resolve) => { resolveOld = resolve; });
+        }
+        return { models: [{ id: "new-model", name: "New" }], current: { id: "new-model" }, source: "gateway" };
+      }
+      if (path === "/sessions") return [];
+      return { commands: [] };
+    },
+  };
+  try {
+    const old = useStore.getState().connectProfile("old");
+    await oldIssued;
+    await useStore.getState().connectProfile("new");
+    resolveOld({ models: [{ id: "old-model", name: "Old" }], current: { id: "old-model" } });
+    await old;
+    assert.equal(useStore.getState().selectedProfile, "new");
+    assert.deepEqual(useStore.getState().models, [{ modelId: "new-model", name: "New" }]);
+    assert.equal(useStore.getState().currentModel, "new-model");
+  } finally {
+    wsService.connect = connect;
+    wsService.disconnect = disconnect;
+    delete window.piAPI;
+  }
+});

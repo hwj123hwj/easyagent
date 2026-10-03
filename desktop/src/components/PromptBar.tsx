@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiRequest, useStore, type SessionView } from "../store";
 import { Icon } from "./Icon";
 import { ModelPicker } from "./ModelPicker";
@@ -41,13 +41,30 @@ export function PromptBar({
   const voice = useVoiceInput({
     onText: (value) => change(text + (text ? " " : "") + value),
   });
-  useEffect(() => {
+  function fitInput() {
     const el = input.current;
     if (el) {
       el.style.height = "auto";
       el.style.height = Math.min(200, el.scrollHeight) + "px";
+      el.style.overflowY = el.scrollHeight > 200 ? "auto" : "hidden";
     }
+  }
+  useLayoutEffect(() => {
+    fitInput();
   }, [text]);
+  useEffect(() => {
+    const el = input.current;
+    if (!el) return;
+    let width = el.getBoundingClientRect().width;
+    const observer = new ResizeObserver(() => {
+      const nextWidth = el.getBoundingClientRect().width;
+      if (nextWidth === width) return;
+      width = nextWidth;
+      fitInput();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     setError("");
     setOutput("");
@@ -245,7 +262,7 @@ export function PromptBar({
           <textarea
             ref={input}
             className="prompt-input"
-            rows={2}
+            rows={1}
             value={text}
             disabled={loading}
             placeholder={
@@ -330,20 +347,25 @@ export function PromptBar({
             />
             <button
               className="composer-command"
+              title="命令（输入 /）"
+              aria-label="查看命令"
+              disabled={loading}
               onClick={() => {
                 if (!text.trim()) change("/");
                 input.current?.focus();
                 setMenuOpen(true);
               }}
             >
-              {" "}
-              / 命令
+              <span aria-hidden="true" className="composer-command-icon">/</span>
+              <span className="composer-command-label">命令</span>
             </button>
-            <span className="grow" />
+            <span className="grow composer-spacer" />
             <button
-              className={"icon-btn " + (voice.recording ? "recording" : "")}
-              title="语音输入"
-              disabled={voice.transcribing || busy}
+              className={"icon-btn composer-voice " + (voice.recording ? "recording" : "")}
+              title={voice.recording ? "停止录音" : "语音输入"}
+              aria-label={voice.recording ? "停止录音" : "语音输入"}
+              aria-pressed={voice.recording}
+              disabled={voice.transcribing || busy || loading}
               onClick={voice.toggle}
             >
               <Icon name="mic" size={16} />
@@ -351,6 +373,8 @@ export function PromptBar({
             {busy ? (
               <button
                 className="composer-stop"
+                title="停止当前任务"
+                aria-label="停止当前任务"
                 disabled={!connected}
                 onClick={() =>
                   void useStore
@@ -360,7 +384,7 @@ export function PromptBar({
                 }
               >
                 <Icon name="stop" size={15} />
-                停止
+                <span className="composer-stop-label">停止</span>
               </button>
             ) : (
               <button
@@ -399,7 +423,7 @@ export function PromptBar({
                         : "思考")
                 : "Enter 发送 · Shift Enter 换行"}
           </span>
-          <span>文件与工具在服务主机上运行</span>
+          <span className="composer-host-hint">文件与工具在服务主机上运行</span>
         </div>
         {voice.error && (
           <p role="alert" className="composer-error">

@@ -1,5 +1,5 @@
 /**
- * FilesPanel.tsx — VSCode-style file browser for the right sidebar.
+ * FilesPanel.tsx — project explorer and file preview for the right workspace.
  * Features: lazy-loading explorer tree, multiple open-file tabs, breadcrumb,
  * per-extension icons, Markdown preview, code highlighting with line numbers,
  * fuzzy file search, and "Open in" menu (reveal in folder / open in terminal).
@@ -18,7 +18,6 @@ import { Icon } from '../Icon';
 import { copyText } from '../../client/clipboard';
 import { FileIcon } from './FileIcons';
 import { Markdown } from '../Markdown';
-import { Resizer } from './Resizer';
 import { highlightCode } from './codeHighlight';
 import { useT, type TFunc } from '../../i18n/useT';
 
@@ -62,12 +61,16 @@ export function FilesPanel() {
   const activeTab = useStore((s) => s.workspace.activeFileTab);
   const openFileTab = useStore((s) => s.openFileTab);
   const closeFileTab = useStore((s) => s.closeFileTab);
-  const setActiveFileTab = useStore((s) => s.setActiveFileTab);
-  const fileTreeWidth = useStore((s) => s.workspace.fileTreeWidth);
-  const setWorkspaceSize = useStore((s) => s.setWorkspaceSize);
+  const [showTree, setShowTree] = useState(false);
   const t = useT();
 
   const root = meta?.cwd;
+  const browsing = !activeTab || showTree;
+  useEffect(() => setShowTree(false), [root]);
+  const openFile = (path: string) => {
+    openFileTab(path);
+    setShowTree(false);
+  };
 
   if (!root) {
     return (
@@ -83,30 +86,38 @@ export function FilesPanel() {
 
   return (
     <div className="ws-panel files-panel">
-      <FileTabs
-        tabs={tabs}
-        activeTab={activeTab}
-        onSelect={setActiveFileTab}
-        onClose={closeFileTab}
-        t={t}
-      />
+      <div className="files-topbar">
+        <button
+          className={`files-tree-toggle ${browsing ? 'active' : ''}`}
+          aria-label={browsing && activeTab ? '返回文件预览' : '浏览项目目录'}
+          title={browsing && activeTab ? '返回文件预览' : '浏览项目目录'}
+          aria-pressed={browsing}
+          onClick={() => setShowTree((value) => !value)}
+          disabled={!activeTab}
+        >
+          <Icon name={browsing && activeTab ? 'arrow-left' : 'folder'} size={14} />
+          <span>{browsing && activeTab ? '返回文件' : '目录'}</span>
+        </button>
+        <FileTabs
+          tabs={tabs}
+          activeTab={activeTab}
+          onSelect={openFile}
+          onClose={closeFileTab}
+          t={t}
+        />
+      </div>
       <div className="files-body">
-        <div className="files-main">
-          {activeTab ? (
+        <div className="files-main" hidden={browsing}>
+          {activeTab && (
             <>
               <FileToolbar root={root} file={activeTab} t={t} />
               <FileContent path={activeTab} t={t} />
             </>
-          ) : (
-            <div className="empty">{t('files.noOpenTabs')}</div>
           )}
         </div>
-        <Resizer
-          axis="x"
-          getValue={() => useStore.getState().workspace.fileTreeWidth}
-          onChange={(v) => setWorkspaceSize('fileTreeWidth', v)}
-        />
-        <FileTree root={root} activeTab={activeTab} onOpen={openFileTab} width={fileTreeWidth} />
+        <div className="files-explorer" hidden={!browsing}>
+          <FileTree key={root} root={root} activeTab={activeTab} onOpen={openFile} />
+        </div>
       </div>
     </div>
   );
@@ -144,13 +155,15 @@ function FileTabs({
           key={p}
           className={`file-tab ${activeTab === p ? 'active' : ''}`}
           title={p}
-          onClick={() => onSelect(p)}
         >
-          <FileIcon name={baseName(p)} size={14} />
-          <span className="file-tab-name">{baseName(p)}</span>
+          <button className="file-tab-select" onClick={() => onSelect(p)} aria-pressed={activeTab === p}>
+            <FileIcon name={baseName(p)} size={14} />
+            <span className="file-tab-name">{baseName(p)}</span>
+          </button>
           <button
             className="file-tab-close"
             title={t('files.closeTab')}
+            aria-label={`${t('files.closeTab')} · ${baseName(p)}`}
             onClick={(e) => {
               e.stopPropagation();
               onClose(p);
@@ -190,7 +203,7 @@ function FileToolbar({ root, file, t }: { root: string; file: string; t: TFunc }
 
   return (
     <div className="file-toolbar">
-      <div className="file-breadcrumb">
+      <div className="file-breadcrumb" title={file}>
         {crumbs.map((c, i) => (
           <span key={i} className="crumb">
             {i > 0 && <Icon name="chevron-right" size={12} />}
@@ -247,12 +260,10 @@ function FileTree({
   root,
   activeTab,
   onOpen,
-  width,
 }: {
   root: string;
   activeTab?: string;
   onOpen: (p: string) => void;
-  width: number;
 }) {
   const t = useT();
   const [query, setQuery] = useState('');
@@ -262,12 +273,13 @@ function FileTree({
   useEffect(() => {
     setFiles(null);
     setQuery('');
+    setLoading(false);
   }, [root]);
 
   const searching = query.trim().length > 0;
   // Loading entries when filters change
   useEffect(() => {
-    if (!searching || files !== null || loading) return;
+    if (!searching || files !== null) return;
     let alive = true;
     setLoading(true);
     void searchFiles(root)
@@ -275,7 +287,7 @@ function FileTree({
       .catch(() => alive && setFiles([]))
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
-  }, [searching, files, loading, root]);
+  }, [searching, files, root]);
 
   const results = useMemo(() => {
     if (!searching || !files) return [];
@@ -283,16 +295,17 @@ function FileTree({
   }, [query, files, searching]);
 
   return (
-    <div className="file-tree" style={{ width }}>
+    <div className="file-tree">
       <div className="file-tree-head">
         <Icon name="folder" size={13} />
-        <span>{t('files.explorer')}</span>
+        <span title={root}>{baseName(root)}</span>
       </div>
       <div className="file-search">
         <Icon name="search" size={13} />
         <input
           className="file-search-input"
           placeholder={t('files.searchPlaceholder')}
+          aria-label={t('files.searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           spellCheck={false}

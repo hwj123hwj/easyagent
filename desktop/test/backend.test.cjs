@@ -4,9 +4,10 @@ const vm = require("node:vm");
 const fs = require("node:fs");
 const path = require("node:path");
 const { EventEmitter } = require("node:events");
-function managerFixture() {
+function managerFixture(settings = {}) {
   let options, child;
   const directories = [];
+  const launches = [];
   const module = { exports: {} };
   const fakeSpawn = (_binary, _args, value) => {
     options = value;
@@ -17,6 +18,11 @@ function managerFixture() {
       child.emit("exit", 0);
       return true;
     };
+    launches.push({ child, options: value });
+    if (settings.failSpawn) {
+      const failed = child;
+      queueMicrotask(() => failed.emit("error", new Error("private-upstream-key-in-spawn-error")));
+    }
     return child;
   };
   vm.runInNewContext(
@@ -62,6 +68,7 @@ function managerFixture() {
     options: () => options,
     child: () => child,
     directories: () => directories,
+    launches: () => launches,
   };
 }
 test("local backend uses an independent server token and preserves upstream credentials", async () => {
@@ -100,6 +107,35 @@ test("a backend crash clears readiness and reports a visible failure", async () 
   assert.equal(manager.getStatus().state, "error");
   assert.match(manager.getStatus().message, /已退出/);
   await manager.stop();
+});
+test("provider override is applied to managed-core environment without replacing its random API token", async () => {
+  const f = managerFixture(), manager = new f.Manager(() => ({ EA_PROVIDER: "openai", EA_BASE_URL: "http://localhost:4001", EA_MODEL: "selected-model", EA_API_KEY: "configured-upstream-key", EA_SERVER_API_KEY: "untrusted-override" }));
+  await manager.start();
+  assert.equal(f.options().env.EA_PROVIDER, "openai");
+  assert.equal(f.options().env.EA_MODEL, "selected-model");
+  assert.equal(f.options().env.EA_API_KEY, "configured-upstream-key");
+  assert.equal(f.options().env.EA_SERVER_API_KEY, manager.token);
+  await manager.stop();
+});
+test("restart terminates only the child it owns and launches with the updated model", async () => {
+  const f = managerFixture(); let model = "first-model";
+  const manager = new f.Manager(() => ({ EA_MODEL: model }));
+  await manager.start();
+  const first = f.child();
+  model = "second-model";
+  await manager.restart();
+  assert.equal(first.exitCode, 0);
+  assert.equal(f.launches().length, 2);
+  assert.equal(f.options().env.EA_MODEL, "second-model");
+  assert.equal(manager.getStatus().state, "ready");
+  await manager.stop();
+});
+test("managed-core launch failures do not publish low-level errors containing secrets", async () => {
+  const f = managerFixture({ failSpawn: true }), manager = new f.Manager();
+  await assert.rejects(manager.start(), (error) => /启动失败/.test(error.message) && !error.message.includes("private-upstream-key"));
+  assert.equal(manager.getStatus().state, "error");
+  assert(!manager.getStatus().message.includes("private-upstream-key"));
+  assert.equal(manager.getServerInfo(), null);
 });
 const moduleUpdate = { exports: {} };
 vm.runInNewContext(

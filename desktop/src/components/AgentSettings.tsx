@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiRequest, useStore } from "../store";
 import { Icon } from "./Icon";
+import { ModelSettings } from "./ModelSettings";
 interface MCPServer {
   name: string;
   source: string;
@@ -28,7 +29,7 @@ export function AgentSettings() {
     active = useStore((s) => s.activeSessionId),
     cwd = useStore((s) => (active ? s.sessions[active]?.meta.cwd : ""));
   const tab = useStore((s) => s.settingsTab),
-    setTab = (tab: "connections" | "mcp") =>
+    setTab = (tab: "connections" | "models" | "mcp") =>
       useStore.getState().openSettings(true, tab);
   const connected = useStore((s) => s.connected);
   const [editing, setEditing] = useState("mini"),
@@ -145,6 +146,12 @@ export function AgentSettings() {
           onClick={() => setTab("connections")}
         >
           连接与运行
+        </button>
+        <button
+          aria-current={tab === "models" ? "page" : undefined}
+          onClick={() => setTab("models")}
+        >
+          模型连接
         </button>
         <button
           aria-current={tab === "mcp" ? "page" : undefined}
@@ -310,6 +317,8 @@ export function AgentSettings() {
               </label>
             </div>
           </section>
+        ) : tab === "models" ? (
+          <ModelSettings />
         ) : (
           <section className="settings-section">
             <div className="settings-section-title">

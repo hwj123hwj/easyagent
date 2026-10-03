@@ -6,14 +6,34 @@ export function ConnectionBar() {
     connected = useStore((s) => s.connected),
     state = useStore((s) => s.connectionState),
     error = useStore((s) => s.connectionError),
-    settings = useStore((s) => s.settingsOpen);
+    settings = useStore((s) => s.settingsOpen),
+    workspace = useStore((s) => s.workspace);
   const profile = profiles.find((p) => p.id === selected);
+  const connectionLabel = connected
+    ? profile?.kind === "remote"
+      ? "远程已连接"
+      : "本地已连接"
+    : state === "connecting"
+      ? "正在连接"
+      : state === "error"
+        ? "连接失败"
+        : "正在重连";
   return (
     <header className="connection-bar">
+      <button
+        className="icon-btn connection-sidebar-toggle"
+        aria-label={workspace.sidebarOpen ? "收起会话列表" : "展开会话列表"}
+        aria-expanded={workspace.sidebarOpen}
+        aria-controls="session-sidebar"
+        title={workspace.sidebarOpen ? "收起会话列表" : "展开会话列表"}
+        onClick={() => useStore.getState().toggleSidebar()}
+      >
+        <Icon name="panel" size={17} />
+      </button>
       <span className="connection-brand">
-        <b>ea·</b> 个人工作区
+        <b>ea·</b><span>EasyAgent</span>
       </span>
-      <label className="connection-picker">
+      <label className="connection-picker" title="切换运行主机">
         <span
           className={"connection-dot " + (connected ? "online" : "")}
           aria-hidden="true"
@@ -35,15 +55,7 @@ export function ConnectionBar() {
         </select>
       </label>
       <span className="connection-caption" role="status">
-        {connected
-          ? profile?.kind === "remote"
-            ? "远程 Agent 已连接"
-            : "本地 Agent 已连接"
-          : state === "connecting"
-            ? "正在连接服务"
-            : state === "error"
-              ? "连接失败"
-              : "连接已断开，正在重连"}
+        {connectionLabel}
       </span>
       <span className="grow" />
       {!connected && state !== "connecting" && (
@@ -54,17 +66,28 @@ export function ConnectionBar() {
           重新连接
         </button>
       )}
+      {!settings && (
+        <button
+          className={"icon-btn connection-workbench " + (workspace.rightOpen ? "active" : "")}
+          aria-label={workspace.rightOpen ? "收起工作台" : "打开工作台"}
+          aria-pressed={workspace.rightOpen}
+          title={workspace.rightOpen ? "收起工作台" : "打开工作台"}
+          onClick={() => useStore.getState().toggleWorkspaceRight()}
+        >
+          <Icon name="panel-right" size={17} />
+        </button>
+      )}
       <button
         className={"btn connection-settings " + (settings ? "active" : "")}
         aria-pressed={settings}
         onClick={() => useStore.getState().openSettings(!settings)}
       >
-        <Icon name="settings" size={15} />
-        设置
+        <Icon name={settings ? "arrow-left" : "settings"} size={15} />
+        <span>{settings ? "返回对话" : "设置"}</span>
       </button>
       {error && (
         <div className="connection-notice" role="alert">
-          {error}
+          <span>{error}</span>
           <button
             aria-label="关闭提示"
             onClick={() => useStore.setState({ connectionError: undefined })}

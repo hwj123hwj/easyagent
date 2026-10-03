@@ -16,6 +16,8 @@ export function ModelPicker({
     [query, setQuery] = useState(""),
     [index, setIndex] = useState(0),
     [rect, setRect] = useState<DOMRect | null>(null);
+  const source = useStore((s) => s.modelSource);
+  const notice = useStore((s) => s.modelsNotice);
   const button = useRef<HTMLButtonElement>(null),
     menu = useRef<HTMLDivElement>(null),
     search = useRef<HTMLInputElement>(null);
@@ -67,7 +69,7 @@ export function ModelPicker({
         onClick={() => setOpen(!open)}
       >
         <Icon name="cpu" size={14} />
-        <span>{current?.name || value || "默认模型"}</span>
+        <span>{current?.name || value || "配置模型"}</span>
         <Icon name="chevron-down" size={12} />
       </button>
       {open &&
@@ -126,7 +128,7 @@ export function ModelPicker({
             <div
               id="desktop-models"
               role="listbox"
-              aria-label="可用模型"
+              aria-label="模型目录"
               className="model-options"
             >
               {filtered.map((m, i) => (
@@ -149,8 +151,11 @@ export function ModelPicker({
                   {value === m.modelId && <Icon name="check" size={14} />}
                 </button>
               ))}
-              {!filtered.length && <p className="menu-empty">没有匹配的模型</p>}
+              {!filtered.length && <p className="menu-empty">{models.length ? "没有匹配的模型" : "尚未获取模型目录，请先配置模型连接。"}</p>}
             </div>
+            {source === "configured" && <p className="menu-hint">仅显示已配置模型，连接尚未验证</p>}
+            {notice && <p className="menu-hint" role="status">{notice}</p>}
+            <button className="model-settings-link" onClick={() => { setOpen(false); useStore.getState().openSettings(true, "models"); }}><Icon name="settings" size={14} />模型连接设置</button>
             <div className="menu-hint">↑ ↓ 选择 · Enter 确认 · Esc 关闭</div>
           </div>,
           document.body,

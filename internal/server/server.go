@@ -131,7 +131,8 @@ type ErrorResponse struct {
 // It also wires the LoopManager's trigger resolver so /loop can inject prompts.
 func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	srv := &Server{app: application, slashCmds: slashCmds, ctx: ctx, cancel: cancel, runs: newRunRegistry()}
+	srv := &Server{app: application, slashCmds: slashCmds, ctx: ctx, cancel: cancel, runs: newRunRegistry(),
+		allowedOrigins: envAllowedOrigins(), allowNoAuth: envAllowNoAuth()}
 	srv.restoreRunReceipts()
 
 	// Wire loop trigger: when a /loop fires, inject the prompt into the target session
@@ -207,8 +208,8 @@ func (s *Server) Handler() http.Handler {
 	NewASRHandler(s.app.Config()).Register(restMux)
 
 	var restHandler http.Handler = s.admissionMiddleware(restMux)
+	restHandler = s.authMiddleware(restHandler)
 	restHandler = corsMiddleware(s)(restHandler)
-	restHandler = s.authMiddleware(restHandler) // auth check after CORS, before recovery
 	restHandler = recoveryMiddleware(restHandler)
 	restHandler = loggingMiddleware(restHandler)
 
@@ -581,8 +582,10 @@ type ModelInfo struct {
 
 // ModelsResponse is the response for the models list endpoint.
 type ModelsResponse struct {
-	Models  []ModelInfo `json:"models"`
-	Current *ModelInfo  `json:"current,omitempty"`
+	Models         []ModelInfo `json:"models"`
+	Current        *ModelInfo  `json:"current,omitempty"`
+	Source         string      `json:"source"`
+	DiscoveryError string      `json:"discovery_error,omitempty"`
 }
 
 // gatewayModel represents a single model entry from the gateway /v1/models API.
@@ -613,62 +616,65 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		current = &ModelInfo{ID: modelID, Provider: provider, Name: modelID}
 	}
 
-	// Try to fetch models dynamically from the gateway (OpenAI-compatible /v1/models)
-	var models []ModelInfo
-	if cfg.OpenAIBaseURL != "" && cfg.OpenAIAPIKey != "" {
-		models = s.fetchGatewayModels(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey)
-	}
-
-	// Fallback to hardcoded list if gateway is unreachable
-	if len(models) == 0 {
-		models = []ModelInfo{
-			{ID: "deepseek-v4-flash", Provider: "openai", Name: "DeepSeek V4 Flash"},
-			{ID: "glm-5", Provider: "openai", Name: "GLM-5"},
-			{ID: "claude-sonnet-4-6", Provider: "openai", Name: "Claude Sonnet 4.6"},
+	result := ModelsResponse{Models: []ModelInfo{}, Current: current, Source: "unconfigured"}
+	if provider == "openai" && cfg.OpenAIBaseURL != "" {
+		models, err := s.fetchGatewayModels(r.Context(), cfg.OpenAIBaseURL, cfg.OpenAIAPIKey)
+		if err != nil {
+			result.DiscoveryError = err.Error()
+		} else if len(models) > 0 {
+			result.Models, result.Source = models, "gateway"
 		}
+	}
+	// A configured model can still be used when discovery is unsupported. Do
+	// not invent selectable models or treat this fallback as a connection test.
+	if len(result.Models) == 0 && current != nil {
+		result.Models, result.Source = []ModelInfo{*current}, "configured"
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(ModelsResponse{Models: models, Current: current})
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // fetchGatewayModels queries an OpenAI-compatible /v1/models endpoint and returns
-// the list of available models. Returns nil on any error.
-func (s *Server) fetchGatewayModels(baseURL, apiKey string) []ModelInfo {
-	// Normalize base URL: ensure it ends with /
-	if !strings.HasSuffix(baseURL, "/") {
-		baseURL += "/"
-	}
-
-	url := baseURL + "v1/models"
-	req, err := http.NewRequest("GET", url, nil)
+// the list advertised by the gateway; it does not perform inference.
+func (s *Server) fetchGatewayModels(ctx context.Context, baseURL, apiKey string) ([]ModelInfo, error) {
+	baseURL = strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
+	url := baseURL + "/v1/models"
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		slog.Debug("failed to create gateway models request", "error", err)
-		return nil
+		return nil, fmt.Errorf("model discovery URL is invalid")
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
 	resp, err := client.Do(req)
 	if err != nil {
 		slog.Debug("failed to fetch gateway models", "url", url, "error", err)
-		return nil
+		return nil, fmt.Errorf("model discovery could not connect")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Debug("gateway models returned non-200", "status", resp.StatusCode)
-		return nil
+		return nil, fmt.Errorf("model discovery returned HTTP %d", resp.StatusCode)
 	}
 
 	var gwResp gatewayModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&gwResp); err != nil {
 		slog.Debug("failed to decode gateway models response", "error", err)
-		return nil
+		return nil, fmt.Errorf("model discovery returned invalid JSON")
 	}
 
 	models := make([]ModelInfo, 0, len(gwResp.Data))
 	for _, m := range gwResp.Data {
+		if strings.TrimSpace(m.ID) == "" {
+			continue
+		}
 		name := m.DisplayName
 		if name == "" {
 			name = m.ID
@@ -679,7 +685,7 @@ func (s *Server) fetchGatewayModels(baseURL, apiKey string) []ModelInfo {
 			Name:     name,
 		})
 	}
-	return models
+	return models, nil
 }
 
 // ─── GET /sessions/{id}/info ──────────────────────────────────────────────────

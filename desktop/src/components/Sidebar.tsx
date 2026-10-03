@@ -3,9 +3,7 @@ import { Capacitor } from "@capacitor/core";
 import { useStore, type SessionView } from "../store";
 import { Icon } from "./Icon";
 import { useT, type TFunc } from "../i18n/useT";
-import { isElectron } from "../platform";
 import { checkMobileUpdate, getAppVersion } from "../mobile-updater";
-import appIcon from "../assets/app-icon.png";
 
 function projectName(cwd: string): string {
   const parts = cwd.replace(/[\\/]+$/, "").split(/[\\/]/);
@@ -175,11 +173,11 @@ export function Sidebar() {
   const isEmpty = chats.length === 0 && projects.length === 0;
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" id="session-sidebar" aria-label="会话列表">
       <div className="sidebar-head">
-        <div className="brand">
-          <img className="brand-mark" src={appIcon} alt="EasyAgent" />
-          EasyAgent
+        <div className="sidebar-heading">
+          <span>对话</span>
+          <span className="sidebar-session-count">{order.length}</span>
         </div>
         <div className="sidebar-head-actions">
           <div className="new-session-wrap">
@@ -191,11 +189,14 @@ export function Sidebar() {
               className="btn-new-dropdown"
               onClick={() => setShowNewMenu(!showNewMenu)}
               title={t("mode.chooseMode")}
+              aria-label={t("mode.chooseMode")}
+              aria-expanded={showNewMenu}
+              aria-controls="new-session-menu"
             >
               <Icon name="chevron-down" size={12} />
             </button>
             {showNewMenu && (
-              <div className="new-session-menu">
+              <div className="new-session-menu" id="new-session-menu">
                 <button
                   className="new-session-option"
                   onClick={() => void handleNew()}
@@ -224,6 +225,7 @@ export function Sidebar() {
             className="btn-new-project"
             onClick={() => void handleNewProject()}
             title={t("sidebar.newProject") || "New Project"}
+            aria-label={t("sidebar.newProject") || "New Project"}
           >
             <Icon name="folder-open" size={15} />
           </button>
@@ -234,6 +236,7 @@ export function Sidebar() {
         <Icon name="search" size={14} />
         <input
           placeholder={t("sidebar.searchPlaceholder")}
+          aria-label={t("sidebar.searchPlaceholder")}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
@@ -241,7 +244,9 @@ export function Sidebar() {
 
       <div className="session-list">
         {isEmpty && (
-          <div className="group-label">{t("sidebar.noSessions")}</div>
+          <div className="sidebar-empty" role="status">
+            {filter ? "没有匹配的对话" : t("sidebar.noSessions")}
+          </div>
         )}
 
         {chats.length > 0 && (
@@ -251,6 +256,7 @@ export function Sidebar() {
               <button
                 className="project-header"
                 onClick={() => toggleCollapse("__chats__")}
+                aria-expanded={!collapsed.has("__chats__")}
               >
                 <Icon
                   name={
@@ -284,6 +290,7 @@ export function Sidebar() {
                     className="project-header"
                     title={g.cwd}
                     onClick={() => toggleCollapse(g.cwd)}
+                    aria-expanded={!collapsed.has(g.cwd)}
                   >
                     <Icon
                       name={
@@ -300,6 +307,7 @@ export function Sidebar() {
                     title={
                       t("sidebar.newInProject") || "New conversation in project"
                     }
+                    aria-label={`${t("sidebar.newInProject")} ${g.name}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       void handleNewInProject(g.cwd);
@@ -317,19 +325,8 @@ export function Sidebar() {
       </div>
 
       <div className="sidebar-foot">
-        <span className="avatar">
-          <Icon name="cpu" size={14} />
-        </span>
-        <span
-          style={{
-            flex: 1,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          EasyAgent
-        </span>
+        <Icon name="shield" size={14} />
+        <span className="sidebar-foot-label">个人 Agent</span>
         {/* Mobile: check-for-update button */}
         {Capacitor.isNativePlatform() && (
           <button
@@ -369,15 +366,6 @@ export function Sidebar() {
             }}
           >
             <Icon name="refresh" size={15} />
-          </button>
-        )}
-        {isElectron && (
-          <button
-            className="icon-btn"
-            title={t("sidebar.newProject") || "New Project"}
-            onClick={() => void handleNewProject()}
-          >
-            <Icon name="folder-open" size={15} />
           </button>
         )}
       </div>

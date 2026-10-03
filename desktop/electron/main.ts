@@ -13,6 +13,7 @@ import { spawn } from "child_process";
 import WebSocket from "ws";
 import { EasyAgentManager } from "./easyagent-manager";
 import { ProfileStore } from "./profile-store";
+import { ProviderStore, ProviderConfigInput } from "./provider-store";
 import { checkForUpdate } from "./update-checker";
 
 // Development and smoke tests can keep profiles separate from the user's app.
@@ -24,9 +25,11 @@ if (process.env.EA_DESKTOP_USER_DATA) {
 
 let mainWindow: BrowserWindow | null = null;
 let profiles: ProfileStore;
+let providerStore: ProviderStore;
+let providerApplying = false;
 let socket: WebSocket | null = null;
 let connectionRevision = 0;
-const manager = new EasyAgentManager();
+const manager = new EasyAgentManager(() => providerStore.environment());
 const publish = (value: unknown) =>
   mainWindow?.webContents.send("agent-event", value);
 manager.onStatus = (status) => publish({ type: "backend", ...status });
@@ -47,8 +50,10 @@ function handle(name: string, handler: (...args: any[]) => any) {
 }
 async function endpoint() {
   const profile = profiles.get();
-  if (profile.kind === "local")
+  if (profile.kind === "local") {
+    if (providerApplying) throw new Error("本地模型配置正在应用，请稍后重试");
     return { url: (await manager.start()).url, token: manager.token };
+  }
   return { url: profile.url, token: profiles.token() };
 }
 async function request(method: string, resource: string, body?: unknown) {
@@ -190,6 +195,72 @@ handle("agent-send", (value: object) => {
   return true;
 });
 handle("backend-status", () => manager.getStatus());
+function requireLocalProvider(): void {
+  if (profiles.get().kind !== "local")
+    throw new Error("模型配置只适用于桌面托管的本地 Agent；远程服务请在目标主机配置");
+}
+handle("provider-config", () => {
+  requireLocalProvider();
+  return providerStore.configuration();
+});
+handle("provider-check", (input?: ProviderConfigInput) => {
+  requireLocalProvider();
+  return providerStore.check(input);
+});
+handle("provider-save", async (input: ProviderConfigInput) => {
+  requireLocalProvider();
+  if (providerApplying) throw new Error("本地模型配置正在应用，请稍后重试");
+  providerApplying = true;
+  let lease = "";
+  let connection: { url: string; token: string } | null = null;
+  try {
+    const previous = providerStore.capture();
+    // Wait for an earlier launch before taking its server-side admission lock.
+    if (manager.getStatus().state === "starting")
+      await manager.start().catch(() => {});
+    const running = manager.getServerInfo();
+    if (running) {
+      connection = { url: running.url, token: manager.token };
+      try {
+        const result = await requestAt(connection, "POST", "/admin/deploy");
+        if (!result || typeof result.lease !== "string" || !result.lease)
+          throw new Error();
+        lease = result.lease;
+      } catch {
+        throw new Error("本地 Agent 仍有任务运行或无法确认空闲，请等待任务结束后保存；配置未修改");
+      }
+    }
+    // A profile switch while checking readiness must not apply local settings.
+    requireLocalProvider();
+    const configuration = providerStore.save(input);
+    connectionRevision++;
+    const current = socket;
+    socket = null;
+    current?.close();
+    publish({ type: "transport", state: "disconnected" });
+    try {
+      await manager.restart();
+    } catch {
+      try {
+        providerStore.restore(previous);
+      } catch {
+        throw new Error("本地 Agent 重启失败，原配置恢复失败；请检查应用目录权限后重新配置");
+      }
+      try {
+        await manager.restart();
+      } catch {
+        throw new Error("本地 Agent 重启失败；原模型配置已恢复，请检查核心安装后重试启动");
+      }
+      throw new Error("新配置未能启动本地 Agent，已恢复原模型配置，请检查配置后重试");
+    }
+    return configuration;
+  } finally {
+    if (lease && connection && manager.getServerInfo()?.url === connection.url) {
+      await requestAt(connection, "DELETE", "/admin/deploy", { lease }).catch(() => {});
+    }
+    providerApplying = false;
+  }
+});
 handle("get-server-url", async () => (await endpoint()).url);
 handle("start-server", async () => {
   try {
@@ -341,6 +412,7 @@ else {
   });
   app.whenReady().then(async () => {
     profiles = new ProfileStore();
+    providerStore = new ProviderStore();
     await createWindow();
     app.on("activate", () => {
       if (!mainWindow) void createWindow();

@@ -31,6 +31,7 @@ import type {
   DesktopSessionEvent,
   GitFileDiff,
   ModelInfo,
+  ModelCatalog,
   PlanEntry,
   SessionMeta,
   SessionRunStatus,
@@ -186,8 +187,8 @@ export interface WorkspaceUiState {
 
 /** Clamp ranges for the draggable regions. */
 export const WORKSPACE_SIZE_LIMITS = {
-  sidebarWidth: { min: 200, max: 480, default: 260 },
-  rightWidth: { min: 340, max: 900, default: 520 },
+  sidebarWidth: { min: 200, max: 480, default: 224 },
+  rightWidth: { min: 340, max: 900, default: 440 },
   bottomHeight: { min: 120, max: 720, default: 280 },
   fileTreeWidth: { min: 160, max: 480, default: 220 },
 } as const;
@@ -212,7 +213,7 @@ interface StoreState {
   profiles: ConnectionProfile[];
   selectedProfile: string;
   settingsOpen: boolean;
-  settingsTab: "connections" | "mcp";
+  settingsTab: "connections" | "models" | "mcp";
   loadingSession?: string;
   drafts: Record<string, string>;
   pending: Record<string, boolean>;
@@ -224,7 +225,7 @@ interface StoreState {
     url: string;
     token?: string;
   }) => Promise<void>;
-  openSettings: (open?: boolean, tab?: "connections" | "mcp") => void;
+  openSettings: (open?: boolean, tab?: "connections" | "models" | "mcp") => void;
   confirm: (
     id: string,
     confirmation: string,
@@ -240,6 +241,9 @@ interface StoreState {
 
   // Models fetched dynamically from backend
   models: ModelInfo[];
+  modelSource?: ModelCatalog["source"];
+  modelsNotice?: string;
+  refreshModels: () => Promise<void>;
   currentModel?: string;
   commands: Command[];
   pickFolder: () => Promise<string | null>;
@@ -339,23 +343,11 @@ function emptyView(meta: SessionMeta): SessionView {
 }
 
 function defaultModels(): ModelInfo[] {
-  if (cachedModels.length > 0) return cachedModels;
-  return [
-    { modelId: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
-    { modelId: "glm-5", name: "GLM-5" },
-    { modelId: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-  ];
+  return cachedModels;
 }
 
-async function fetchModels(): Promise<void> {
-  const resp = await apiRequest<{
-    models: Array<{ id: string; name: string; provider: string }>;
-    current?: { id: string };
-  }>("GET", "/models");
-  if (resp.models && resp.models.length > 0) {
-    cachedModels = resp.models.map((m) => ({ modelId: m.id, name: m.name }));
-    cachedCurrentModel = resp.current?.id;
-  }
+async function fetchModels(): Promise<ModelCatalog> {
+  return apiRequest<ModelCatalog>("GET", "/models");
 }
 
 // ── Workspace layout persistence ────────────────────────────────────────────
@@ -502,6 +494,8 @@ export const useStore = create<StoreState>((set, get) => ({
         pending: {},
         models: [],
         currentModel: undefined,
+        modelSource: undefined,
+        modelsNotice: undefined,
         selectedProfile: id,
         sessions: {},
         order: [],
@@ -513,9 +507,8 @@ export const useStore = create<StoreState>((set, get) => ({
         },
       });
       await wsService.connect(baseUrl, browserToken);
-      await fetchModels();
+      await get().refreshModels();
       if (epoch !== connectionEpoch) return;
-      set({ models: cachedModels, currentModel: cachedCurrentModel });
       try {
         const catalog = await apiRequest<{
           commands: Array<{
@@ -576,6 +569,19 @@ export const useStore = create<StoreState>((set, get) => ({
   order: [],
   models: [],
   currentModel: undefined,
+  refreshModels: async () => {
+    const epoch = connectionEpoch;
+    try {
+      const catalog = await fetchModels();
+      if (epoch !== connectionEpoch) return;
+      cachedModels = (catalog.models || []).map((m) => ({ modelId: m.id, name: m.name || m.id }));
+      cachedCurrentModel = catalog.current?.id;
+      set({ models: cachedModels, currentModel: cachedCurrentModel, modelSource: catalog.source, modelsNotice: catalog.discovery_error });
+    } catch {
+      if (epoch !== connectionEpoch) return;
+      set({ modelsNotice: "模型列表暂不可用，可在设置中检查模型连接。" });
+    }
+  },
   commands: localCommands,
   workspace: loadWorkspaceUi(),
   pickFolder: async () => {

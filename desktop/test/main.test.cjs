@@ -4,7 +4,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const http = require("node:http");
-function fixture() {
+const os = require("node:os");
+function fixture(options = {}) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "easyagent-main-provider-"));
   const handlers = new Map(),
     requests = [],
     events = {};
@@ -19,6 +21,7 @@ function fixture() {
   let url = "https://first.example",
     token = "private-api-token",
     callback;
+  let providerStore, manager;
   const electron = {
     app: {
       isPackaged: false,
@@ -28,7 +31,7 @@ function fixture() {
         events[name] = cb;
       },
       quit() {},
-      getPath: () => "/tmp",
+      getPath: () => directory,
     },
     BrowserWindow: class {
       constructor() {
@@ -48,11 +51,21 @@ function fixture() {
     },
     dialog: {},
     clipboard: { writeText() {} },
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      getSelectedStorageBackend: () => "keychain",
+      encryptString: (value) => Buffer.from(value.split("").reverse().join("")),
+      decryptString: (value) => value.toString().split("").reverse().join(""),
+    },
   };
   const module = { exports: {} };
-  const fakeFetch = async (resource, options) => {
-    requests.push({ resource, options });
-    const body = options.body ? JSON.parse(options.body) : null;
+  const fakeFetch = async (resource, requestOptions) => {
+    requests.push({ resource, options: requestOptions });
+    const body = requestOptions.body ? JSON.parse(requestOptions.body) : null;
+    if (resource.endsWith("/admin/deploy")) {
+      return { ok: !options.busy, status: options.busy ? 409 : 200,
+        text: async () => JSON.stringify(options.busy ? { error: "sensitive-upstream-error" } : { lease: "owned-lease" }) };
+    }
     if (resource.includes("/login") && !resource.includes("/complete")) {
       callback = () =>
         new Promise((resolve, reject) => {
@@ -77,13 +90,20 @@ function fixture() {
     }
     return { ok: true, text: async () => JSON.stringify({ ok: true }) };
   };
+  const providerModule = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../.test-output/electron/provider-store.js"), "utf8"), {
+    module: providerModule, exports: providerModule.exports,
+    require: (name) => name === "electron" ? electron : require(name),
+    Buffer, process, URL, AbortSignal, fetch: fakeFetch,
+  });
   const fakes = {
     electron: electron,
     "./easyagent-manager": {
       EasyAgentManager: class {
+        constructor(environment) { this.environment = environment; this.restarts = 0; this.stops = 0; this.url = "http://127.0.0.1:9999"; manager = this; }
         onStatus() {}
         async start() {
-          return { url: "http://127.0.0.1:9999" };
+          return { url: this.url };
         }
         get token() {
           return "local-secret";
@@ -91,13 +111,21 @@ function fixture() {
         getStatus() {
           return { state: "ready" };
         }
-        async stop() {}
+        getServerInfo() { return { url: this.url, port: 9999 }; }
+        async restart() {
+          this.restarts++;
+          this.appliedEnvironment = this.environment();
+          if (this.restarts <= (options.failedRestarts || 0)) throw new Error("private-provider-secret-in-restart-error");
+          this.url = `http://127.0.0.1:${9999 + this.restarts}`;
+          return { url: this.url };
+        }
+        async stop() { this.stops++; }
       },
     },
     "./profile-store": {
       ProfileStore: class {
         get() {
-          return { kind: "remote", url };
+          return { kind: options.local ? "local" : "remote", url };
         }
         token() {
           return token;
@@ -107,6 +135,11 @@ function fixture() {
         }
         save() {}
         select() {}
+      },
+    },
+    "./provider-store": {
+      ProviderStore: class extends providerModule.exports.ProviderStore {
+        constructor() { super(); providerStore = this; }
       },
     },
     "./update-checker": { checkForUpdate: async () => null },
@@ -136,12 +169,16 @@ function fixture() {
   return {
     handlers,
     requests,
+    store: () => providerStore,
+    manager: () => manager,
+    cleanup: () => fs.rmSync(directory, { recursive: true, force: true }),
     event: { sender: contents, senderFrame: frame },
     ready: () => new Promise((resolve) => setImmediate(resolve)),
   };
 }
-test("main process supplies authentication without exposing it or accepting child-frame IPC", async () => {
+test("main process supplies authentication without exposing it or accepting child-frame IPC", async (t) => {
   const f = fixture();
+  t.after(f.cleanup);
   await f.ready();
   const request = f.handlers.get("agent-request");
   await request(f.event, "GET", "/mcp");
@@ -160,8 +197,9 @@ test("main process supplies authentication without exposing it or accepting chil
     /请求路径/,
   );
 });
-test("desktop OAuth callback completes on the issuing profile when the selected connection changes", async () => {
+test("desktop OAuth callback completes on the issuing profile when the selected connection changes", async (t) => {
   const f = fixture();
+  t.after(f.cleanup);
   await f.ready();
   await f.handlers.get("mcp-login")(f.event, "service", "/project");
   const [login, complete] = f.requests;
@@ -175,4 +213,51 @@ test("desktop OAuth callback completes on the issuing profile when the selected 
   assert.equal(body.state, "expected-state");
   assert.equal(body.code, "temporary-test-code");
   assert.equal(f.requests.length, 2);
+});
+
+const providerInput = { mode: "override", provider: "openai", baseUrl: "http://localhost:4001", model: "selected-model", apiKey: "private-provider-token-123" };
+test("local model IPC rejects remote profiles and child-frame callers", async (t) => {
+  const f = fixture(); t.after(f.cleanup); await f.ready();
+  assert.throws(() => f.handlers.get("provider-config")(f.event), /只适用于/);
+  assert.throws(() => f.handlers.get("provider-check")(f.event, providerInput), /只适用于/);
+  await assert.rejects(f.handlers.get("provider-save")(f.event, providerInput), /只适用于/);
+  assert.throws(() => f.handlers.get("provider-config")({ sender: f.event.sender, senderFrame: {} }), /不允许此窗口/);
+  assert.equal(f.manager().restarts, 0);
+  assert.equal(f.requests.length, 0);
+});
+test("saving local upstream settings locks only the managed core and returns no credentials", async (t) => {
+  const f = fixture({ local: true }); t.after(f.cleanup); await f.ready();
+  const result = await f.handlers.get("provider-save")(f.event, providerInput);
+  assert.equal(result.mode, "override");
+  assert.equal(result.hasKey, true);
+  assert(!JSON.stringify(result).includes(providerInput.apiKey));
+  assert.equal(f.manager().restarts, 1);
+  assert.equal(f.manager().appliedEnvironment.EA_API_KEY, providerInput.apiKey);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].resource, "http://127.0.0.1:9999/admin/deploy");
+  assert.equal(f.requests[0].options.method, "POST");
+  assert.equal(f.requests[0].options.headers.Authorization, "Bearer local-secret");
+});
+test("active local runs reject model save before persistence or managed-process restart", async (t) => {
+  const f = fixture({ local: true, busy: true }); t.after(f.cleanup); await f.ready();
+  await assert.rejects(f.handlers.get("provider-save")(f.event, providerInput), /任务运行|无法确认空闲/);
+  assert.equal(f.store().configuration().mode, "inherit");
+  assert.equal(f.manager().restarts, 0);
+});
+test("invalid settings release the acquired idle lease without interrupting the core", async (t) => {
+  const f = fixture({ local: true }); t.after(f.cleanup); await f.ready();
+  await assert.rejects(f.handlers.get("provider-save")(f.event, { ...providerInput, apiKey: "" }), /必须填写/);
+  assert.equal(f.manager().restarts, 0);
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.requests[1].options.method, "DELETE");
+  assert.equal(JSON.parse(f.requests[1].options.body).lease, "owned-lease");
+});
+test("failed apply restores the old encrypted configuration and attempts to recover its core", async (t) => {
+  const f = fixture({ local: true, failedRestarts: 1 }); t.after(f.cleanup); await f.ready();
+  f.store().save(providerInput);
+  await assert.rejects(f.handlers.get("provider-save")(f.event, { ...providerInput, model: "replacement-model", apiKey: "replacement-private-token" }), (error) => /恢复原模型配置/.test(error.message) && !error.message.includes("private-provider-secret"));
+  assert.equal(f.manager().restarts, 2);
+  assert.equal(f.store().configuration().model, "selected-model");
+  assert.equal(f.store().environment().EA_API_KEY, providerInput.apiKey);
+  assert.equal(f.manager().appliedEnvironment.EA_MODEL, "selected-model");
 });
