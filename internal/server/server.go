@@ -1186,6 +1186,31 @@ func gitDiff(cwd string) ([]fileDiff, error) {
 
 // ─── GET /workspace/list-dir?path=... ───────────────────────────────────────
 
+// workspaceRoot uses the selected session's project when explicitly supplied.
+// An explicitly selected missing or invalid session never falls back to the global workspace.
+func (s *Server) workspaceRoot(w http.ResponseWriter, r *http.Request) (string, bool) {
+	query := r.URL.Query()
+	if !query.Has("session_id") {
+		return s.app.Config().Workspace, true
+	}
+	id := query.Get("session_id")
+	if id == "" || id == "." || id == ".." || filepath.Base(id) != id || strings.ContainsAny(id, "/\\") {
+		writeError(w, http.StatusNotFound, "session not found")
+		return "", false
+	}
+	manager := s.app.SessionManager()
+	if _, err := securePath(manager.SessionsDir(), id); err != nil || !manager.Exists(id) {
+		writeError(w, http.StatusNotFound, "session not found")
+		return "", false
+	}
+	sess, err := s.app.LoadSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return "", false
+	}
+	return sess.Workspace(), true
+}
+
 // DirEntry represents a single entry in a directory listing.
 type DirEntry struct {
 	Name  string `json:"name"`
@@ -1194,11 +1219,15 @@ type DirEntry struct {
 }
 
 func (s *Server) listDir(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	dirPath := r.URL.Query().Get("path")
 	if dirPath == "" {
-		dirPath = s.app.Config().Workspace
+		dirPath = root
 	}
-	safePath, err := securePath(s.app.Config().Workspace, dirPath)
+	safePath, err := securePath(root, dirPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1256,11 +1285,15 @@ func (s *Server) listDir(w http.ResponseWriter, r *http.Request) {
 // ─── GET /workspace/search-files?path=... ────────────────────────────────────
 
 func (s *Server) searchFiles(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	rootPath := r.URL.Query().Get("path")
 	if rootPath == "" {
-		rootPath = s.app.Config().Workspace
+		rootPath = root
 	}
-	safeRoot, err := securePath(s.app.Config().Workspace, rootPath)
+	safeRoot, err := securePath(root, rootPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1328,13 +1361,17 @@ func (s *Server) searchFiles(w http.ResponseWriter, r *http.Request) {
 // ─── GET /workspace/read-file?path=... ───────────────────────────────────────
 
 func (s *Server) workspaceReadFile(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
 
-	safePath, err := securePath(s.app.Config().Workspace, path)
+	safePath, err := securePath(root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1352,13 +1389,17 @@ func (s *Server) workspaceReadFile(w http.ResponseWriter, r *http.Request) {
 // ─── GET /workspace/read-file-base64?path=... ────────────────────────────────
 
 func (s *Server) workspaceReadFileBase64(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
 
-	safePath, err := securePath(s.app.Config().Workspace, path)
+	safePath, err := securePath(root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1397,6 +1438,10 @@ func (s *Server) workspaceReadFileBase64(w http.ResponseWriter, r *http.Request)
 // ─── PUT /workspace/write-file?path=... ──────────────────────────────────────
 
 func (s *Server) workspaceWriteFile(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
@@ -1409,7 +1454,7 @@ func (s *Server) workspaceWriteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	safePath, err := securePath(s.app.Config().Workspace, path)
+	safePath, err := securePath(root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

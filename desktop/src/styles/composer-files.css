@@ -321,3 +321,14 @@
   min-height: 34px;
   padding-inline: 10px;
 }
+
+.files-panel .file-tree-error {
+  padding: 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.files-panel .file-tree-error p {
+  margin: 0 0 8px;
+}

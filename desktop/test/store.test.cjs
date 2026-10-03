@@ -150,3 +150,124 @@ test("a late model catalog from another host cannot overwrite the active host", 
     delete window.piAPI;
   }
 });
+
+test("command feedback follows a newly created session through switching and history refresh", async () => {
+  const send = wsService.send;
+  wsService.send = async () => true;
+  window.piAPI = {
+    request: async (method, path) => {
+      if (method === "POST" && path === "/sessions") return { id: "created", created_at: 1790501735 };
+      if (path === "/sessions") return [
+        { id: "created", workspace: "/qa", created_at: 1790501735, last_active: 1790501735 },
+        { id: "other", created_at: 1790501735, last_active: 1790501735 },
+      ];
+      if (path.endsWith("/run")) return { type: "snapshot", seq: 0, messages: [] };
+      return { workspace: "/qa", model: "qa-model" };
+    },
+  };
+  try {
+    useStore.setState({
+      selectedProfile: "mini", sessions: { other: { ...view(), meta: { ...view().meta, id: "other" } } },
+      order: ["other"], activeSessionId: "other",
+    });
+    const id = await useStore.getState().createSession({ cwd: "/qa" });
+    const result = "模型：openai / qa-model\n工作区：/qa";
+    useStore.getState().setCommandOutput(id, result, "mini");
+    assert.equal(useStore.getState().activeSessionId, id);
+    assert.equal(useStore.getState().sessions[id].commandOutput, result);
+    await useStore.getState().setActive("other");
+    await useStore.getState().setActive(id);
+    await useStore.getState().refreshSessions();
+    assert.equal(useStore.getState().sessions[id].commandOutput, result);
+    assert.deepEqual(useStore.getState().sessions[id].transcript, []);
+    useStore.getState().setCommandOutput(id, "");
+    assert.equal(useStore.getState().sessions[id].commandOutput, "");
+  } finally {
+    wsService.send = send;
+    delete window.piAPI;
+  }
+});
+
+test("late command feedback neither recreates deleted sessions nor overwrites another host", async () => {
+  window.piAPI = { request: async () => ({}) };
+  try {
+    useStore.setState({ selectedProfile: "mini", sessions: { s: view() }, order: ["s"], activeSessionId: "s" });
+    await useStore.getState().deleteSession("s");
+    useStore.getState().setCommandOutput("s", "late deleted result", "mini");
+    assert.equal(useStore.getState().sessions.s, undefined);
+    assert.deepEqual(useStore.getState().order, []);
+    useStore.setState({ selectedProfile: "other-host", sessions: { s: { ...view(), commandOutput: "current result" } } });
+    useStore.getState().setCommandOutput("s", "late old host result", "mini");
+    assert.equal(useStore.getState().sessions.s.commandOutput, "current result");
+  } finally { delete window.piAPI; }
+});
+
+test("switching hosts during new-session creation discards the old host's completion", async () => {
+  const connect = wsService.connect, disconnect = wsService.disconnect;
+  wsService.connect = async () => {};
+  wsService.disconnect = async () => {};
+  let resolveCreate, issued;
+  const createdRequest = new Promise((resolve) => { issued = resolve; });
+  window.piAPI = {
+    selectProfile: async () => ({ profiles: [] }),
+    getServerUrl: async () => "http://new-host",
+    request: async (method, path) => {
+      if (method === "POST" && path === "/sessions") {
+        issued();
+        return new Promise((resolve) => { resolveCreate = resolve; });
+      }
+      if (path === "/models") return { models: [], source: "unconfigured" };
+      if (path === "/sessions") return [];
+      return { commands: [] };
+    },
+  };
+  try {
+    useStore.setState({ selectedProfile: "old-host", sessions: {}, order: [], activeSessionId: undefined });
+    const creating = useStore.getState().createSession({ cwd: "/old-project" });
+    await createdRequest;
+    await useStore.getState().connectProfile("new-host");
+    resolveCreate({ id: "old-created", created_at: 1790501735 });
+    await assert.rejects(creating, /主机已切换/);
+    assert.equal(useStore.getState().sessions["old-created"], undefined);
+    assert.deepEqual(useStore.getState().order, []);
+    assert.equal(useStore.getState().activeSessionId, undefined);
+  } finally {
+    wsService.connect = connect;
+    wsService.disconnect = disconnect;
+    delete window.piAPI;
+  }
+});
+
+test("session activation and creation clear file tabs only when the project changes", async () => {
+  const send = wsService.send;
+  wsService.send = async () => true;
+  const sessionAt = (id, cwd) => ({ ...view(), meta: { ...view().meta, id, cwd } });
+  const sessions = { a: sessionAt("a", "/one"), same: sessionAt("same", "/one"), other: sessionAt("other", "/two") };
+  let created = 0;
+  window.piAPI = {
+    request: async (method, path) => {
+      if (method === "POST" && path === "/sessions") return { id: `created-${++created}`, created_at: 1790501735 };
+      if (path.endsWith("/run")) return { type: "snapshot", seq: 0, messages: [] };
+      return { workspace: sessions[path.split("/")[2]]?.meta.cwd, model: "qa-model" };
+    },
+  };
+  try {
+    useStore.setState({ sessions, order: Object.keys(sessions), activeSessionId: "a",
+      workspace: { ...useStore.getState().workspace, fileTabs: ["/one/a.go"], activeFileTab: "/one/a.go" } });
+    await useStore.getState().setActive("same");
+    assert.deepEqual(useStore.getState().workspace.fileTabs, ["/one/a.go"]);
+    assert.equal(useStore.getState().workspace.activeFileTab, "/one/a.go");
+    await useStore.getState().createSession({ cwd: "/one" });
+    assert.deepEqual(useStore.getState().workspace.fileTabs, ["/one/a.go"]);
+    await useStore.getState().setActive("other");
+    assert.deepEqual(useStore.getState().workspace.fileTabs, []);
+    assert.equal(useStore.getState().workspace.activeFileTab, undefined);
+    useStore.setState({ workspace: { ...useStore.getState().workspace, fileTabs: ["/two/b.go"], activeFileTab: "/two/b.go" } });
+    await useStore.getState().createSession({ cwd: "/one" });
+    assert.deepEqual(useStore.getState().workspace.fileTabs, []);
+    assert.equal(useStore.getState().workspace.activeFileTab, undefined);
+  } finally {
+    wsService.send = send;
+    delete window.piAPI;
+  }
+});

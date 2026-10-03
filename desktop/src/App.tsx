@@ -99,7 +99,9 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
-      if (previousFocus?.isConnected) previousFocus.focus();
+      if (previousFocus?.isConnected && previousFocus.getClientRects().length > 0)
+        previousFocus.focus();
+      else document.querySelector<HTMLButtonElement>(".connection-workbench")?.focus();
     };
   }, [floatingWorkbench, ready, toggleRight]);
 

@@ -20,9 +20,10 @@ export function PromptBar({
     connected = useStore((s) => s.connected),
     loading = useStore((s) => s.loadingSession === id);
   const text = useStore((s) => s.drafts[id] || ""),
-    setDraft = useStore((s) => s.setDraft);
+    setDraft = useStore((s) => s.setDraft),
+    setCommandOutput = useStore((s) => s.setCommandOutput);
   const [error, setError] = useState(""),
-    [output, setOutput] = useState(""),
+    [localOutput, setLocalOutput] = useState(""),
     [menuOpen, setMenuOpen] = useState(false),
     [selected, setSelected] = useState(0),
     [commandBusy, setCommandBusy] = useState(false),
@@ -31,7 +32,8 @@ export function PromptBar({
     composing = useRef(false),
     revision = useRef(0);
   const busy = isActiveRun(view.run),
-    matches = filterCommands(text, commands);
+    matches = filterCommands(text, commands),
+    output = view.commandOutput ?? localOutput;
   function change(value: string) {
     revision.current++;
     setDraft(id, value);
@@ -67,7 +69,7 @@ export function PromptBar({
   }, []);
   useEffect(() => {
     setError("");
-    setOutput("");
+    setLocalOutput("");
     setMenuOpen(false);
     input.current?.focus();
   }, [id]);
@@ -77,7 +79,7 @@ export function PromptBar({
         .getElementById("slash-" + selected)
         ?.scrollIntoView({ block: "nearest" });
   }, [menuOpen, selected]);
-  async function execute(name: string, args: string, targetId = id) {
+  async function execute(name: string, args: string, targetId: string, profileId: string) {
     switch (name) {
       case "help":
         return commands
@@ -90,7 +92,7 @@ export function PromptBar({
         useStore.getState().toggleSidebar();
         return;
       case "mcp":
-        if (args) return serverCommand(name, args, targetId);
+        if (args) return serverCommand(name, args, targetId, profileId);
         useStore.getState().openSettings(true, "mcp");
         return;
       case "settings":
@@ -126,10 +128,10 @@ export function PromptBar({
         return value.summary || "上下文已压缩";
       }
       default:
-        return serverCommand(name, args, targetId);
+        return serverCommand(name, args, targetId, profileId);
     }
   }
-  async function serverCommand(name: string, args: string, targetId: string) {
+  async function serverCommand(name: string, args: string, targetId: string, profileId: string) {
     if (!commands.some((command) => command.name === name))
       throw new Error("未知命令，请输入 / 查看可用命令");
     const result = await apiRequest<{
@@ -140,23 +142,27 @@ export function PromptBar({
     }>("POST", `/sessions/${targetId}/command`, {
       command: "/" + name + (args ? " " + args : ""),
     });
+    if (useStore.getState().selectedProfile !== profileId) return;
     if (result.session_id && result.session_id !== targetId) {
       await useStore.getState().refreshSessions();
+      if (useStore.getState().selectedProfile !== profileId) return;
       await useStore.getState().setActive(result.session_id);
     }
+    if (useStore.getState().selectedProfile !== profileId) return;
     if (result.should_query && result.query_prompt)
       await useStore
         .getState()
         .sendPrompt(result.session_id || targetId, result.query_prompt);
     else if (["profile", "confirm", "undo", "goal"].includes(name))
       await useStore.getState().setActive(result.session_id || targetId);
-    return result.output;
+    return { output: result.output, sessionId: result.session_id || targetId };
   }
   async function submit() {
     if (!text.trim() || pending || commandBusy || loading) return;
     let targetId = id;
     const captured = text,
       version = revision.current,
+      profileId = useStore.getState().selectedProfile,
       command = text.startsWith("//") ? null : parseCommand(text);
     setError("");
     setMenuOpen(false);
@@ -171,16 +177,22 @@ export function PromptBar({
           (command?.name === "mcp" && !!command.args))
       )
         targetId = await onStart();
+      if (useStore.getState().selectedProfile !== profileId) return;
       if (command) {
         setCommandBusy(true);
-        const result = await execute(command.name, command.args, targetId);
-        setOutput(result || "");
+        const result = await execute(command.name, command.args, targetId, profileId);
+        if (useStore.getState().selectedProfile !== profileId) return;
+        const commandOutput = typeof result === "string" ? result : result?.output || "";
+        const outputId = typeof result === "object" ? result.sessionId : targetId;
+        if (outputId === "__new__") setLocalOutput(commandOutput);
+        else setCommandOutput(outputId || targetId, commandOutput, profileId);
       } else {
         if (busy) throw new Error("当前任务仍在运行，草稿已保留");
         await useStore
           .getState()
           .sendPrompt(targetId, text.startsWith("//") ? text.slice(1) : text);
       }
+      if (useStore.getState().selectedProfile !== profileId) return;
       if (revision.current === version) {
         if (useStore.getState().drafts[id] === captured) setDraft(id, "");
         if (
@@ -190,6 +202,7 @@ export function PromptBar({
           setDraft(targetId, "");
       }
     } catch (error) {
+      if (useStore.getState().selectedProfile !== profileId) return;
       setError((error as Error).message);
       if (targetId !== id)
         useStore.setState({ connectionError: (error as Error).message });
@@ -214,7 +227,8 @@ export function PromptBar({
               className="icon-btn"
               aria-label="关闭命令结果"
               onClick={() => {
-                setOutput("");
+                setLocalOutput("");
+                if (id !== "__new__") setCommandOutput(id, "");
                 input.current?.focus();
               }}
             >

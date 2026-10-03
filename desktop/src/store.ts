@@ -203,6 +203,8 @@ export interface SessionView extends RunProjection {
   activePane: PaneKind;
   draftAssistantId?: string;
   openFile?: { path: string; content: string };
+  /** Client-only slash command feedback, retained across session switches. */
+  commandOutput?: string;
 }
 
 interface StoreState {
@@ -218,6 +220,7 @@ interface StoreState {
   drafts: Record<string, string>;
   pending: Record<string, boolean>;
   setDraft: (id: string, text: string) => void;
+  setCommandOutput: (id: string, output: string, profileId?: string) => void;
   connectProfile: (id: string, token?: string) => Promise<void>;
   saveProfile: (input: {
     id: string;
@@ -441,6 +444,10 @@ export const useStore = create<StoreState>((set, get) => ({
   },
   openSettings: (open = true, tab = "connections") =>
     set({ settingsOpen: open, settingsTab: tab }),
+  setCommandOutput: (id, output, profileId = get().selectedProfile) => {
+    if (profileId !== get().selectedProfile) return;
+    updateView(set, id, (view) => ({ ...view, commandOutput: output }));
+  },
   saveProfile: async (input) => {
     if (window.piAPI) {
       const result = await window.piAPI.saveProfile(input);
@@ -980,7 +987,10 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setActive: async (id) => {
     const epoch = connectionEpoch;
-    set({ activeSessionId: id, settingsOpen: false, loadingSession: id });
+    set((s) => ({
+      activeSessionId: id, settingsOpen: false, loadingSession: id,
+      workspace: workspaceForSession(s, s.sessions[id]?.meta.cwd),
+    }));
     try {
       const [snapshot, info] = await Promise.all([
         apiRequest<Envelope>("GET", `/sessions/${encodeURIComponent(id)}/run`),
@@ -1026,6 +1036,7 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   createSession: async (opts) => {
+    const epoch = connectionEpoch;
     const body: Record<string, string> = {};
     if (opts?.cwd) body.cwd = opts.cwd;
     if (opts?.model) body.model = opts.model;
@@ -1035,6 +1046,8 @@ export const useStore = create<StoreState>((set, get) => ({
       "/sessions",
       body,
     );
+    if (epoch !== connectionEpoch)
+      throw new Error("运行主机已切换，原服务的会话创建结果已忽略");
     const lang = get().lang;
     const meta: SessionMeta = {
       id: result.id,
@@ -1056,6 +1069,7 @@ export const useStore = create<StoreState>((set, get) => ({
       sessions: { ...s.sessions, [result.id]: emptyView(meta) },
       order: [result.id, ...s.order],
       activeSessionId: result.id,
+      workspace: workspaceForSession(s, meta.cwd),
     }));
     return result.id;
   },
@@ -1225,6 +1239,13 @@ export const useStore = create<StoreState>((set, get) => ({
 type SetFn = (
   partial: Partial<StoreState> | ((s: StoreState) => Partial<StoreState>),
 ) => void;
+
+function workspaceForSession(s: StoreState, cwd?: string): WorkspaceUiState {
+  const previousCwd = s.activeSessionId ? s.sessions[s.activeSessionId]?.meta.cwd : undefined;
+  return previousCwd === cwd
+    ? s.workspace
+    : { ...s.workspace, fileTabs: [], activeFileTab: undefined };
+}
 
 function updateView(
   setFn: SetFn,
