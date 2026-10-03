@@ -31,6 +31,8 @@ type ContentBlock struct {
 
 type UserMessage struct {
 	Content []ContentBlock `json:"content"`
+	// DisplayText is an optional concise history representation. Providers receive Content.
+	DisplayText string `json:"display_text,omitempty"`
 }
 
 func (UserMessage) Role() Role     { return RoleUser }
@@ -54,6 +56,7 @@ func (AssistantMessage) Role() Role     { return RoleAssistant }
 func (AssistantMessage) messageMarker() {}
 
 type ToolResultMessage struct {
+	DurationMS int64  `json:"duration_ms,omitempty"`
 	ToolCallID string `json:"tool_call_id"`
 	Content    string `json:"content"`
 	IsError    bool   `json:"is_error,omitempty"`

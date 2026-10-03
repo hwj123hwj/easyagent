@@ -24,13 +24,50 @@ export function Sidebar() {
   const createSession = useStore((s) => s.createSession);
   const deleteSession = useStore((s) => s.deleteSession);
   const refreshSessions = useStore((s) => s.refreshSessions);
+  const updateSession = useStore((s) => s.updateSession);
   const pickFolder = useStore((s) => s.pickFolder);
   const t = useT();
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
+  const [archived, setArchived] = useState(false);
+  const [editing, setEditing] = useState<string>();
+  const [titleDraft, setTitleDraft] = useState("");
+  const [actionError, setActionError] = useState("");
+  const savePreferences = async (
+    id: string,
+    patch: { title?: string; pinned?: boolean; archived?: boolean },
+  ) => {
+    setActionError("");
+    try {
+      await updateSession(id, patch);
+      setEditing(undefined);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "保存失败");
+    }
+  };
   const [showNewMenu, setShowNewMenu] = useState(false);
 
+  useEffect(() => {
+    const dismiss = (event: Event) => {
+      const target = event.target as Element;
+      for (const menu of document.querySelectorAll<HTMLDetailsElement>(
+        ".session-preferences[open]",
+      )) {
+        if (
+          (event instanceof KeyboardEvent && event.key === "Escape") ||
+          (event.type === "mousedown" && !menu.contains(target))
+        )
+          menu.open = false;
+      }
+    };
+    document.addEventListener("mousedown", dismiss);
+    document.addEventListener("keydown", dismiss);
+    return () => {
+      document.removeEventListener("mousedown", dismiss);
+      document.removeEventListener("keydown", dismiss);
+    };
+  }, []);
   const toggleCollapse = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -65,7 +102,10 @@ export function Sidebar() {
   const { chats, projects } = useMemo(() => {
     const views = order
       .map((id) => sessions[id])
-      .filter(Boolean) as SessionView[];
+      .filter((view) => view && !!view.meta.archived === archived)
+      .sort(
+        (a, b) => Number(!!b.meta.pinned) - Number(!!a.meta.pinned),
+      ) as SessionView[];
     const filtered = filter
       ? views.filter((v) =>
           v.meta.title.toLowerCase().includes(filter.toLowerCase()),
@@ -87,7 +127,7 @@ export function Sidebar() {
       g.views.push(v);
     }
     return { chats: chatViews, projects: [...projectMap.values()] };
-  }, [order, sessions, filter]);
+  }, [order, sessions, filter, archived]);
 
   const onClick = (id: string) => {
     setActive(id);
@@ -141,6 +181,7 @@ export function Sidebar() {
           <span className={`status-dot ${v.meta.status}`} />
           <>
             <span className="session-title" title={v.meta.title}>
+              {v.meta.pinned && <Icon name="circle-check" size={12} />}
               {v.meta.title}
             </span>
             {v.meta.application && (
@@ -154,19 +195,62 @@ export function Sidebar() {
           <span className="session-sub">{relTime(t, v.meta.updatedAt)}</span>
         </div>
       </button>
-      <div className="session-actions">
-        <button
-          className="icon-btn"
-          title={t("common.delete")}
-          aria-label={t("common.delete") + " " + v.meta.title}
-          onClick={(e) => {
-            e.stopPropagation();
-            void handleDelete(v.meta.id);
+      <details className="session-preferences">
+        <summary aria-label="会话操作">···</summary>
+        <div className="session-preferences-menu">
+          <button
+            onClick={() =>
+              void savePreferences(v.meta.id, { pinned: !v.meta.pinned })
+            }
+          >
+            {v.meta.pinned ? "取消置顶" : "置顶"}
+          </button>
+          <button
+            onClick={() => {
+              setEditing(v.meta.id);
+              setTitleDraft(v.meta.title);
+            }}
+          >
+            重命名
+          </button>
+          <button
+            onClick={() =>
+              void savePreferences(v.meta.id, { archived: !v.meta.archived })
+            }
+          >
+            {v.meta.archived ? "恢复对话" : "归档"}
+          </button>
+          <button onClick={() => void handleDelete(v.meta.id)}>
+            {t("common.delete")}
+          </button>
+        </div>
+      </details>
+      {editing === v.meta.id && (
+        <form
+          className="session-rename"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void savePreferences(v.meta.id, { title: titleDraft });
           }}
         >
-          <Icon name="x" size={14} />
-        </button>
-      </div>
+          <input
+            autoFocus
+            aria-label="会话名称"
+            maxLength={160}
+            value={titleDraft}
+            onChange={(event) => setTitleDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setEditing(undefined);
+            }}
+          />
+          <button type="submit" disabled={!titleDraft.trim()}>
+            保存
+          </button>
+          <button type="button" onClick={() => setEditing(undefined)}>
+            取消
+          </button>
+        </form>
+      )}
     </div>
   );
 
@@ -242,6 +326,19 @@ export function Sidebar() {
         />
       </div>
 
+      <div className="session-filter-tabs" aria-label="会话范围">
+        <button aria-pressed={!archived} onClick={() => setArchived(false)}>
+          最近对话
+        </button>
+        <button aria-pressed={archived} onClick={() => setArchived(true)}>
+          已归档
+        </button>
+      </div>
+      {actionError && (
+        <p className="session-action-error" role="alert">
+          {actionError}
+        </p>
+      )}
       <div className="session-list">
         {isEmpty && (
           <div className="sidebar-empty" role="status">
@@ -328,8 +425,24 @@ export function Sidebar() {
         <Icon name="shield" size={14} />
         <span className="sidebar-foot-label">个人 Agent</span>
         <div className="sidebar-foot-actions">
-          <button className="sidebar-foot-action" title="飞书机器人" aria-label="飞书机器人" onClick={() => useStore.getState().openSettings(true, "feishu")}><Icon name="feishu" size={15} /><span>飞书</span></button>
-          <button className="sidebar-foot-action" title="设置" aria-label="设置" onClick={() => useStore.getState().openSettings(true)}><Icon name="settings" size={15} /><span>设置</span></button>
+          <button
+            className="sidebar-foot-action"
+            title="飞书机器人"
+            aria-label="飞书机器人"
+            onClick={() => useStore.getState().openSettings(true, "feishu")}
+          >
+            <Icon name="feishu" size={15} />
+            <span>飞书</span>
+          </button>
+          <button
+            className="sidebar-foot-action"
+            title="设置"
+            aria-label="设置"
+            onClick={() => useStore.getState().openSettings(true)}
+          >
+            <Icon name="settings" size={15} />
+            <span>设置</span>
+          </button>
         </div>
         {/* Mobile: check-for-update button */}
         {Capacitor.isNativePlatform() && (

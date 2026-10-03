@@ -18,6 +18,7 @@ import (
 // Receipts persist admission and the final result, not the live event stream.
 // An interrupted process must never replay a prompt that may have side effects.
 type runReceipt struct {
+	Inputs    promptInputs        `json:"inputs,omitempty"`
 	RunID     string              `json:"run_id"`
 	RequestID string              `json:"request_id"`
 	SessionID string              `json:"session_id"`
@@ -35,7 +36,7 @@ func (s *Server) receiptPath(requestID string) string {
 }
 
 func (s *Server) saveRunReceipt(run *sessionRun) error {
-	data, err := json.Marshal(runReceipt{RunID: run.ID, RequestID: run.RequestID, SessionID: run.SessionID, Prompt: run.Prompt, State: run.State, StartedAt: run.StartedAt, EndedAt: run.EndedAt, Error: run.Error, Result: run.last})
+	data, err := json.Marshal(runReceipt{Inputs: run.Inputs, RunID: run.ID, RequestID: run.RequestID, SessionID: run.SessionID, Prompt: run.Prompt, State: run.State, StartedAt: run.StartedAt, EndedAt: run.EndedAt, Error: run.Error, Result: run.last})
 	if err != nil {
 		return err
 	}
@@ -121,7 +122,7 @@ func validRunReceipt(receipt runReceipt) bool {
 }
 
 func restoreReceipt(receipt runReceipt) *sessionRun {
-	run := &sessionRun{ID: receipt.RunID, RequestID: receipt.RequestID, SessionID: receipt.SessionID, Prompt: receipt.Prompt, State: receipt.State, StartedAt: receipt.StartedAt, EndedAt: receipt.EndedAt, Error: receipt.Error, last: receipt.Result, restored: true, done: make(chan struct{}), pending: map[string]*pendingConfirmation{}}
+	run := &sessionRun{Inputs: receipt.Inputs, ID: receipt.RunID, RequestID: receipt.RequestID, SessionID: receipt.SessionID, Prompt: receipt.Prompt, State: receipt.State, StartedAt: receipt.StartedAt, EndedAt: receipt.EndedAt, Error: receipt.Error, last: receipt.Result, restored: true, done: make(chan struct{}), pending: map[string]*pendingConfirmation{}}
 	if runActive(run) {
 		run.State, run.Error = "interrupted", "服务重启导致任务中断；已接受的消息不会自动重复执行，请检查历史后决定是否重新发送"
 		ended := time.Now()

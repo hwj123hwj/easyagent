@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/hwj123hwj/easyagent/sdk/ai/providers"
@@ -46,7 +47,7 @@ type Agent struct {
 	model              ai.Model
 	system             string
 	tools              map[string]Tool
-	listeners          []EventHandler
+	listeners          []*eventSubscription
 	steeringQueue      *MessageQueue
 	followUpQueue      *MessageQueue
 	maxTurns           int
@@ -55,7 +56,7 @@ type Agent struct {
 	compactionSettings compaction.Settings
 	summarizeFunc      compaction.SummarizeFunc
 	lifecycleHooks     LifecycleHooks
-	hookSystem         HookSystemInterface      // 增强型 Hook 系统（可选）
+	hookSystem         HookSystemInterface // 增强型 Hook 系统（可选）
 	confirmFunc        ConfirmFunc
 	loopDetectSettings LoopDetectSettings
 	loopDetect         loopDetector
@@ -84,7 +85,7 @@ func New(opts Options) *Agent {
 		model:              opts.Model,
 		system:             opts.System,
 		tools:              tools,
-		listeners:          make([]EventHandler, 0),
+		listeners:          make([]*eventSubscription, 0),
 		steeringQueue:      NewMessageQueue(),
 		followUpQueue:      NewMessageQueue(),
 		maxTurns:           opts.MaxTurns,
@@ -99,26 +100,30 @@ func New(opts Options) *Agent {
 	}
 }
 
+type eventSubscription struct{ handler EventHandler }
+
 func (a *Agent) Subscribe(handler EventHandler) func() {
+	subscription := &eventSubscription{handler: handler}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.listeners = append(a.listeners, handler)
-	idx := len(a.listeners) - 1
+	a.listeners = append(a.listeners, subscription)
+	a.mu.Unlock()
 	return func() {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if idx >= 0 && idx < len(a.listeners) {
-			a.listeners = append(a.listeners[:idx], a.listeners[idx+1:]...)
+		for i, item := range a.listeners {
+			if item == subscription {
+				a.listeners = append(a.listeners[:i], a.listeners[i+1:]...)
+				break
+			}
 		}
 	}
 }
-
 func (a *Agent) emit(ctx context.Context, event AgentEvent) {
 	a.mu.RLock()
-	listeners := append([]EventHandler(nil), a.listeners...)
+	listeners := append([]*eventSubscription(nil), a.listeners...)
 	a.mu.RUnlock()
 	for _, listener := range listeners {
-		listener(ctx, event)
+		listener.handler(ctx, event)
 	}
 }
 
@@ -211,6 +216,8 @@ func (a *Agent) Prompt(ctx context.Context, msg ai.Message) (ai.AssistantMessage
 // 最终结果通过最后一个 AgentStreamResult 事件传递。
 func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentStreamEvent, error) {
 	ch := make(chan AgentStreamEvent, 64)
+	var timingMu sync.Mutex
+	toolStarts := map[string]int64{}
 
 	// 订阅事件，转发到 channel（带背压控制）
 	unsubscribe := a.Subscribe(func(ctx context.Context, event AgentEvent) {
@@ -239,6 +246,18 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 		default:
 			return
 		}
+		ev.Timestamp = time.Now().UnixMilli()
+		timingMu.Lock()
+		if ev.Type == StreamEventToolStart {
+			toolStarts[ev.ToolCallID] = ev.Timestamp
+		}
+		if ev.Type == StreamEventToolEnd {
+			if start, ok := toolStarts[ev.ToolCallID]; ok {
+				ev.DurationMS = ev.Timestamp - start
+				delete(toolStarts, ev.ToolCallID)
+			}
+		}
+		timingMu.Unlock()
 		select {
 		case ch <- ev:
 		case <-ctx.Done():
@@ -468,6 +487,8 @@ const (
 )
 
 type AgentStreamEvent struct {
+	Timestamp     int64               `json:"timestamp,omitempty"`
+	DurationMS    int64               `json:"duration_ms,omitempty"`
 	Type          StreamEventType     `json:"type"`
 	TextDelta     string              `json:"text_delta,omitempty"`
 	Message       ai.Message          `json:"message,omitempty"`

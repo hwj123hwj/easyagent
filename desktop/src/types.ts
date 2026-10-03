@@ -54,6 +54,8 @@ export interface SessionMeta {
   status: SessionRunStatus;
   model?: string;
   application?: string; // e.g. "coding", "music"
+  pinned?: boolean;
+  archived?: boolean;
   availableModels: ModelInfo[];
   createdAt: number;
   updatedAt: number;

@@ -5,6 +5,9 @@ import { ModelPicker } from "./ModelPicker";
 import { useVoiceInput } from "../hooks/useVoiceInput";
 import { filterCommands, parseCommand } from "../client/commands";
 import { isActiveRun } from "../client/protocol";
+import { ConversationQueue } from "./ConversationQueue";
+import { PromptContext } from "./PromptContext";
+import { EMPTY_INPUTS, promptInputs } from "../client/protocol";
 export function PromptBar({
   view,
   onStart,
@@ -22,6 +25,9 @@ export function PromptBar({
   const text = useStore((s) => s.drafts[id] || ""),
     setDraft = useStore((s) => s.setDraft),
     setCommandOutput = useStore((s) => s.setCommandOutput);
+  const draftInputs = useStore((state) => state.draftInputs[id] || EMPTY_INPUTS);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const hasInputs = !!(draftInputs.attachments.length + draftInputs.files.length);
   const [error, setError] = useState(""),
     [localOutput, setLocalOutput] = useState(""),
     [menuOpen, setMenuOpen] = useState(false),
@@ -158,12 +164,13 @@ export function PromptBar({
     return { output: result.output, sessionId: result.session_id || targetId };
   }
   async function submit() {
-    if (!text.trim() || pending || commandBusy || loading) return;
+    if ((!text.trim() && !hasInputs) || pending || commandBusy || loading || uploadBusy) return;
     let targetId = id;
     const captured = text,
       version = revision.current,
       profileId = useStore.getState().selectedProfile,
       command = text.startsWith("//") ? null : parseCommand(text);
+    const capturedInputs = draftInputs;
     setError("");
     setMenuOpen(false);
     try {
@@ -179,6 +186,7 @@ export function PromptBar({
         targetId = await onStart();
       if (useStore.getState().selectedProfile !== profileId) return;
       if (command) {
+        if (hasInputs) throw new Error("附件和文件引用请随普通消息发送；移除后可执行命令。");
         setCommandBusy(true);
         const result = await execute(command.name, command.args, targetId, profileId);
         if (useStore.getState().selectedProfile !== profileId) return;
@@ -187,10 +195,9 @@ export function PromptBar({
         if (outputId === "__new__") setLocalOutput(commandOutput);
         else setCommandOutput(outputId || targetId, commandOutput, profileId);
       } else {
-        if (busy) throw new Error("当前任务仍在运行，草稿已保留");
         await useStore
           .getState()
-          .sendPrompt(targetId, text.startsWith("//") ? text.slice(1) : text);
+          .sendPrompt(targetId, text.trim() ? (text.startsWith("//") ? text.slice(1) : text) : "请查看附带的文件。", promptInputs(capturedInputs));
       }
       if (useStore.getState().selectedProfile !== profileId) return;
       if (revision.current === version) {
@@ -201,6 +208,8 @@ export function PromptBar({
         )
           setDraft(targetId, "");
       }
+      const currentInputs = useStore.getState().draftInputs[id] || EMPTY_INPUTS;
+      if (JSON.stringify(currentInputs) === JSON.stringify(capturedInputs)) useStore.getState().setDraftInputs(id, EMPTY_INPUTS);
     } catch (error) {
       if (useStore.getState().selectedProfile !== profileId) return;
       setError((error as Error).message);
@@ -214,6 +223,7 @@ export function PromptBar({
   return (
     <div className="promptbar personal-composer">
       <div className="promptbar-inner">
+        <ConversationQueue view={view} />
         {view.confirmations.map((confirmation) => (
           <ConfirmationPrompt
             key={confirmation.confirmation_id}
@@ -243,6 +253,7 @@ export function PromptBar({
           </p>
         )}
         <div className="personal-input-wrap">
+          <PromptContext id={id} cwd={view.meta.cwd} text={text} onChange={change} onStart={onStart} onBusy={setUploadBusy} onError={setError} input={input} />
           {menuOpen && matches && (
             <div className="slash-menu">
               <div className="slash-heading">
@@ -283,7 +294,7 @@ export function PromptBar({
               loading
                 ? "正在恢复会话…"
                 : busy
-                  ? "任务进行中，可以先写下下一条消息…"
+                  ? "追加要求，Enter 加入待发队列…"
                   : "描述你想完成的事…"
             }
             aria-label="消息输入"
@@ -384,7 +395,7 @@ export function PromptBar({
             >
               <Icon name="mic" size={16} />
             </button>
-            {busy ? (
+            {busy && (
               <button
                 className="composer-stop"
                 title="停止当前任务"
@@ -400,17 +411,20 @@ export function PromptBar({
                 <Icon name="stop" size={15} />
                 <span className="composer-stop-label">停止</span>
               </button>
-            ) : (
+            )}
+            {(
               <button
                 className="composer-send"
+                title={busy ? "加入待发队列，当前任务结束后执行" : "发送消息"}
+                aria-label={busy ? "加入待发队列" : "发送消息"}
                 disabled={
-                  !text.trim() ||
+                  (!text.trim() && !hasInputs) ||
+                  uploadBusy ||
                   pending ||
                   commandBusy ||
                   loading ||
                   (!connected && !parseCommand(text))
                 }
-                aria-label="发送消息"
                 onClick={() => void submit()}
               >
                 {pending ? (

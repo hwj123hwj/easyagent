@@ -60,7 +60,7 @@ function fixture(options = {}) {
         if (callback) await callback();
       },
     },
-    dialog: {},
+    dialog: {showSaveDialog: async()=>({canceled:!!options.cancelExport,filePath:path.join(directory,"exported.md")})},
     clipboard: { writeText() {} },
     safeStorage: {
       isEncryptionAvailable: () => true,
@@ -73,6 +73,7 @@ function fixture(options = {}) {
   const fakeFetch = async (resource, requestOptions) => {
     requests.push({ resource, options: requestOptions });
     const body = requestOptions.body ? JSON.parse(requestOptions.body) : null;
+    if (resource.includes("/workspace/file-data")) return {ok:true,text:async()=>JSON.stringify({data:Buffer.from("exported-file").toString("base64"),mimeType:"text/plain",name:"report.md"})};
     if (resource.endsWith("/admin/deploy")) {
       return { ok: !options.busy, status: options.busy ? 409 : 200,
         text: async () => JSON.stringify(options.busy ? { error: "sensitive-upstream-error" } : { lease: "owned-lease" }) };
@@ -136,7 +137,7 @@ function fixture(options = {}) {
     "./profile-store": {
       ProfileStore: class {
         get() {
-          return { kind: options.local ? "local" : "remote", url };
+          return { id: "remote", kind: options.local ? "local" : "remote", url };
         }
         token() {
           return token;
@@ -180,6 +181,7 @@ function fixture(options = {}) {
   );
   return {
     handlers,
+    exported:()=>fs.readFileSync(path.join(directory,"exported.md"),"utf8"),
     requests,
     dockIcons,
     store: () => providerStore,
@@ -382,4 +384,19 @@ test("failed apply restores the old encrypted configuration and attempts to reco
   assert.equal(f.store().configuration().model, "selected-model");
   assert.equal(f.store().environment().EA_API_KEY, providerInput.apiKey);
   assert.equal(f.manager().appliedEnvironment.EA_MODEL, "selected-model");
+});
+
+test("native export uses the selected authenticated host and cancellation performs no request",async t=>{
+ const f=fixture();t.after(f.cleanup);await f.ready();
+ await assert.rejects(f.handlers.get("export-file")(f.event,"s","/report.md","wrong-host"),/主机已切换/);
+ assert.equal(f.requests.length,0);
+ await f.handlers.get("export-file")(f.event,"s","/report.md","remote");
+ assert.equal(f.exported(),"exported-file");assert.match(f.requests[0].resource,/session_id=s/);
+ assert.equal(f.requests[0].options.headers.Authorization,"Bearer private-api-token");
+ const canceled=fixture({cancelExport:true});t.after(canceled.cleanup);await canceled.ready();
+ await canceled.handlers.get("export-file")(canceled.event,"s","/report.md","remote");assert.equal(canceled.requests.length,0);
+});
+test("session preference PATCH is allowed through authenticated native transport",async t=>{
+ const f=fixture();t.after(f.cleanup);await f.ready();await f.handlers.get("agent-request")(f.event,"PATCH","/sessions/s",{title:"renamed"});
+ assert.equal(f.requests[0].options.method,"PATCH");assert.equal(JSON.parse(f.requests[0].options.body).title,"renamed");
 });

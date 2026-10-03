@@ -50,6 +50,7 @@ interface PiAPI {
   } | null>;
   openDownloadPage: (url: string) => Promise<void>;
   pickFolder: () => Promise<string | null>;
+  exportFile: (session: string, path: string, profile: string) => Promise<void>;
   revealInFolder: (path: string) => Promise<void>;
   openInTerminal: (dir: string) => Promise<void>;
   openExternal: (url: string) => Promise<void>;

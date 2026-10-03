@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -21,14 +22,19 @@ import (
 )
 
 type runTestGateway struct {
+	requests     chan map[string]any
 	finish       chan struct{}
 	disconnected atomic.Bool
 	calls        atomic.Int32
 }
 
 func newRunTestServer(t *testing.T) (*Server, *httptest.Server, *runTestGateway) {
+	return newFileRunTestServer(t, "")
+}
+
+func newFileRunTestServer(t *testing.T, toolFile string, dataInside ...bool) (*Server, *httptest.Server, *runTestGateway) {
 	t.Helper()
-	gateway := &runTestGateway{finish: make(chan struct{})}
+	gateway := &runTestGateway{finish: make(chan struct{}), requests: make(chan map[string]any, 32)}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
@@ -36,7 +42,19 @@ func newRunTestServer(t *testing.T) (*Server, *httptest.Server, *runTestGateway)
 			return
 		}
 		gateway.calls.Add(1)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gateway.requests <- body
 		w.Header().Set("Content-Type", "text/event-stream")
+		if toolFile != "" {
+			messages := body["messages"].([]any)
+			if messages[len(messages)-1].(map[string]any)["role"] != "tool" {
+				arguments, _ := json.Marshal(map[string]string{"path": toolFile, "content": fmt.Sprintf("tool-result-%d", gateway.calls.Load())})
+				chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": fmt.Sprintf("write-%d", gateway.calls.Load()), "type": "function", "function": map[string]any{"name": "write", "arguments": string(arguments)}}}}, "finish_reason": "tool_calls"}}})
+				fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
+				return
+			}
+		}
 		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"first \"}}]}\n\n")
 		w.(http.Flusher).Flush()
 		select {
@@ -49,13 +67,36 @@ func newRunTestServer(t *testing.T) (*Server, *httptest.Server, *runTestGateway)
 	}))
 	cfg := config.Default()
 	cfg.DataDir, cfg.Workspace = t.TempDir(), t.TempDir()
+	if len(dataInside) > 0 && dataInside[0] {
+		cfg.DataDir = filepath.Join(cfg.Workspace, "service-state")
+		require.NoError(t, os.MkdirAll(cfg.DataDir, 0700))
+	}
+	cfg.AutoApprove = toolFile != ""
 	cfg.MCPConfigPath = filepath.Join(cfg.DataDir, "mcp.json")
 	cfg.Provider, cfg.OpenAIAPIKey, cfg.OpenAIBaseURL = "openai", "test-key", provider.URL
 	application, err := app.New(app.AppOptions{Config: cfg})
 	require.NoError(t, err)
 	srv := New(application, nil)
 	httpServer := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() { srv.cancel(); httpServer.Close(); application.Close(); provider.Close() })
+	t.Cleanup(func() {
+		srv.cancel()
+		srv.runs.mu.Lock()
+		var done []<-chan struct{}
+		for _, run := range srv.runs.requests {
+			done = append(done, run.done)
+		}
+		srv.runs.mu.Unlock()
+		for _, channel := range done {
+			select {
+			case <-channel:
+			case <-time.After(3 * time.Second):
+				t.Error("run did not shut down")
+			}
+		}
+		httpServer.Close()
+		application.Close()
+		provider.Close()
+	})
 	return srv, httpServer, gateway
 }
 

@@ -36,14 +36,17 @@ type pendingConfirmation struct {
 
 // sessionRun is owned by the session, never by a socket or HTTP request.
 type sessionRun struct {
-	ID             string     `json:"run_id"`
-	RequestID      string     `json:"request_id"`
-	SessionID      string     `json:"session_id"`
-	Prompt         string     `json:"prompt"`
-	State          string     `json:"state"`
-	StartedAt      time.Time  `json:"started_at"`
-	EndedAt        *time.Time `json:"ended_at,omitempty"`
-	Error          string     `json:"error,omitempty"`
+	files          *runFiles
+	DisplayPrompt  string       `json:"display_prompt,omitempty"`
+	Inputs         promptInputs `json:"inputs,omitempty"`
+	ID             string       `json:"run_id"`
+	RequestID      string       `json:"request_id"`
+	SessionID      string       `json:"session_id"`
+	Prompt         string       `json:"prompt"`
+	State          string       `json:"state"`
+	StartedAt      time.Time    `json:"started_at"`
+	EndedAt        *time.Time   `json:"ended_at,omitempty"`
+	Error          string       `json:"error,omitempty"`
 	baseline       []map[string]any
 	projection     []agent.AgentStreamEvent
 	projectionText strings.Builder
@@ -86,7 +89,11 @@ type runAdmissionError struct{ code, message string }
 
 func (e *runAdmissionError) Error() string { return e.message }
 
-func (s *Server) startRun(sessionID, prompt, requestID string) (*sessionRun, bool, error) {
+func (s *Server) startRun(sessionID, prompt, requestID string, values ...promptInputs) (*sessionRun, bool, error) {
+	inputs := promptInputs{}
+	if len(values) > 0 {
+		inputs = values[0]
+	}
 	g := s.runs
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -100,13 +107,13 @@ func (s *Server) startRun(sessionID, prompt, requestID string) (*sessionRun, boo
 			}
 		}
 		if previous != nil {
-			if previous.Prompt != prompt || (sessionID != "" && previous.SessionID != sessionID) {
+			if previous.Prompt != prompt || !sameInputs(previous.Inputs, inputs) || (sessionID != "" && previous.SessionID != sessionID) {
 				return nil, false, &runAdmissionError{"request_conflict", "request_id 已用于另一条消息"}
 			}
 			return previous, true, nil
 		}
 	}
-	if prompt == "" {
+	if strings.TrimSpace(prompt) == "" || len(prompt) > 128*1024 {
 		return nil, false, &runAdmissionError{"invalid_prompt", "prompt is empty"}
 	}
 	if len(requestID) > 128 {
@@ -135,6 +142,12 @@ func (s *Server) startRun(sessionID, prompt, requestID string) (*sessionRun, boo
 		return nil, false, &runAdmissionError{"busy", "此会话正在处理另一入口的请求"}
 	}
 	baseline, err := sess.Session().BuildContext(ctx)
+	message, inputErr := s.buildPromptMessage(sess, prompt, inputs)
+	if inputErr != nil {
+		cancel()
+		release()
+		return nil, false, &runAdmissionError{"invalid_context", inputErr.Error()}
+	}
 	if err != nil {
 		cancel()
 		release()
@@ -152,15 +165,28 @@ func (s *Server) startRun(sessionID, prompt, requestID string) (*sessionRun, boo
 	if requestID == "" {
 		requestID = newRunID("request_")
 	}
-	run := &sessionRun{ID: newRunID("run_"), RequestID: requestID, SessionID: sess.SessionID(), Prompt: prompt, State: "running", StartedAt: time.Now(), baseline: serializeRunMessages(baseline), pending: make(map[string]*pendingConfirmation), done: make(chan struct{}), cancel: cancel}
+	run := &sessionRun{Inputs: inputs, ID: newRunID("run_"), RequestID: requestID, SessionID: sess.SessionID(), Prompt: prompt, State: "running", StartedAt: time.Now(), baseline: serializeRunMessages(baseline), pending: make(map[string]*pendingConfirmation), done: make(chan struct{}), cancel: cancel}
 	if err := s.saveRunReceipt(run); err != nil {
 		cancel()
 		release()
 		return nil, false, fmt.Errorf("无法保存消息接受凭据，消息尚未执行")
 	}
+	s.beginFiles(run, sess.Workspace())
+	unsubscribeFiles := sess.Agent().Subscribe(func(eventCtx context.Context, event agent.AgentEvent) {
+		if eventCtx.Value(runContextKey{}) != run {
+			return
+		}
+		switch e := event.(type) {
+		case agent.EventToolExecutionStart:
+			s.observeFiles(run, agent.AgentStreamEvent{Type: agent.StreamEventToolStart, ToolName: e.ToolName, ToolCallID: e.ToolCallID, ToolArgs: e.Args})
+		case agent.EventToolExecutionEnd:
+			s.observeFiles(run, agent.AgentStreamEvent{Type: agent.StreamEventToolEnd, ToolName: e.ToolName, ToolCallID: e.ToolCallID, IsError: e.IsError})
+		}
+	})
 	// 审批回调已在启动前安装，断线也不会把需要确认的工具变成自动放行。
-	stream, err := sess.PromptStream(context.WithValue(ctx, runContextKey{}, run), prompt)
+	stream, err := sess.PromptMessageStream(context.WithValue(ctx, runContextKey{}, run), message)
 	if err != nil {
+		unsubscribeFiles()
 		cancel()
 		release()
 		if removeErr := os.Remove(s.receiptPath(requestID)); removeErr != nil {
@@ -178,16 +204,27 @@ func (s *Server) startRun(sessionID, prompt, requestID string) (*sessionRun, boo
 	// with the same request_id; only accepted executions enter the registry.
 	state := g.sessionLocked(run.SessionID)
 	state.run = run
+	run.DisplayPrompt = message.DisplayText
 	state.replay, state.replayBytes = nil, 0
 	g.requests[requestID] = run
 	g.requestOrder = append(g.requestOrder, requestID)
 	g.pruneRequestsLocked()
-	go s.consumeRun(ctx, run, stream, release)
+	// Existing subscribers need an authoritative new-run boundary before its deltas,
+	// including turns admitted by the server-owned queue.
+	g.publishLocked(state, wsServerMessage{Type: "accepted", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Prompt: displayRunPrompt(run)})
+	go func() { defer unsubscribeFiles(); s.consumeRun(ctx, run, stream, release) }()
 	return run, false, nil
 }
 
 func runActive(run *sessionRun) bool {
 	return run.State == "running" || run.State == "waiting_confirmation"
+}
+
+func displayRunPrompt(run *sessionRun) string {
+	if run.DisplayPrompt != "" {
+		return run.DisplayPrompt
+	}
+	return run.Prompt
 }
 
 func (g *runRegistry) sessionLocked(id string) *sessionRunState {
@@ -233,6 +270,16 @@ func (g *runRegistry) publishLocked(state *sessionRunState, msg wsServerMessage)
 }
 
 func (s *Server) consumeRun(ctx context.Context, run *sessionRun, stream <-chan agent.AgentStreamEvent, release func()) {
+	defer func() {
+		if s.ctx.Err() != nil {
+			return
+		}
+		if run.State == "failed" {
+			_, _ = s.changeQueue(run.SessionID, queueMutation{Action: "pause"})
+		} else {
+			s.pumpQueue(run.SessionID)
+		}
+	}()
 	defer release()
 	defer run.cancel()
 	for event := range stream {
@@ -250,6 +297,7 @@ func (s *Server) consumeRun(ctx context.Context, run *sessionRun, stream <-chan 
 		}
 		s.runs.mu.Unlock()
 	}
+	s.finishFiles(run)
 	s.runs.mu.Lock()
 	defer s.runs.mu.Unlock()
 	// 旧 run 的迟到收尾不得清除后来任务的运行状态。
@@ -379,10 +427,14 @@ func (s *Server) cancelRun(sessionID, runID string) error {
 }
 
 func (s *Server) runSnapshot(sessionID string, afterSeq uint64, runID string, ws *wsConn) (wsServerMessage, error) {
+	queue, queueErr := s.readQueue(sessionID)
+	if queueErr != nil {
+		return wsServerMessage{}, queueErr
+	}
 	s.runs.mu.Lock()
 	defer s.runs.mu.Unlock()
 	state := s.runs.sessionLocked(sessionID)
-	msg := wsServerMessage{Type: "snapshot", SessionID: sessionID, Seq: state.seq, Run: cloneRun(state.run)}
+	msg := wsServerMessage{Type: "snapshot", SessionID: sessionID, Seq: state.seq, Run: cloneRun(state.run), Queue: &queue}
 	if state.run != nil {
 		if state.run.restored {
 			msg.Reset = true
@@ -499,9 +551,13 @@ func serializeRunMessages(messages []ai.Message) []map[string]any {
 				}
 			}
 			entry["content"] = text
+			if msg.DisplayText != "" {
+				entry["content"] = msg.DisplayText
+			}
 		case ai.AssistantMessage:
 			entry["content"], entry["thinking"], entry["tool_calls"] = msg.Text, msg.Thinking, msg.ToolCalls
 		case ai.ToolResultMessage:
+			entry["duration_ms"] = msg.DurationMS
 			entry["content"], entry["tool_call_id"], entry["is_error"], entry["tool_details"] = msg.Content, msg.ToolCallID, msg.IsError, msg.Details
 		}
 		result = append(result, entry)
@@ -603,6 +659,7 @@ func cloneRun(run *sessionRun) *sessionRun {
 	if run.restored {
 		// The restored baseline already contains any persisted user/tool messages.
 		copy.Prompt = ""
+		copy.DisplayPrompt = ""
 	}
 	return &copy
 }

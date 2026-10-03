@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/session"
@@ -18,6 +20,7 @@ import (
 // This is the storage/indexing layer — NOT the runtime behavior layer.
 type Manager struct {
 	dataDir string
+	metaMu  sync.Mutex
 }
 
 // SessionInfo holds metadata about a session for listing/indexing.
@@ -29,6 +32,8 @@ type SessionInfo struct {
 	Workspace    string `json:"workspace,omitempty"`
 	Title        string `json:"title,omitempty"`
 	Application  string `json:"application,omitempty"` // e.g. "coding", "music", "kb"
+	Pinned       bool   `json:"pinned"`
+	Archived     bool   `json:"archived"`
 }
 
 // NewManager creates a new session manager rooted at dataDir.
@@ -68,17 +73,83 @@ func (m *Manager) Create(ctx context.Context) (string, string, error) {
 
 // SaveMeta writes session metadata (e.g. workspace, application) to meta.json in the session directory.
 func (m *Manager) SaveMeta(sessionID string, workspace string, application string) error {
-	sessionDir := filepath.Join(m.SessionsDir(), sessionID)
-	metaPath := filepath.Join(sessionDir, "meta.json")
-	meta := map[string]string{"workspace": workspace}
-	if application != "" {
-		meta["application"] = application
+	return m.updateMeta(sessionID, func(meta map[string]any) {
+		meta["workspace"], meta["application"] = workspace, application
+	})
+}
+
+// PreferencePatch changes only explicitly supplied indexing preferences.
+type PreferencePatch struct {
+	Title    *string `json:"title,omitempty"`
+	Pinned   *bool   `json:"pinned,omitempty"`
+	Archived *bool   `json:"archived,omitempty"`
+}
+
+func (m *Manager) UpdatePreferences(id string, patch PreferencePatch) error {
+	if patch.Title != nil && (len([]rune(strings.TrimSpace(*patch.Title))) == 0 || len([]rune(*patch.Title)) > 160) {
+		return fmt.Errorf("title must contain 1–160 characters")
 	}
-	data, err := json.Marshal(meta)
+	return m.updateMeta(id, func(meta map[string]any) {
+		if patch.Title != nil {
+			meta["title"] = strings.TrimSpace(*patch.Title)
+		}
+		if patch.Pinned != nil {
+			meta["pinned"] = *patch.Pinned
+		}
+		if patch.Archived != nil {
+			meta["archived"] = *patch.Archived
+		}
+	})
+}
+
+func (m *Manager) updateMeta(id string, update func(map[string]any)) error {
+	m.metaMu.Lock()
+	defer m.metaMu.Unlock()
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\\`) {
+		return fmt.Errorf("invalid session id")
+	}
+	dir := filepath.Join(m.SessionsDir(), id)
+	fi, err := os.Lstat(dir)
 	if err != nil {
-		return fmt.Errorf("marshal meta: %w", err)
+		return err
 	}
-	return os.WriteFile(metaPath, data, 0o644)
+	if !fi.IsDir() {
+		return fmt.Errorf("session directory is not a regular directory")
+	}
+	path := filepath.Join(dir, "meta.json")
+	meta := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if err = json.Unmarshal(data, &meta); err != nil {
+			return fmt.Errorf("read session metadata: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	update(meta)
+	data, err = json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".meta-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(data); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // readMeta reads session metadata from meta.json if it exists.
@@ -213,7 +284,18 @@ func (m *Manager) List(ctx context.Context) ([]SessionInfo, error) {
 			if lastActive > info.LastActive {
 				info.LastActive = lastActive
 			}
-			info.Title = firstUserMsg
+			info.Title = strings.SplitN(firstUserMsg, "\n", 2)[0]
+		}
+		var preferences struct {
+			Title    string `json:"title"`
+			Pinned   bool   `json:"pinned"`
+			Archived bool   `json:"archived"`
+		}
+		if data, err := os.ReadFile(filepath.Join(sessionsDir, id, "meta.json")); err == nil && json.Unmarshal(data, &preferences) == nil {
+			if preferences.Title != "" {
+				info.Title = preferences.Title
+			}
+			info.Pinned, info.Archived = preferences.Pinned, preferences.Archived
 		}
 
 		infos = append(infos, info)
@@ -259,14 +341,15 @@ func countMessages(path string) (int, int64, string, error) {
 
 	scanner := bufio.NewScanner(file)
 	// Increase buffer size for large messages
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
 		var entry struct {
 			Type string `json:"type"`
 			TS   int64  `json:"timestamp"`
 			// User messages have user.content as an array of {type, text}
 			User *struct {
-				Content []struct {
+				DisplayText string `json:"display_text"`
+				Content     []struct {
 					Type string `json:"type"`
 					Text string `json:"text"`
 				} `json:"content"`
@@ -278,7 +361,11 @@ func countMessages(path string) (int, int64, string, error) {
 		if entry.Type == "message" {
 			count++
 			if entry.User != nil && firstUserMsg == "" {
+				firstUserMsg = entry.User.DisplayText
 				for _, c := range entry.User.Content {
+					if firstUserMsg != "" {
+						break
+					}
 					if c.Type == "text" && c.Text != "" {
 						firstUserMsg = c.Text
 						break

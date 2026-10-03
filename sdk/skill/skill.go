@@ -105,17 +105,34 @@ func LoadFromDirs(dirs ...string) LoadResult {
 		result.Skills = append(result.Skills, r.Skills...)
 		result.Diagnostics = append(result.Diagnostics, r.Diagnostics...)
 	}
+	seen := map[string]bool{}
+	unique := []Skill{}
+	for _, s := range result.Skills {
+		if !seen[s.Name] {
+			seen[s.Name] = true
+			unique = append(unique, s)
+		}
+	}
+	result.Skills = unique
 	return result
 }
 
 // loadFromDir 递归加载目录中的技能文件。
 // includeRootFiles 为 true 时，根目录中的 .md 文件也会被加载为技能。
 func loadFromDir(dir string, includeRootFiles bool, rootDir string) LoadResult {
+	return loadDirectory(dir, includeRootFiles, rootDir, map[string]bool{})
+}
+func loadDirectory(dir string, includeRootFiles bool, rootDir string, visited map[string]bool) LoadResult {
 	result := LoadResult{
 		Skills:      make([]Skill, 0),
 		Diagnostics: make([]Diagnostic, 0),
 	}
 
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil || visited[resolved] {
+		return result
+	}
+	visited[resolved] = true
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		result.Diagnostics = append(result.Diagnostics, Diagnostic{
@@ -143,14 +160,20 @@ func loadFromDir(dir string, includeRootFiles bool, rootDir string) LoadResult {
 	ignorePatterns := loadIgnorePatterns(dir)
 	ignore := newIgnoreMatcherWithPatterns(ignorePatterns)
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		isDir := entry.IsDir()
+		if entry.Type()&os.ModeSymlink != 0 {
+			if info, err := os.Stat(filepath.Join(dir, entry.Name())); err == nil {
+				isDir = info.IsDir()
+			}
+		}
+		if !isDir {
 			continue
 		}
 		name := entry.Name()
 		if shouldIgnoreDir(name, ignore) {
 			continue
 		}
-		sub := loadFromDir(filepath.Join(dir, name), true, rootDir)
+		sub := loadDirectory(filepath.Join(dir, name), true, rootDir, visited)
 		result.Skills = append(result.Skills, sub.Skills...)
 		result.Diagnostics = append(result.Diagnostics, sub.Diagnostics...)
 	}
@@ -276,11 +299,11 @@ func parseSkillFile(filePath string) (*Skill, []Diagnostic) {
 	}
 
 	return &Skill{
-		Name:                  name,
-		Description:           desc,
-		Content:               body,
-		FilePath:              filePath,
-		BaseDir:               filepath.Dir(filePath),
+		Name:                   name,
+		Description:            desc,
+		Content:                body,
+		FilePath:               filePath,
+		BaseDir:                filepath.Dir(filePath),
 		DisableModelInvocation: disableModelInvocation,
 	}, diags
 }

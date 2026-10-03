@@ -1,4 +1,4 @@
-import type { Envelope } from "./protocol";
+import type { Envelope, PromptInputs } from "./protocol";
 type Handler = (value: any) => void;
 export class AgentTransport {
   private socket: WebSocket | null = null;
@@ -35,7 +35,7 @@ export class AgentTransport {
       ? this.pending.get(message.request_id)
       : undefined;
     if (message.type === "accepted" && pending)
-      message = { ...message, prompt: pending.prompt };
+      message = { ...message, prompt: message.prompt || pending.prompt };
     this.emit("message", message);
     if (pending && ["accepted", "error"].includes(message.type)) {
       clearTimeout(pending.timer);
@@ -138,6 +138,7 @@ export class AgentTransport {
     session: string,
     prompt: string,
     requestId: string,
+    inputs?: PromptInputs,
   ): Promise<Envelope> {
     if (!this.connected) throw new Error("尚未连接到服务，草稿已保留");
     return new Promise((resolve, reject) => {
@@ -151,6 +152,7 @@ export class AgentTransport {
         session_id: session,
         prompt,
         request_id: requestId,
+        inputs,
       })
         .then((sent) => {
           if (!sent) {

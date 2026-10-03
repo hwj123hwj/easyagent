@@ -68,7 +68,7 @@ async function requestAt(
   if (
     !/^\/(?!\/)/.test(resource) ||
     resource.includes("\\") ||
-    !["GET", "POST", "PUT", "DELETE"].includes(method)
+    !["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)
   )
     throw new Error("请求路径或方法无效");
   const { url, token } = connection;
@@ -93,7 +93,7 @@ async function requestAt(
     throw new Error(
       response.status === 401
         ? "服务认证失败，请检查连接令牌"
-        : value?.error || `HTTP ${response.status}`,
+        : `HTTP ${response.status}: ${value?.error || response.statusText}`,
     );
   return value;
 }
@@ -197,7 +197,9 @@ handle("agent-send", (value: object) => {
 handle("backend-status", () => manager.getStatus());
 function requireLocalProvider(): void {
   if (profiles.get().kind !== "local")
-    throw new Error("模型配置只适用于桌面托管的本地 Agent；远程服务请在目标主机配置");
+    throw new Error(
+      "模型配置只适用于桌面托管的本地 Agent；远程服务请在目标主机配置",
+    );
 }
 handle("provider-config", () => {
   requireLocalProvider();
@@ -227,7 +229,9 @@ handle("provider-save", async (input: ProviderConfigInput) => {
           throw new Error();
         lease = result.lease;
       } catch {
-        throw new Error("本地 Agent 仍有任务运行或无法确认空闲，请等待任务结束后保存；配置未修改");
+        throw new Error(
+          "本地 Agent 仍有任务运行或无法确认空闲，请等待任务结束后保存；配置未修改",
+        );
       }
     }
     // A profile switch while checking readiness must not apply local settings.
@@ -244,19 +248,31 @@ handle("provider-save", async (input: ProviderConfigInput) => {
       try {
         providerStore.restore(previous);
       } catch {
-        throw new Error("本地 Agent 重启失败，原配置恢复失败；请检查应用目录权限后重新配置");
+        throw new Error(
+          "本地 Agent 重启失败，原配置恢复失败；请检查应用目录权限后重新配置",
+        );
       }
       try {
         await manager.restart();
       } catch {
-        throw new Error("本地 Agent 重启失败；原模型配置已恢复，请检查核心安装后重试启动");
+        throw new Error(
+          "本地 Agent 重启失败；原模型配置已恢复，请检查核心安装后重试启动",
+        );
       }
-      throw new Error("新配置未能启动本地 Agent，已恢复原模型配置，请检查配置后重试");
+      throw new Error(
+        "新配置未能启动本地 Agent，已恢复原模型配置，请检查配置后重试",
+      );
     }
     return configuration;
   } finally {
-    if (lease && connection && manager.getServerInfo()?.url === connection.url) {
-      await requestAt(connection, "DELETE", "/admin/deploy", { lease }).catch(() => {});
+    if (
+      lease &&
+      connection &&
+      manager.getServerInfo()?.url === connection.url
+    ) {
+      await requestAt(connection, "DELETE", "/admin/deploy", { lease }).catch(
+        () => {},
+      );
     }
     providerApplying = false;
   }
@@ -284,6 +300,36 @@ handle("pick-folder", async () => {
   });
   return result.canceled ? null : result.filePaths[0] || null;
 });
+handle(
+  "export-file",
+  async (session: string, file: string, profile: string) => {
+    if (
+      typeof session !== "string" ||
+      typeof file !== "string" ||
+      profiles.get().id !== profile
+    )
+      throw new Error("主机已切换或文件参数无效");
+    const connection = await endpoint();
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: "导出文件 · " + profiles.get().name,
+      defaultPath: path.basename(file),
+    });
+    if (result.canceled || !result.filePath) return;
+    if (profiles.get().id !== profile)
+      throw new Error("主机已切换，请重新导出");
+    const data = await requestAt(
+      connection,
+      "GET",
+      `/workspace/file-data?session_id=${encodeURIComponent(session)}&path=${encodeURIComponent(file)}`,
+    );
+    if (typeof data?.data !== "string" || data.data.length > 45 * 1024 * 1024)
+      throw new Error("文件导出数据无效");
+    await fs.promises.writeFile(
+      result.filePath,
+      Buffer.from(data.data, "base64"),
+    );
+  },
+);
 handle("reveal-in-folder", (file: string) => {
   if (profiles.get().kind !== "local")
     throw new Error("文件在远程主机，请在文件面板查看");
@@ -380,10 +426,12 @@ async function createWindow() {
     minHeight: 580,
     title: "EasyAgent",
     backgroundColor: "#101b1c",
-    ...(process.platform === "darwin" ? {
-      titleBarStyle: "hiddenInset" as const,
-      trafficLightPosition: macWindowButtonPosition,
-    } : {}),
+    ...(process.platform === "darwin"
+      ? {
+          titleBarStyle: "hiddenInset" as const,
+          trafficLightPosition: macWindowButtonPosition,
+        }
+      : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

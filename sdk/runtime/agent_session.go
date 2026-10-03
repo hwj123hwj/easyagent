@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -55,6 +53,8 @@ type AgentSessionOptions struct {
 // Application-specific state (profile, goal) is delegated to SessionExt.
 type AgentSession struct {
 	mu           sync.RWMutex
+	skillsMu     sync.RWMutex
+	loadedSkills []skill.Skill
 	running      bool
 	mutating     bool
 	toolVersion  uint64
@@ -160,11 +160,16 @@ func (s *AgentSession) Prompt(ctx context.Context, input string) (ai.AssistantMe
 
 // PromptStream sends a message and returns an event channel for streaming.
 func (s *AgentSession) PromptStream(ctx context.Context, input string) (<-chan agent.AgentStreamEvent, error) {
+	return s.PromptMessageStream(ctx, ai.NewTextUserMessage(input))
+}
+
+// PromptMessageStream preserves structured user content through the runtime.
+func (s *AgentSession) PromptMessageStream(ctx context.Context, input ai.UserMessage) (<-chan agent.AgentStreamEvent, error) {
 	ag, err := s.preparePrompt(ctx)
 	if err != nil {
 		return nil, err
 	}
-	stream, err := ag.PromptStream(ctx, ai.NewTextUserMessage(input))
+	stream, err := ag.PromptStream(ctx, input)
 	if err != nil {
 		s.finishPrompt()
 		return nil, err
@@ -551,16 +556,7 @@ func (s *AgentSession) buildAgent(ctx context.Context, registry *providers.Regis
 	// Load skills
 	var skills []skill.Skill
 	if len(skillDirs) == 0 {
-		// Default skill dirs
-		skillDirs = []string{}
-		defaultSkillDir := filepath.Join(cwd, ".claude", "skills")
-		if fi, err := os.Stat(defaultSkillDir); err == nil && fi.IsDir() {
-			skillDirs = append(skillDirs, defaultSkillDir)
-		}
-		homeSkillDir := filepath.Join(util.HomeDir(), ".claude", "skills")
-		if fi, err := os.Stat(homeSkillDir); err == nil && fi.IsDir() {
-			skillDirs = append(skillDirs, homeSkillDir)
-		}
+		skillDirs = DefaultSkillDirs(cwd)
 	}
 	if len(skillDirs) > 0 {
 		result := skill.LoadFromDirs(skillDirs...)
@@ -569,6 +565,10 @@ func (s *AgentSession) buildAgent(ctx context.Context, registry *providers.Regis
 			slog.Warn("skill diagnostic", "code", diag.Code, "message", diag.Message, "path", diag.Path)
 		}
 	}
+
+	s.skillsMu.Lock()
+	s.loadedSkills = append([]skill.Skill(nil), skills...)
+	s.skillsMu.Unlock()
 
 	// Read profile/goal from SessionExt
 	var profileName, goal string

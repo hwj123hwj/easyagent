@@ -40,6 +40,8 @@ func (s *Server) SetVersion(v string) {
 type Server struct {
 	activity      activityGate
 	runs          *runRegistry
+	queueMu       sync.Mutex
+	queues        map[string]*messageQueue
 	ctx           context.Context
 	cancel        context.CancelFunc
 	app           *app.App
@@ -103,9 +105,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 // ChatRequest is the request body for chat endpoints.
 type ChatRequest struct {
-	Prompt    string `json:"prompt"`
-	SessionID string `json:"session_id,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
+	Inputs    promptInputs `json:"inputs,omitempty"`
+	Prompt    string       `json:"prompt"`
+	SessionID string       `json:"session_id,omitempty"`
+	RequestID string       `json:"request_id,omitempty"`
 }
 
 // ChatResponse is the response for non-streaming chat.
@@ -174,6 +177,10 @@ func (s *Server) Handler() http.Handler {
 	restMux.HandleFunc("POST /sessions/{id}/run/cancel", s.cancelRunHTTP)
 	restMux.HandleFunc("POST /sessions/{id}/run/confirm", s.confirmRunHTTP)
 	restMux.HandleFunc("DELETE /sessions/{id}", s.deleteSession)
+	restMux.HandleFunc("PATCH /sessions/{id}", s.patchSession)
+	restMux.HandleFunc("GET /sessions/{id}/queue", s.messageQueueHTTP)
+	restMux.HandleFunc("POST /sessions/{id}/queue", s.messageQueueHTTP)
+	restMux.HandleFunc("POST /sessions/{id}/attachments", s.uploadAttachment)
 	restMux.HandleFunc("POST /sessions/{id}/model", s.switchModel)
 	restMux.HandleFunc("GET /models", s.listModels)
 	restMux.HandleFunc("GET /tools", s.listTools)
@@ -183,6 +190,12 @@ func (s *Server) Handler() http.Handler {
 	restMux.HandleFunc("POST /sessions/{id}/command", s.executeCommand)
 	restMux.HandleFunc("POST /tools/register", s.registerTool)
 	restMux.HandleFunc("GET /sessions/{id}/diff", s.getSessionDiff)
+	restMux.HandleFunc("GET /sessions/{id}/runs/{run}/files", s.getRunFiles)
+	restMux.HandleFunc("POST /sessions/{id}/runs/{run}/undo", s.undoRunFile)
+	restMux.HandleFunc("GET /workspace/download", s.downloadWorkspaceFile)
+	restMux.HandleFunc("GET /workspace/file-data", s.workspaceFileData)
+	restMux.HandleFunc("GET /sessions/{id}/run-files", s.listRunFiles)
+	restMux.HandleFunc("GET /sessions/{id}/capabilities", s.getCapabilities)
 	restMux.HandleFunc("GET /sessions/{id}/file", s.getSessionFile)
 	restMux.HandleFunc("PUT /sessions/{id}/file", s.writeFile)
 	restMux.HandleFunc("GET /workspace/list-dir", s.listDir)
@@ -279,7 +292,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	run, _, err := s.startRun(req.SessionID, req.Prompt, req.RequestID)
+	run, _, err := s.startRun(req.SessionID, req.Prompt, req.RequestID, req.Inputs)
 	if err != nil {
 		runHTTPError(w, err)
 		return
@@ -300,7 +313,7 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	run, duplicate, err := s.startRun(req.SessionID, req.Prompt, req.RequestID)
+	run, duplicate, err := s.startRun(req.SessionID, req.Prompt, req.RequestID, req.Inputs)
 	if err != nil {
 		runHTTPError(w, err)
 		return
@@ -468,6 +481,7 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type messageEntry struct {
+		DurationMS  int64           `json:"duration_ms,omitempty"`
 		Role        string          `json:"role"`
 		Content     string          `json:"content"`
 		Thinking    string          `json:"thinking,omitempty"`
@@ -489,6 +503,9 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			entry.Content = joinTexts(texts)
+			if m.DisplayText != "" {
+				entry.Content = m.DisplayText
+			}
 		case ai.AssistantMessage:
 			entry.Content = m.Text
 			entry.Thinking = m.Thinking
@@ -500,6 +517,7 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		case ai.ToolResultMessage:
+			entry.DurationMS = m.DurationMS
 			entry.Content = m.Content
 			entry.ToolCallID = m.ToolCallID
 			entry.IsError = m.IsError
@@ -1487,7 +1505,7 @@ func corsMiddleware(s *Server) func(next http.Handler) http.Handler {
 					if allowed == origin {
 						w.Header().Set("Access-Control-Allow-Origin", origin)
 						w.Header().Set("Vary", "Origin")
-						w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+						w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 						w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 						break
 					}
