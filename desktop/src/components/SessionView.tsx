@@ -60,11 +60,13 @@ export function SessionView() {
         </div>
       </div>
 
+      <PromptBar view={view} />
+
       {bottomOpen && (
         <>
           <Resizer
             axis="y"
-            sign={1}
+            sign={-1}
             title={t("terminal.resize")}
             getValue={() => useStore.getState().workspace.bottomHeight}
             onChange={(v) => setWorkspaceSize("bottomHeight", v)}
@@ -72,8 +74,6 @@ export function SessionView() {
           <BottomTerminal view={view} height={bottomHeight} />
         </>
       )}
-
-      <PromptBar view={view} />
     </main>
   );
 }
