@@ -2,6 +2,7 @@ package feishu_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/hwj123hwj/easyagent/internal/app"
 	"github.com/hwj123hwj/easyagent/internal/feishu"
@@ -13,7 +14,25 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+// The bridge can receive the final text before the core finishes file tracking
+// and its run receipt. Wait for that work before removing the temporary data.
+func waitForCoreRunCleanup(t *testing.T, core *server.Server) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		request := httptest.NewRequest(http.MethodGet, "/admin/deploy", nil)
+		request.Header.Set("Authorization", "Bearer test-key")
+		response := httptest.NewRecorder()
+		core.Handler().ServeHTTP(response, request)
+		var status struct {
+			Active int `json:"active"`
+		}
+		return response.Code == http.StatusOK && json.Unmarshal(response.Body.Bytes(), &status) == nil && status.Active == 0
+	}, 5*time.Second, 10*time.Millisecond)
+}
 
 // Exercise the actual outer HTTP mux through the bridge, not just a mock SSE
 // endpoint. Missing /chat/ routing used to silently produce an empty final card.
@@ -44,6 +63,7 @@ func TestStreamChatThroughCoreHandler(t *testing.T) {
 	defer application.Close()
 	core := server.New(application, nil)
 	core.SetAPIKey("test-key")
+	defer waitForCoreRunCleanup(t, core)
 	endpoint := httptest.NewServer(core.Handler())
 	defer endpoint.Close()
 	text, err := feishu.StreamChatForTest(context.Background(), endpoint.URL, "test-key", "在吗", endpoint.Client())
@@ -104,6 +124,7 @@ func TestCardReceivesProgressBeforeProviderCompletes(t *testing.T) {
 	defer application.Close()
 	core := server.New(application, nil)
 	core.SetAPIKey("test-key")
+	defer waitForCoreRunCleanup(t, core)
 	endpoint := httptest.NewServer(core.Handler())
 	defer endpoint.Close()
 	ctx, cancel := context.WithCancel(context.Background())

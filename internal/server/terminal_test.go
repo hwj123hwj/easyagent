@@ -102,8 +102,11 @@ func TestTerminalInteractiveDirectoryResizeInterruptAndCleanup(t *testing.T) {
 	require.NoError(t, conn.WriteJSON(terminalMessage{Type: "resize", Cols: 101, Rows: 31}))
 	send("stty size; printf '%s%s\\n' RESIZE _DONE\r")
 	require.Contains(t, until("RESIZE_DONE"), "31 101")
-	send("sleep 60\r")
+	send("PS1='EA_TEST_PROMPT> '; sh -c \"printf '%s%s\\n' SLEEP _STARTED; exec sleep 60\"\r")
+	until("SLEEP_STARTED")
 	send("\x03")
+	// Wait for the foreground job to exit: an interrupt flushes queued input.
+	until("EA_TEST_PROMPT> ")
 	send("printf '%s%s\\n' INTERRUPT _DONE\r")
 	until("INTERRUPT_DONE")
 	// PTY output is paced by render acknowledgements rather than dropped.
