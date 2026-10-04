@@ -3,7 +3,7 @@
 set -euo pipefail
 arch=${1:?Usage: check-desktop-release-build.sh arm64|x64}
 root=$(git rev-parse --show-toplevel)
-fixture=$(mktemp -d)
+fixture=$(python3 -c 'import tempfile; print(tempfile.mkdtemp(prefix="easyagent-release-fixture.", suffix=".noindex"))')
 trap 'rm -rf "$fixture"' EXIT
 git clone --quiet --no-local "$root" "$fixture/repo"
 cd "$fixture/repo"

@@ -57,9 +57,13 @@ scripts/build-desktop.sh arm64
 # 或 scripts/build-desktop.sh x64
 ```
 
-脚本使用独立 `desktop/.bundle` 构建 Go 核心、工作流 bundle 与许可证，下载并核验官方便携 Node.js，随后检查 TypeScript、测试并打包。不会替换已有 CLI 或 8080 服务。输出在 `desktop/release/版本/架构`；包版本来自 `desktop/package.json`，本地打包不自动发布 GitHub Release。
+脚本使用独立 `desktop/.bundle` 构建 Go 核心、工作流 bundle 与许可证，下载并核验官方便携 Node.js，随后检查 TypeScript、测试并打包。不会替换已有 CLI 或 8080 服务。输出在 `desktop/release.noindex/版本/架构`；包版本来自 `desktop/package.json`，本地打包不自动发布 GitHub Release。
 
-发布构建使用 `scripts/build-desktop.sh arm64 v0.3.0`（或 `x64`），只接受版本匹配的附注 tag、已合入 main 的干净源码；完成后只读挂载 DMG，验证包内核心、运行时、许可证与来源提交。桌面更新提示选择正式版；`v0.3.0` 包含两种 Mac 架构的安装包，历史 RC 仍需手动下载。
+macOS 测试包与安装包的临时挂载放在 `.noindex` 目录，并在检查结束后撤销应用及 Helper 注册，避免旧包反复出现在应用搜索中。原生 GUI 验收或 `electron:dev` 结束后先退出进程，再执行 `python3 scripts/unregister-desktop-apps.py <测试应用路径>`；开发运行时路径为 `desktop/node_modules/electron/dist/Electron.app`。日常安装仅保留 `/Applications/EasyAgent.app` 一份，不把多个测试构建作为启动入口。清理旧副本时保留用户数据及正在运行的应用。
+
+发布构建使用 `scripts/build-desktop.sh arm64 v0.3.1`（或 `x64`），只接受版本匹配的附注 tag、已合入 main 的干净源码；完成后只读挂载 DMG，验证包内核心、运行时、许可证与来源提交。桌面更新提示选择正式版；`v0.3.0` 包含两种 Mac 架构的安装包，历史 RC 仍需手动下载。
+
+更新检查优先查询 GitHub Releases API；遇到匿名 API 限流或网络失败时，使用 GitHub 正式发布的 `release.json` 作为备用源，验证版本、提交及资产摘要格式，再选择本机架构的 DMG。并发检查合并，成功结果缓存一分钟，限流期间遵循服务端重试时间。两条路径都不可用时显示友好提示和“查看发布页”入口，不把查询失败当成已是最新版本。此机制只提示并打开下载地址，不自动安装或验证本地 DMG 下载内容；旧 RC 的内置检查代码须手动升级一次才能获得修复。
 
 当前打包面向 macOS，使用完整的 ad hoc 测试签名并在安装包内校验，未配置 Developer ID 签名与公证。桌面更新提示只匹配架构与桌面 DMG 资产，不把 Go CLI 的 Release 当成桌面安装包。当前正式版本仍使用 ad hoc 签名；Developer ID 签名与 Apple 公证尚未完成，安装说明须保留这一限制。
 

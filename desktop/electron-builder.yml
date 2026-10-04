@@ -9,7 +9,7 @@ publish:
   repo: easyagent
 
 directories:
-  output: release
+  output: release.noindex
   buildResources: build
 
 # Files to include in the app

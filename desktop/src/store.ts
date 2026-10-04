@@ -739,6 +739,8 @@ export const useStore = create<StoreState>((set, get) => ({
 
   update: null,
   checkUpdate: async () => {
+    if (get().update?.phase === "checking") return;
+    set({ update: { supported: true, phase: "checking", currentVersion: __APP_VERSION__ } });
     try {
       const info = await window.piAPI?.checkForUpdate();
       if (info) {
@@ -765,7 +767,9 @@ export const useStore = create<StoreState>((set, get) => ({
         update: {
           supported: true,
           phase: "error",
-          error: error instanceof Error ? error.message : "检查桌面更新失败",
+          error: error instanceof Error
+            ? error.message.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/, "")
+            : "检查桌面更新失败",
           currentVersion: __APP_VERSION__,
         },
       });

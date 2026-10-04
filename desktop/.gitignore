@@ -1,5 +1,6 @@
 dist/
 release/
+release.noindex/
 node_modules/
 
 .test-output/

@@ -13,7 +13,7 @@ esac
 [[ $(uname -s) == Darwin ]] || { echo 'Installer inspection requires macOS' >&2; exit 1; }
 VERSION=$(node -p 'require("./desktop/package.json").version')
 TAG=${2:-}
-OUTPUT=${3:-"$PROJECT_ROOT/desktop/release/$VERSION/$ARCH"}
+OUTPUT=${3:-"$PROJECT_ROOT/desktop/release.noindex/$VERSION/$ARCH"}
 REVISION=$(git rev-parse HEAD)
 if [[ -n "$TAG" ]]; then
   [[ "$TAG" == "v$VERSION" ]] || { echo 'Release tag must match desktop package version' >&2; exit 1; }
@@ -23,13 +23,16 @@ fi
 DMG="$OUTPUT/EasyAgent-$VERSION-$ARCH.dmg"
 [[ -f "$DMG" && ! -L "$DMG" && -s "$DMG" ]] || { echo "Missing installer: $DMG" >&2; exit 1; }
 hdiutil verify "$DMG"
-STAGE=$(mktemp -d "${TMPDIR:-/tmp}/easyagent-installer-check.XXXXXX")
+STAGE=$(python3 -c 'import tempfile; print(tempfile.mkdtemp(prefix="easyagent-installer-check.", suffix=".noindex"))')
 MOUNTED=0
 cleanup() {
+  local status=0
   if [[ "$MOUNTED" == 1 ]]; then
-    hdiutil detach "$STAGE/mount" >/dev/null || return
+    python3 "$SCRIPT_DIR/unregister-desktop-apps.py" "$STAGE/mount/EasyAgent.app" || status=$?
+    hdiutil detach "$STAGE/mount" >/dev/null || return 1
   fi
   rm -rf "$STAGE"
+  return "$status"
 }
 trap cleanup EXIT
 mkdir "$STAGE/mount"
