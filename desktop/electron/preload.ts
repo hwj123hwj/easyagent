@@ -29,6 +29,14 @@ contextBridge.exposeInMainWorld("piAPI", {
   exportFile: (session: string, path: string, profile: string) => call("export-file", session, path, profile),
   revealInFolder: (path: string) => call("reveal-in-folder", path),
   openInTerminal: (dir: string) => call("open-in-terminal", dir),
+  terminalOpen: (id: string, session: string, profile: string, cols: number, rows: number) => call("terminal-open", id, session, profile, cols, rows),
+  terminalSend: (id: string, message: object) => call("terminal-send", id, message),
+  terminalClose: (id: string) => call("terminal-close", id),
+  onTerminalEvent: (handler: (value: any) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown) => handler(value);
+    ipcRenderer.on("terminal-event", listener);
+    return () => ipcRenderer.removeListener("terminal-event", listener);
+  },
   openExternal: (url: string) => call("open-external", url),
   uploadAudio: (data: string, mimeType: string, filename: string) =>
     call("upload-audio", data, mimeType, filename),

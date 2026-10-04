@@ -38,18 +38,20 @@ func (s *Server) SetVersion(v string) {
 // Server provides HTTP REST + SSE endpoints for the agent.
 // It routes requests to AgentSessions via the App's SessionRegistry.
 type Server struct {
-	activity      activityGate
-	runs          *runRegistry
-	queueMu       sync.Mutex
-	queues        map[string]*messageQueue
-	ctx           context.Context
-	cancel        context.CancelFunc
-	app           *app.App
-	slashCmds     *slashcmd.Registry
-	externalTools []agent.ExternalToolDef
-	toolMu        sync.Mutex
-	extraRoutes   *http.ServeMux // optional extra routes (e.g. music audio proxy)
-	apiKey        string         // if non-empty, requires Bearer token auth on all endpoints
+	activity        activityGate
+	runs            *runRegistry
+	queueMu         sync.Mutex
+	queues          map[string]*messageQueue
+	ctx             context.Context
+	cancel          context.CancelFunc
+	app             *app.App
+	slashCmds       *slashcmd.Registry
+	externalTools   []agent.ExternalToolDef
+	toolMu          sync.Mutex
+	extraRoutes     *http.ServeMux // optional extra routes (e.g. music audio proxy)
+	apiKey          string         // if non-empty, requires Bearer token auth on all endpoints
+	terminalEnabled bool
+	terminalSlots   chan struct{}
 
 	wfMu      sync.Mutex
 	wfReg     *workflow.Registry
@@ -135,6 +137,7 @@ type ErrorResponse struct {
 func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	srv := &Server{app: application, slashCmds: slashCmds, ctx: ctx, cancel: cancel, runs: newRunRegistry(),
+		terminalEnabled: os.Getenv("EA_ENABLE_TERMINAL") == "1", terminalSlots: make(chan struct{}, 8),
 		allowedOrigins: envAllowedOrigins(), allowNoAuth: envAllowNoAuth()}
 	srv.restoreRunReceipts()
 
@@ -233,6 +236,7 @@ func (s *Server) Handler() http.Handler {
 	// Top-level mux: combines REST API + Web UI + WebSocket
 	topMux := http.NewServeMux()
 	topMux.Handle("GET /ws", wsHandler)
+	topMux.Handle("GET /terminal", http.HandlerFunc(s.handleTerminal))
 
 	// Register REST API routes (these take precedence over "/" catch-all)
 	topMux.Handle("/health", restHandler)

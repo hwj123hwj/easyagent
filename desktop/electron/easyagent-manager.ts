@@ -71,6 +71,7 @@ export class EasyAgentManager {
         EA_SERVER_API_KEY: this.token,
         EA_ALLOW_NO_AUTH: "0",
         EA_ALLOWED_ORIGINS: "",
+        EA_ENABLE_TERMINAL: "1",
         ...(app.isPackaged
           ? {
               PATH:

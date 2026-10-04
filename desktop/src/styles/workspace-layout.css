@@ -152,12 +152,14 @@
   flex-shrink: 0;
 }
 .connection-sidebar-toggle,
+.connection-terminal,
 .connection-workbench {
   width: 30px;
   height: 30px;
   border-radius: 6px;
 }
-.connection-workbench.active {
+.connection-workbench.active,
+.connection-terminal.active {
   color: var(--accent);
   background: var(--accent-weak);
 }

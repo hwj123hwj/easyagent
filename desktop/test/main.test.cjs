@@ -10,12 +10,14 @@ function fixture(options = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "easyagent-main-provider-"));
   const handlers = new Map(),
     requests = [],
+    terminalEvents = [],
+    terminalSockets = [],
     dockIcons = [],
     events = {};
   const frame = {},
     contents = {
       mainFrame: frame,
-      send() {},
+      send(channel, value) { if (channel === "terminal-event") terminalEvents.push(value); },
       setWindowOpenHandler() {},
       on() {},
       getURL: () => "http://localhost:5173",
@@ -156,6 +158,12 @@ function fixture(options = {}) {
     },
     "./update-checker": { checkForUpdate: async () => null },
   };
+  if (options.terminals) fakes.ws = class extends EventEmitter {
+    static OPEN = 1;
+    constructor(url, options) { super(); this.url = url; this.options = options; this.sent = []; this.readyState = 1; terminalSockets.push(this); }
+    send(data) { this.sent.push(data); }
+    close() { this.readyState = 3; this.emit("close"); }
+  };
   vm.runInNewContext(
     fs.readFileSync(
       path.join(__dirname, "../.test-output/electron/main.js"),
@@ -169,6 +177,7 @@ function fixture(options = {}) {
       process: { ...process, platform: options.platform || process.platform },
       Buffer,
       URL,
+      URLSearchParams,
       FormData,
       Blob,
       AbortSignal,
@@ -181,6 +190,8 @@ function fixture(options = {}) {
   );
   return {
     handlers,
+    terminalEvents,
+    terminalSockets,
     exported:()=>fs.readFileSync(path.join(directory,"exported.md"),"utf8"),
     requests,
     dockIcons,
@@ -399,4 +410,35 @@ test("native export uses the selected authenticated host and cancellation perfor
 test("session preference PATCH is allowed through authenticated native transport",async t=>{
  const f=fixture();t.after(f.cleanup);await f.ready();await f.handlers.get("agent-request")(f.event,"PATCH","/sessions/s",{title:"renamed"});
  assert.equal(f.requests[0].options.method,"PATCH");assert.equal(JSON.parse(f.requests[0].options.body).title,"renamed");
+});
+
+test("interactive terminal uses the selected authenticated host and never sends its key to renderer", async (t) => {
+  const f = fixture({ terminals: true }); t.after(f.cleanup); await f.ready();
+  await f.handlers.get("terminal-open")(f.event, "terminal-1", "session/project", "remote", 90, 20);
+  const socket = f.terminalSockets[0];
+  assert.equal(socket.url.host, "first.example");
+  assert.equal(socket.url.pathname, "/terminal");
+  assert.equal(socket.url.searchParams.get("session_id"), "session/project");
+  assert.equal(socket.url.searchParams.has("token"), false);
+  assert.equal(socket.options.headers.Authorization, "Bearer private-api-token");
+  socket.emit("open"); socket.emit("message", Buffer.from("中文\x1b[31m"), true);
+  assert.equal(Buffer.from(f.terminalEvents[1].data, "base64").toString(), "中文\x1b[31m");
+  assert.equal(JSON.stringify(f.terminalEvents).includes("private-api-token"), false);
+  await f.handlers.get("terminal-send")(f.event, "terminal-1", { type: "input", data: "pwd\r" });
+  assert.deepEqual(JSON.parse(socket.sent[0]), { type: "input", data: "pwd\r" });
+  await f.handlers.get("profiles-select")(f.event, "other");
+  assert.equal(socket.readyState, 3);
+  await f.handlers.get("terminal-send")(f.event, "terminal-1", { type: "input", data: "old-host" });
+  assert.equal(socket.sent.length, 1);
+  await assert.rejects(f.handlers.get("terminal-open")(f.event, "terminal-2", "session", "wrong", 80, 24), /主机已切换/);
+});
+
+test("closing a terminal while the endpoint is resolving does not start an orphan shell", async (t) => {
+  const f = fixture({ terminals: true, local: true }); t.after(f.cleanup); await f.ready();
+  let release;
+  f.manager().start = () => new Promise((resolve) => { release = resolve; });
+  const pending = f.handlers.get("terminal-open")(f.event, "pending", "session", "remote", 80, 24);
+  await f.handlers.get("terminal-close")(f.event, "pending");
+  release({ url: "http://127.0.0.1:9999" }); await pending;
+  assert.equal(f.terminalSockets.length, 0);
 });

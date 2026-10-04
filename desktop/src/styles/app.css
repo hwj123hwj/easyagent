@@ -5057,6 +5057,12 @@ body.resizing .resizer {
   border-top: 1px solid var(--border);
   overflow: hidden;
 }
+.bottom-terminal[hidden] { display: none; }
+.interactive-terminal { flex: 1; min-height: 0; padding: 8px 12px; overflow: hidden; }
+.interactive-terminal .xterm { height: 100%; }
+.terminal-cwd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 10px; }
+.bottom-terminal-head .grow { flex: 1; }
+.terminal-error { padding: 8px 12px; color: var(--red); }
 .bottom-terminal-head {
   display: flex;
   align-items: center;
