@@ -47,6 +47,13 @@ export function ConnectionBar() {
           重新连接
         </button>
       )}
+      {!settings && window.piAPI && <button
+        className={"icon-btn connection-terminal " + (workspace.bottomOpen ? "active" : "")}
+        aria-label={workspace.bottomOpen ? "收起终端" : "打开终端"}
+        aria-pressed={workspace.bottomOpen}
+        title={workspace.bottomOpen ? "收起终端" : "打开终端"}
+        onClick={() => useStore.getState().toggleWorkspaceBottom()}
+      ><Icon name="terminal" size={17} /></button>}
       {!settings && (
         <button
           className={"icon-btn connection-workbench " + (workspace.rightOpen ? "active" : "")}
@@ -58,13 +65,12 @@ export function ConnectionBar() {
           <Icon name="panel-right" size={17} />
         </button>
       )}
-      {!settings && <button
-        className="btn connection-settings"
+      {!settings && !workspace.sidebarOpen && <button
+        className="icon-btn connection-settings"
         aria-label="设置"
         onClick={() => useStore.getState().openSettings(true)}
       >
         <Icon name="settings" size={15} />
-        <span>设置</span>
       </button>}
       {error && (
         <div className="connection-notice" role="alert">

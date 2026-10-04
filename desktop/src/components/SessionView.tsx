@@ -3,7 +3,6 @@ import { useStore, type SessionView as SV, type ViewDensity } from "../store";
 import { ChatPane } from "./panes/ChatPane";
 import { PromptBar } from "./PromptBar";
 import { Icon } from "./Icon";
-import { WorkspaceToggles } from "./workspace/WorkspaceToggles";
 import { useT } from "../i18n/useT";
 import { BottomTerminal } from "./workspace/BottomTerminal";
 import { Resizer } from "./workspace/Resizer";
@@ -63,7 +62,6 @@ export function SessionView() {
       <PromptBar view={view} />
 
       {bottomOpen && (
-        <>
           <Resizer
             axis="y"
             sign={-1}
@@ -71,9 +69,8 @@ export function SessionView() {
             getValue={() => useStore.getState().workspace.bottomHeight}
             onChange={(v) => setWorkspaceSize("bottomHeight", v)}
           />
-          <BottomTerminal view={view} height={bottomHeight} />
-        </>
       )}
+      <BottomTerminal key={`${profile}:${view.meta.id}`} view={view} height={bottomHeight} open={bottomOpen} />
     </main>
   );
 }
@@ -168,10 +165,6 @@ function SessionActions({ view, cwd }: { view?: SV; cwd?: string }) {
             </div>
           </>
         )}
-        <div className="session-menu-section">
-          <span className="session-menu-label">布局</span>
-          <WorkspaceToggles variant="menu" />
-        </div>
       </div>
     </details>
   );

@@ -115,7 +115,7 @@ export function AgentSettings() {
         if (close?.getClientRects().length) close.focus();
         else
           document
-            .querySelector<HTMLButtonElement>(".connection-settings")
+            .querySelector<HTMLButtonElement>('.sidebar-foot [aria-label="设置"], .connection-settings')
             ?.focus();
       });
     },

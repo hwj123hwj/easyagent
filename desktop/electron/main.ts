@@ -29,6 +29,11 @@ let providerStore: ProviderStore;
 let providerApplying = false;
 let socket: WebSocket | null = null;
 let connectionRevision = 0;
+const terminals = new Map<string, WebSocket | null>();
+function closeTerminals() {
+  for (const terminal of terminals.values()) terminal?.close();
+  terminals.clear();
+}
 const manager = new EasyAgentManager(() => providerStore.environment());
 const publish = (value: unknown) =>
   mainWindow?.webContents.send("agent-event", value);
@@ -109,6 +114,7 @@ handle("profiles-save", (value) => {
   return profiles.list();
 });
 handle("profiles-select", (id: string) => {
+  closeTerminals();
   profiles.select(id);
   connectionRevision++;
   socket?.close();
@@ -116,6 +122,55 @@ handle("profiles-select", (id: string) => {
   return profiles.list();
 });
 handle("agent-request", request);
+handle("terminal-open", async (id: string, session: string, profile: string, cols: number, rows: number) => {
+  if (typeof id !== "string" || typeof session !== "string" || profiles.get().id !== profile)
+    throw new Error("主机已切换或终端参数无效");
+  terminals.get(id)?.close();
+  if (terminals.size >= 8 && !terminals.has(id)) throw new Error("打开的终端过多");
+  terminals.set(id, null);
+  const revision = connectionRevision;
+  let connection: { url: string; token: string };
+  try { connection = await endpoint(); }
+  catch (error) { terminals.delete(id); throw error; }
+  if (!terminals.has(id)) return;
+  if (revision !== connectionRevision || profiles.get().id !== profile) { terminals.delete(id); throw new Error("主机已切换"); }
+  const url = new URL("/terminal", connection.url);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.search = new URLSearchParams({ session_id: session, cols: String(cols), rows: String(rows) }).toString();
+  const terminal = new WebSocket(url, {
+    headers: { Authorization: `Bearer ${connection.token}` }, handshakeTimeout: 10000, maxPayload: 64 * 1024,
+  });
+  terminals.set(id, terminal);
+  const emit = (value: object) => mainWindow?.webContents.send("terminal-event", { id, ...value });
+  terminal.on("open", () => emit({ type: "ready" }));
+  terminal.on("message", (data, binary) => {
+    if (terminals.get(id) !== terminal) return;
+    if (binary) emit({ type: "output", data: Buffer.from(data as Buffer).toString("base64") });
+    else {
+      try { emit(JSON.parse(data.toString())); } catch { emit({ type: "error", message: "终端消息格式无效" }); }
+    }
+  });
+  terminal.on("unexpected-response", (_request, response) => {
+    emit({ type: "error", message: response.statusCode === 403
+      ? "此主机尚未启用交互式终端（EA_ENABLE_TERMINAL=1）"
+      : response.statusCode === 404 ? "此主机的核心版本不支持交互式终端，请更新核心" : `终端连接失败（HTTP ${response.statusCode}）` });
+    response.resume();
+    terminal.close();
+  });
+  terminal.on("error", () => emit({ type: "error", message: "终端连接失败，请检查主机连接" }));
+  terminal.on("close", () => {
+    if (terminals.get(id) === terminal) { terminals.delete(id); emit({ type: "closed" }); }
+  });
+});
+handle("terminal-send", (id: string, message: object) => {
+  const terminal = terminals.get(id);
+  if (terminal?.readyState === WebSocket.OPEN) terminal.send(JSON.stringify(message));
+});
+handle("terminal-close", (id: string) => {
+  const terminal = terminals.get(id);
+  terminals.delete(id);
+  terminal?.close();
+});
 handle(
   "upload-audio",
   async (data: string, mimeType: string, filename: string) => {
@@ -468,6 +523,7 @@ async function createWindow() {
   else
     await mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   mainWindow.on("closed", () => {
+    closeTerminals();
     mainWindow = null;
     socket?.close();
     socket = null;
@@ -499,6 +555,7 @@ app.on("before-quit", (event) => {
   if (quitting) return;
   event.preventDefault();
   quitting = true;
+  closeTerminals();
   socket?.close();
   void manager.stop().finally(() => app.quit());
 });

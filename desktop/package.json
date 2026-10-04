@@ -29,6 +29,8 @@
     "@capacitor/splash-screen": "^7.0.0",
     "@capacitor/status-bar": "^7.0.0",
     "@types/semver": "^7.7.1",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "fuzzysort": "^3.1.0",
     "highlight.js": "^11.11.1",
     "mermaid": "^11.15.0",

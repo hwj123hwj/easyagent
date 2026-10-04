@@ -53,6 +53,10 @@ interface PiAPI {
   exportFile: (session: string, path: string, profile: string) => Promise<void>;
   revealInFolder: (path: string) => Promise<void>;
   openInTerminal: (dir: string) => Promise<void>;
+  terminalOpen: (id: string, session: string, profile: string, cols: number, rows: number) => Promise<void>;
+  terminalSend: (id: string, message: object) => Promise<void>;
+  terminalClose: (id: string) => Promise<void>;
+  onTerminalEvent: (handler: (value: { id: string; type: string; data?: string; message?: string }) => void) => () => void;
   openExternal: (url: string) => Promise<void>;
 }
 
