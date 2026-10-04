@@ -26,7 +26,7 @@ if [[ -n "$TAG" ]]; then
   [[ $(node -p process.arch) == "$ARCH" ]] || { echo 'Release installers must be built and verified on their native architecture' >&2; exit 1; }
   python3 scripts/release.py validate "$TAG"
 fi
-OUTPUT="$PROJECT_ROOT/desktop/release/$VERSION/$ARCH"
+OUTPUT="$PROJECT_ROOT/desktop/release.noindex/$VERSION/$ARCH"
 mkdir -p "$BUNDLE/licenses"
 CGO_ENABLED=0 GOOS=darwin GOARCH="$GO_ARCH" go build -trimpath \
   -ldflags "-s -w -X main.version=v$VERSION" -o "$BUNDLE/easyagent" ./cmd/easyagent
@@ -36,7 +36,15 @@ cp workflow-runtime/vendor/ZCODE-LICENSE workflow-runtime/vendor/ZCODE-NOTICE.md
   workflow-runtime/vendor/ZCODE-THIRD-PARTY-NOTICES.md workflow-runtime/vendor/SOURCE.md "$BUNDLE/licenses/"
 # Homebrew node links local dylibs; verify an official portable distribution.
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/easyagent-desktop-node.XXXXXX")
-trap 'rm -rf "$STAGE"' EXIT
+cleanup() {
+  local status=0
+  python3 "$SCRIPT_DIR/unregister-desktop-apps.py" \
+    "$OUTPUT"/*/EasyAgent.app \
+    "$PROJECT_ROOT/desktop/node_modules/electron/dist/Electron.app" || status=$?
+  rm -rf "$STAGE"
+  return "$status"
+}
+trap cleanup EXIT
 curl --fail --silent --show-error --location --proto '=https' https://nodejs.org/dist/index.json -o "$STAGE/index.json"
 NODE_VERSION=${EA_DESKTOP_NODE_VERSION:-$(node -e 'const rows=require(process.argv[1]);const v=rows.find(r=>r.lts&&Number(r.version.slice(1).split(".")[0])>=22);if(!v)throw Error("No supported Node LTS found");process.stdout.write(v.version)' "$STAGE/index.json")}
 [[ "$NODE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid Node version' >&2; exit 1; }

@@ -326,6 +326,7 @@ export const en = {
   'update.installingWin': 'Quitting to run the installer…',
   'update.failed': 'Update failed',
   'update.retry': 'Retry',
+  'update.releasePage': 'View releases',
   'update.minimize': 'Minimize (keeps downloading in the background)',
   'update.expand': 'Show update progress',
   // settings → Software update

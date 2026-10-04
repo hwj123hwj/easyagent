@@ -53,10 +53,18 @@ export function UpdateBanner() {
           </>
         )}
         {update.phase === 'error' && (
-          <button className="btn primary sm" onClick={() => void download()}>
-            <Icon name="refresh" size={13} />
-            {t('update.retry')}
-          </button>
+          <>
+            <button
+              className="btn ghost sm"
+              onClick={() => void window.piAPI?.openDownloadPage('https://github.com/hwj123hwj/easyagent/releases/latest')}
+            >
+              {t('update.releasePage')}
+            </button>
+            <button className="btn primary sm" onClick={() => void download()}>
+              <Icon name="refresh" size={13} />
+              {t('update.retry')}
+            </button>
+          </>
         )}
       </div>
     </div>

@@ -5,6 +5,27 @@ global.sessionStorage = { getItem: () => null, setItem: () => {} };
 global.window = {};
 const { useStore, wsService } = require("../.test-output/src/store.js");
 const { emptyProjection } = require("../.test-output/src/client/reducer.js");
+test("update check shows pending state, prevents duplicate IPC and cleans Electron error prefixes", async () => {
+  const before = useStore.getState().update, api = global.window.piAPI;
+  global.__APP_VERSION__ = '0.3.0';
+  let reject, calls = 0;
+  global.window.piAPI = { checkForUpdate: () => { calls++; return new Promise((_resolve, fail) => { reject = fail; }); } };
+  try {
+    useStore.setState({ update: null });
+    const pending = useStore.getState().checkUpdate();
+    assert.equal(useStore.getState().update.phase, 'checking');
+    await useStore.getState().checkUpdate();
+    assert.equal(calls, 1);
+    reject(Error("Error invoking remote method 'check-for-update': Error: 暂时无法连接更新服务"));
+    await pending;
+    assert.equal(useStore.getState().update.phase, 'error');
+    assert.equal(useStore.getState().update.error, '暂时无法连接更新服务');
+  } finally {
+    global.window.piAPI = api;
+    delete global.__APP_VERSION__;
+    useStore.setState({ update: before });
+  }
+});
 function view() {
   return {
     ...emptyProjection(),

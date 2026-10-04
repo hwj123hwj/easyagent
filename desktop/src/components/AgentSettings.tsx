@@ -299,9 +299,10 @@ export function AgentSettings() {
                   {window.piAPI && (
                     <button
                       className="btn"
+                      disabled={update?.phase === "checking"}
                       onClick={() => void useStore.getState().checkUpdate()}
                     >
-                      检查更新
+                      {update?.phase === "checking" ? "正在检查…" : "检查更新"}
                     </button>
                   )}
                 </div>

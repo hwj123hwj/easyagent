@@ -97,7 +97,7 @@ jobs:
         run: |
           test "$(node -p process.arch)" = "$ARCH"
           bash scripts/build-desktop.sh "$ARCH" "$TAG"
-          printf 'dmg=desktop/release/%s/%s/EasyAgent-%s-%s.dmg\n' "${TAG#v}" "$ARCH" "${TAG#v}" "$ARCH" >> "$GITHUB_OUTPUT"
+          printf 'dmg=desktop/release.noindex/%s/%s/EasyAgent-%s-%s.dmg\n' "${TAG#v}" "$ARCH" "${TAG#v}" "$ARCH" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: release-desktop-${{ matrix.arch }}
