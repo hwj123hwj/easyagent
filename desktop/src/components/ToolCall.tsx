@@ -278,6 +278,7 @@ export interface ToolCallProps {
   terminalOutput?: string;
   rawInput?: Record<string, unknown>;
   defaultOpen: boolean;
+  forceOpen?: boolean;
   details?: Record<string, unknown>;
   onOpenFile?: (path: string) => void;
 }
@@ -291,10 +292,12 @@ export function ToolCall({
   terminalOutput,
   rawInput,
   defaultOpen,
+  forceOpen,
   details,
   onOpenFile,
 }: ToolCallProps) {
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => { if (forceOpen) setOpen(true); }, [forceOpen]);
   const [copyStatus, setCopyStatus] = useState("");
   useEffect(() => {
     if (status === "failed") setOpen(true);

@@ -109,6 +109,7 @@ func (s *JSONLStorage) load() error {
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
 		var entry Entry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {

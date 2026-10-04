@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("piAPI", {
   checkForUpdate: () => call("check-for-update"),
   openDownloadPage: (url: string) => call("open-download-page", url),
   pickFolder: () => call("pick-folder"),
+  exportFile: (session: string, path: string, profile: string) => call("export-file", session, path, profile),
   revealInFolder: (path: string) => call("reveal-in-folder", path),
   openInTerminal: (dir: string) => call("open-in-terminal", dir),
   openExternal: (url: string) => call("open-external", url),

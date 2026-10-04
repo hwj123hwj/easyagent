@@ -1,3 +1,8 @@
+import { sanitizeInputDrafts } from "./client/input-drafts";
+import {
+  readWorkspaceFiles,
+  saveWorkspaceFiles,
+} from "./client/workspace-files";
 /**
  * store.ts — Single source of truth for the easyagent desktop renderer.
  *
@@ -22,6 +27,9 @@ import type {
   ConnectionProfile,
   Envelope,
   RunProjection,
+  MessageQueue,
+  DraftInputs,
+  PromptInputs,
 } from "./client/protocol";
 import { isActiveRun } from "./client/protocol";
 import { timestampMillis } from "./client/timestamps";
@@ -140,7 +148,7 @@ export async function apiRequest<T>(
   const res = await fetch(`${baseUrl}${path}`, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `HTTP ${res.status}`);
+    throw new Error(`HTTP ${res.status}: ${err.error || res.statusText}`);
   }
   return res.json();
 }
@@ -191,6 +199,7 @@ export const WORKSPACE_SIZE_LIMITS = {
 } as const;
 
 export interface SessionView extends RunProjection {
+  queue?: MessageQueue;
   meta: SessionMeta;
   transcript: ChatItem[];
   plan: PlanEntry[];
@@ -204,7 +213,14 @@ export interface SessionView extends RunProjection {
   commandOutput?: string;
 }
 
-export type SettingsTab = "general" | "appearance" | "connections" | "models" | "mcp" | "feishu";
+export type SettingsTab =
+  | "general"
+  | "appearance"
+  | "connections"
+  | "models"
+  | "mcp"
+  | "feishu"
+  | "capabilities";
 
 interface StoreState {
   ready: boolean;
@@ -217,6 +233,8 @@ interface StoreState {
   settingsTab: SettingsTab;
   loadingSession?: string;
   drafts: Record<string, string>;
+  draftInputs: Record<string, DraftInputs>;
+  setDraftInputs: (id: string, value: DraftInputs, profileId?: string) => void;
   pending: Record<string, boolean>;
   setDraft: (id: string, text: string) => void;
   setCommandOutput: (id: string, output: string, profileId?: string) => void;
@@ -274,6 +292,17 @@ interface StoreState {
 
   init: () => Promise<void>;
   refreshSessions: () => Promise<void>;
+  updateSession: (
+    id: string,
+    patch: { title?: string; pinned?: boolean; archived?: boolean },
+  ) => Promise<void>;
+  changeQueue: (
+    id: string,
+    action: string,
+    messageId?: string,
+    prompt?: string,
+    inputs?: PromptInputs,
+  ) => Promise<void>;
   setActive: (id: string) => Promise<void>;
   createSession: (opts?: {
     cwd?: string;
@@ -281,7 +310,11 @@ interface StoreState {
     application?: string;
   }) => Promise<string>;
   deleteSession: (id: string) => Promise<void>;
-  sendPrompt: (id: string, text: string) => Promise<void>;
+  sendPrompt: (
+    id: string,
+    text: string,
+    inputs?: PromptInputs,
+  ) => Promise<void>;
   retryRun: (id: string) => Promise<void>;
   cancel: (id: string) => Promise<void>;
   setModel: (id: string, modelId: string) => Promise<void>;
@@ -325,11 +358,14 @@ let cachedCurrentModel: string | undefined;
 let initialized = false;
 let connectionEpoch = 0;
 let storedDrafts: Record<string, Record<string, string>> = {};
+let storedInputs: Record<string, Record<string, DraftInputs>> = {};
 const pendingRequests = new Map<string, { id: string; text: string }>();
 
 const newId = (() => {
   let n = 0;
-  return () => `r${Date.now().toString(36)}-${(n++).toString(36)}`;
+  return () =>
+    globalThis.crypto?.randomUUID?.() ||
+    `r${Date.now().toString(36)}-${(n++).toString(36)}`;
 })();
 
 function emptyView(meta: SessionMeta): SessionView {
@@ -381,9 +417,13 @@ function loadWorkspaceUi(): WorkspaceUiState {
     const raw = localStorage.getItem(WORKSPACE_KEY);
     if (raw) {
       const p = JSON.parse(raw) as Partial<WorkspaceUiState>;
-      const rightView = p.rightView &&
-        ["review", "files", "plan", "tasks", "kb", "profile"].includes(p.rightView)
-        ? p.rightView : null;
+      const rightView =
+        p.rightView &&
+        ["review", "files", "plan", "tasks", "kb", "profile"].includes(
+          p.rightView,
+        )
+          ? p.rightView
+          : null;
       return {
         ...base,
         sidebarOpen: p.sidebarOpen ?? true,
@@ -431,6 +471,21 @@ export const useStore = create<StoreState>((set, get) => ({
   settingsOpen: false,
   settingsTab: "general",
   drafts: {},
+  draftInputs: {},
+  setDraftInputs: (id, value, profileId = get().selectedProfile) => {
+    if (profileId === get().selectedProfile)
+      set((state) => ({ draftInputs: { ...state.draftInputs, [id]: value } }));
+    storedInputs[profileId] = {
+      ...(storedInputs[profileId] || {}),
+      [id]: value,
+    };
+    try {
+      sessionStorage.setItem(
+        "easyagent.desktop.inputs.v1",
+        JSON.stringify(storedInputs),
+      );
+    } catch {}
+  },
   pending: {},
   setDraft: (id, text) => {
     set((s) => ({ drafts: { ...s.drafts, [id]: text } }));
@@ -445,7 +500,10 @@ export const useStore = create<StoreState>((set, get) => ({
     }
   },
   openSettings: (open = true, tab) =>
-    set((s) => ({ settingsOpen: open, settingsTab: open ? (tab ?? "general") : s.settingsTab })),
+    set((s) => ({
+      settingsOpen: open,
+      settingsTab: open ? (tab ?? "general") : s.settingsTab,
+    })),
   setCommandOutput: (id, output, profileId = get().selectedProfile) => {
     if (profileId !== get().selectedProfile) return;
     updateView(set, id, (view) => ({ ...view, commandOutput: output }));
@@ -473,7 +531,16 @@ export const useStore = create<StoreState>((set, get) => ({
   connectProfile: async (id, token) => {
     const epoch = ++connectionEpoch;
     get().resolvePathPicker(null);
+    const previousState = get();
+    saveWorkspaceFiles(
+      previousState.selectedProfile,
+      previousState.activeSessionId
+        ? previousState.sessions[previousState.activeSessionId]?.meta.cwd || ""
+        : "",
+      previousState.workspace,
+    );
     storedDrafts[get().selectedProfile] = get().drafts;
+    storedInputs[get().selectedProfile] = get().draftInputs;
     set({
       connected: false,
       connectionState: "connecting",
@@ -500,6 +567,7 @@ export const useStore = create<StoreState>((set, get) => ({
       cachedCurrentModel = undefined;
       set({
         drafts: storedDrafts[id] || {},
+        draftInputs: storedInputs[id] || {},
         pending: {},
         models: [],
         currentModel: undefined,
@@ -583,9 +651,17 @@ export const useStore = create<StoreState>((set, get) => ({
     try {
       const catalog = await fetchModels();
       if (epoch !== connectionEpoch) return;
-      cachedModels = (catalog.models || []).map((m) => ({ modelId: m.id, name: m.name || m.id }));
+      cachedModels = (catalog.models || []).map((m) => ({
+        modelId: m.id,
+        name: m.name || m.id,
+      }));
       cachedCurrentModel = catalog.current?.id;
-      set({ models: cachedModels, currentModel: cachedCurrentModel, modelSource: catalog.source, modelsNotice: catalog.discovery_error });
+      set({
+        models: cachedModels,
+        currentModel: cachedCurrentModel,
+        modelSource: catalog.source,
+        modelsNotice: catalog.discovery_error,
+      });
     } catch {
       if (epoch !== connectionEpoch) return;
       set({ modelsNotice: "模型列表暂不可用，可在设置中检查模型连接。" });
@@ -784,6 +860,11 @@ export const useStore = create<StoreState>((set, get) => ({
         rightView: "files" as RightView,
       };
       persistWorkspaceUi(workspace);
+      saveWorkspaceFiles(
+        s.selectedProfile,
+        s.activeSessionId ? s.sessions[s.activeSessionId]?.meta.cwd || "" : "",
+        workspace,
+      );
       return { workspace };
     });
   },
@@ -800,6 +881,11 @@ export const useStore = create<StoreState>((set, get) => ({
         activeFileTab,
       };
       persistWorkspaceUi(workspace);
+      saveWorkspaceFiles(
+        s.selectedProfile,
+        s.activeSessionId ? s.sessions[s.activeSessionId]?.meta.cwd || "" : "",
+        workspace,
+      );
       return { workspace };
     });
   },
@@ -807,6 +893,11 @@ export const useStore = create<StoreState>((set, get) => ({
     set((s) => {
       const workspace = { ...s.workspace, activeFileTab: path };
       persistWorkspaceUi(workspace);
+      saveWorkspaceFiles(
+        s.selectedProfile,
+        s.activeSessionId ? s.sessions[s.activeSessionId]?.meta.cwd || "" : "",
+        workspace,
+      );
       return { workspace };
     });
   },
@@ -833,7 +924,16 @@ export const useStore = create<StoreState>((set, get) => ({
             : projection.phase === "error"
               ? "error"
               : "idle";
-          sessions[id] = { ...v, ...projection, meta: { ...v.meta, status } };
+          const nextQueue =
+            message.queue && message.queue.revision >= (v.queue?.revision || 0)
+              ? message.queue
+              : v.queue;
+          sessions[id] = {
+            ...v,
+            ...projection,
+            queue: nextQueue,
+            meta: { ...v.meta, status },
+          };
         }
         return { sessions };
       });
@@ -919,6 +1019,12 @@ export const useStore = create<StoreState>((set, get) => ({
         }
       }
     } catch {}
+    try {
+      const saved = JSON.parse(
+        sessionStorage.getItem("easyagent.desktop.inputs.v1") || "{}",
+      );
+      storedInputs = sanitizeInputDrafts(saved);
+    } catch {}
     set({ ready: true });
     await get().connectProfile(id);
   },
@@ -943,9 +1049,9 @@ export const useStore = create<StoreState>((set, get) => ({
           // If existing title is the auto-generated fallback, prefer backend title
           const isFallback =
             !existingTitle || existingTitle.startsWith("Session ");
-          const title = isFallback
-            ? backendTitle || existingTitle || `Session ${sess.id.slice(-6)}`
-            : existingTitle;
+          const title =
+            backendTitle ||
+            (isFallback ? `Session ${sess.id.slice(-6)}` : existingTitle!);
           // Read application from backend, fallback to existing
           const application =
             sess.application || s.sessions[sess.id]?.meta.application;
@@ -956,6 +1062,8 @@ export const useStore = create<StoreState>((set, get) => ({
             status: "idle" as SessionRunStatus,
             model: s.sessions[sess.id]?.meta.model,
             application,
+            pinned: !!sess.pinned,
+            archived: !!sess.archived,
             availableModels: defaultModels(),
             createdAt: timestampMillis(sess.created_at),
             updatedAt: timestampMillis(sess.last_active),
@@ -970,6 +1078,8 @@ export const useStore = create<StoreState>((set, get) => ({
                 cwd,
                 title,
                 application,
+                pinned: !!sess.pinned,
+                archived: !!sess.archived,
                 updatedAt: timestampMillis(sess.last_active),
               },
             };
@@ -986,10 +1096,19 @@ export const useStore = create<StoreState>((set, get) => ({
     }
   },
 
+  updateSession: async (id, patch) => {
+    const epoch = connectionEpoch;
+    await apiRequest("PATCH", `/sessions/${encodeURIComponent(id)}`, patch);
+    if (epoch !== connectionEpoch) return;
+    updateView(set, id, (v) => ({ ...v, meta: { ...v.meta, ...patch } }));
+  },
+
   setActive: async (id) => {
     const epoch = connectionEpoch;
     set((s) => ({
-      activeSessionId: id, settingsOpen: false, loadingSession: id,
+      activeSessionId: id,
+      settingsOpen: false,
+      loadingSession: id,
       workspace: workspaceForSession(s, s.sessions[id]?.meta.cwd),
     }));
     try {
@@ -1002,6 +1121,7 @@ export const useStore = create<StoreState>((set, get) => ({
         const projection = reduceEnvelope(v, snapshot);
         return {
           ...projection,
+          queue: snapshot.queue || v.queue,
           meta: {
             ...v.meta,
             cwd: info.workspace || v.meta.cwd,
@@ -1087,24 +1207,42 @@ export const useStore = create<StoreState>((set, get) => ({
     });
   },
 
-  sendPrompt: async (id, text) => {
+  changeQueue: async (id, action, messageId, prompt, inputs) => {
+    const epoch = connectionEpoch;
+    const queue = await apiRequest<MessageQueue>(
+      "POST",
+      `/sessions/${encodeURIComponent(id)}/queue`,
+      { action, id: messageId, prompt, inputs },
+    );
+    if (epoch !== connectionEpoch) return;
+    updateView(set, id, (v) => ({
+      ...v,
+      queue: queue.revision >= (v.queue?.revision || 0) ? queue : v.queue,
+    }));
+  },
+
+  sendPrompt: async (id, text, inputs) => {
     if (get().pending[id]) throw new Error("正在等待服务接收消息");
     if (!get().connected) throw new Error("尚未连接到服务，草稿已保留");
-    if (isActiveRun(get().sessions[id]?.run))
-      throw new Error("当前任务仍在运行，请先停止或等待完成");
     const key = get().selectedProfile + ":" + id,
       epoch = connectionEpoch;
+    const identity = JSON.stringify({ text, inputs: inputs || {} });
     const requestId =
-      pendingRequests.get(key)?.text === text
+      pendingRequests.get(key)?.text === identity
         ? pendingRequests.get(key)!.id
         : newId();
-    pendingRequests.set(key, { id: requestId, text });
+    pendingRequests.set(key, { id: requestId, text: identity });
     set((s) => ({
       pending: { ...s.pending, [id]: true },
       connectionError: undefined,
     }));
     try {
-      const accepted = await wsService.prompt(id, text, requestId);
+      if (isActiveRun(get().sessions[id]?.run)) {
+        await get().changeQueue(id, "add", requestId, text, inputs);
+        pendingRequests.delete(key);
+        return;
+      }
+      const accepted = await wsService.prompt(id, text, requestId, inputs);
       if (accepted.state === "interrupted")
         throw new Error(
           "此任务因服务重启已中断；请检查已执行结果，再点击重新执行。",
@@ -1141,7 +1279,7 @@ export const useStore = create<StoreState>((set, get) => ({
       previous = pendingRequests.get(key);
     if (previous?.id === view.run.request_id) pendingRequests.delete(key);
     get().setDraft(id, prompt);
-    await get().sendPrompt(id, prompt);
+    await get().sendPrompt(id, prompt, view.run.inputs);
     if (get().drafts[id] === prompt) get().setDraft(id, "");
   },
   cancel: async (id) => {
@@ -1242,10 +1380,18 @@ type SetFn = (
 ) => void;
 
 function workspaceForSession(s: StoreState, cwd?: string): WorkspaceUiState {
-  const previousCwd = s.activeSessionId ? s.sessions[s.activeSessionId]?.meta.cwd : undefined;
-  return previousCwd === cwd
-    ? s.workspace
-    : { ...s.workspace, fileTabs: [], activeFileTab: undefined };
+  const previousCwd = s.activeSessionId
+    ? s.sessions[s.activeSessionId]?.meta.cwd
+    : undefined;
+  if (previousCwd === cwd) return s.workspace;
+  if (previousCwd)
+    saveWorkspaceFiles(s.selectedProfile, previousCwd, s.workspace);
+  const saved = readWorkspaceFiles(s.selectedProfile, cwd || "");
+  return {
+    ...s.workspace,
+    fileTabs: saved.fileTabs,
+    activeFileTab: saved.activeFileTab,
+  };
 }
 
 function updateView(

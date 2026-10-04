@@ -43,19 +43,22 @@ func (s *Server) newUpgrader() *websocket.Upgrader {
 
 // Messages carry both run identity and session-local event sequence.
 type wsClientMessage struct {
-	Type           string `json:"type"`
-	SessionID      string `json:"session_id"`
-	Prompt         string `json:"prompt,omitempty"`
-	RequestID      string `json:"request_id,omitempty"`
-	RunID          string `json:"run_id,omitempty"`
-	AfterSeq       uint64 `json:"after_seq,omitempty"`
-	ConfirmationID string `json:"confirmation_id,omitempty"`
-	Approved       bool   `json:"approved"`
-	Reason         string `json:"reason,omitempty"`
-	Model          string `json:"model,omitempty"`
-	Provider       string `json:"provider,omitempty"`
+	Inputs         promptInputs `json:"inputs,omitempty"`
+	Type           string       `json:"type"`
+	SessionID      string       `json:"session_id"`
+	Prompt         string       `json:"prompt,omitempty"`
+	RequestID      string       `json:"request_id,omitempty"`
+	RunID          string       `json:"run_id,omitempty"`
+	AfterSeq       uint64       `json:"after_seq,omitempty"`
+	ConfirmationID string       `json:"confirmation_id,omitempty"`
+	Approved       bool         `json:"approved"`
+	Reason         string       `json:"reason,omitempty"`
+	Model          string       `json:"model,omitempty"`
+	Provider       string       `json:"provider,omitempty"`
 }
 type wsServerMessage struct {
+	Prompt               string                 `json:"prompt,omitempty"`
+	Queue                *messageQueue          `json:"queue,omitempty"`
 	Type                 string                 `json:"type"`
 	SessionID            string                 `json:"session_id,omitempty"`
 	RunID                string                 `json:"run_id,omitempty"`
@@ -194,13 +197,13 @@ func (s *Server) writeWSError(ws *wsConn, msg wsClientMessage, err error) {
 }
 func (s *Server) handleWSPrompt(ws *wsConn, msg wsClientMessage) {
 	ws.legacy = msg.RequestID == ""
-	run, duplicate, err := s.startRun(msg.SessionID, msg.Prompt, msg.RequestID)
+	run, duplicate, err := s.startRun(msg.SessionID, msg.Prompt, msg.RequestID, msg.Inputs)
 	if err != nil {
 		s.writeWSError(ws, msg, err)
 		return
 	}
 	s.runs.mu.Lock()
-	ack := wsServerMessage{Type: "accepted", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Duplicate: duplicate}
+	ack := wsServerMessage{Type: "accepted", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Duplicate: duplicate, Prompt: displayRunPrompt(run)}
 	_ = ws.writeJSON(ack)
 	// Existing web/bridge clients keep receiving the original session/status/event messages.
 	_ = ws.writeJSON(wsServerMessage{Type: "session_id", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID})

@@ -10,10 +10,13 @@ import {
 import { useStore, type ChatItem, type SessionView } from "../../store";
 import { Markdown } from "../Markdown";
 import { ToolCall } from "../ToolCall";
+import { RunRecovery } from "../RunRecovery";
+import { RunResults } from "../RunResults";
 import { MusicPlayer } from "../MusicPlayer";
 import { Icon } from "../Icon";
 import { copyText } from "../../client/clipboard";
 import { isActiveRun } from "../../client/protocol";
+import { findConversation } from "../../client/conversation-search";
 const positions = new Map<string, { top: number; follow: boolean }>();
 type Group = {
   kind: "group";
@@ -22,9 +25,21 @@ type Group = {
 };
 type Row = ChatItem | Group;
 export function ChatPane({ view }: { view: SessionView }) {
+  const profile = useStore((s) => s.selectedProfile);
+  const positionKey = profile + "\0" + view.meta.cwd + "\0" + view.meta.id;
+  const [findOpen, setFindOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [matchIndex, setMatchIndex] = useState(0);
+  const findInput = useRef<HTMLInputElement>(null);
+  const matches = useMemo(
+    () => findConversation(view.transcript, query),
+    [view.transcript, query],
+  );
+  const match = matches[matchIndex % Math.max(1, matches.length)];
   const container = useRef<HTMLDivElement>(null),
     heights = useRef(new Map<string, number>()),
     follow = useRef(true),
+    jumpingToLatest = useRef(false),
     previous = useRef("");
   const [viewport, setViewport] = useState({ top: 0, height: 600 }),
     [version, setVersion] = useState(0),
@@ -54,6 +69,51 @@ export function ChatPane({ view }: { view: SessionView }) {
       );
     return result;
   }, [rows, version]);
+  useEffect(() => {
+    const onFind = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        if ((event.target as Element)?.closest(".files-panel")) return;
+        event.preventDefault();
+        setFindOpen(true);
+        requestAnimationFrame(() => {
+          findInput.current?.focus();
+          findInput.current?.select();
+        });
+      }
+    };
+    window.addEventListener("keydown", onFind);
+    return () => window.removeEventListener("keydown", onFind);
+  }, []);
+  useEffect(() => {
+    setQuery("");
+    setMatchIndex(0);
+  }, [view.meta.id]);
+  useLayoutEffect(() => {
+    if (!findOpen || !match || !container.current) return;
+    const index = rows.findIndex(
+      (row) =>
+        row.id === match.itemId ||
+        (row.kind === "group" &&
+          row.items.some((item) => item.id === match.itemId)),
+    );
+    if (index < 0) return;
+    follow.current = false;
+    container.current.scrollTop = Math.max(0, offsets[index] - 40);
+    setViewport({
+      top: container.current.scrollTop,
+      height: container.current.clientHeight,
+    });
+    setJump(true);
+    const frame = requestAnimationFrame(() => {
+      const item = Array.from(
+        container.current?.querySelectorAll<HTMLElement>(
+          "[data-conversation-item]",
+        ) || [],
+      ).find((el) => el.dataset.conversationItem === match.itemId);
+      item?.scrollIntoView({ block: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [findOpen, match?.itemId, match?.offset]);
   let start = 0;
   while (start < rows.length && offsets[start + 1] < viewport.top - 600)
     start++;
@@ -66,31 +126,38 @@ export function ChatPane({ view }: { view: SessionView }) {
   const onScroll = useCallback(() => {
     const el = container.current;
     if (!el) return;
-    follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    follow.current =
+      follow.current ||
+      jumpingToLatest.current ||
+      el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     setJump(!follow.current);
     setViewport({ top: el.scrollTop, height: el.clientHeight });
-    positions.set(view.meta.id, { top: el.scrollTop, follow: follow.current });
-  }, [view.meta.id]);
+    positions.set(positionKey, { top: el.scrollTop, follow: follow.current });
+  }, [positionKey]);
   useLayoutEffect(() => {
     const el = container.current;
     if (!el) return;
-    if (previous.current !== view.meta.id) {
-      const saved = positions.get(view.meta.id);
+    if (previous.current !== positionKey) {
+      jumpingToLatest.current = false;
+      const saved = positions.get(positionKey);
       follow.current = saved?.follow ?? true;
       el.scrollTop = saved?.top ?? el.scrollHeight;
-      previous.current = view.meta.id;
+      previous.current = positionKey;
     }
     if (follow.current) el.scrollTop = el.scrollHeight;
     setViewport({ top: el.scrollTop, height: el.clientHeight });
     setJump(!follow.current);
-  }, [view.meta.id, view.transcript, offsets]);
+  }, [positionKey, view.transcript, offsets]);
   useEffect(() => {
     const el = container.current;
     if (!el) return;
-    const observer = new ResizeObserver(() =>
-      setViewport((v) => ({ ...v, height: el.clientHeight })),
-    );
+    const observer = new ResizeObserver(() => {
+      if (follow.current) el.scrollTop = el.scrollHeight;
+      setViewport({ top: el.scrollTop, height: el.clientHeight });
+    });
     observer.observe(el);
+    // Result cards and expanded tools can resize independently of text deltas.
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
@@ -117,10 +184,91 @@ export function ChatPane({ view }: { view: SessionView }) {
   const loading = useStore((s) => s.loadingSession === view.meta.id);
   return (
     <div className="chat-viewport">
+      {findOpen && (
+        <section className="conversation-find" aria-label="查找当前会话">
+          <div>
+            <Icon name="search" size={14} />
+            <input
+              ref={findInput}
+              autoFocus
+              aria-label="查找会话正文和工具结果"
+              placeholder="查找正文和工具结果…"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setMatchIndex(0);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setFindOpen(false);
+                  container.current?.focus();
+                }
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  setMatchIndex(
+                    (index) =>
+                      (index + (event.shiftKey ? -1 : 1) + matches.length) %
+                      Math.max(matches.length, 1),
+                  );
+                }
+              }}
+            />
+            <span role="status">
+              {matches.length ? (matchIndex % matches.length) + 1 : 0} /{" "}
+              {matches.length}
+              {matches.length === 5000 && "+"}
+            </span>
+            <button
+              disabled={!matches.length}
+              aria-label="上一处匹配"
+              onClick={() =>
+                setMatchIndex(
+                  (index) => (index - 1 + matches.length) % matches.length,
+                )
+              }
+            >
+              ↑
+            </button>
+            <button
+              disabled={!matches.length}
+              aria-label="下一处匹配"
+              onClick={() =>
+                setMatchIndex((index) => (index + 1) % matches.length)
+              }
+            >
+              ↓
+            </button>
+            <button
+              aria-label="关闭会话查找"
+              onClick={() => setFindOpen(false)}
+            >
+              ×
+            </button>
+          </div>
+          {match && <p>{match.snippet}</p>}
+        </section>
+      )}
       <div
         className="pane-body personal-transcript-scroll"
         ref={container}
         onScroll={onScroll}
+        onWheel={(event) => {
+          if (event.deltaY < 0) follow.current = false;
+        }}
+        onTouchMove={() => {
+          follow.current = false;
+        }}
+        onPointerDown={(event) => {
+          const el = event.currentTarget;
+          // A scrollbar drag expresses reading intent; content clicks do not.
+          if (event.clientX >= el.getBoundingClientRect().right - 18)
+            follow.current = false;
+        }}
+        onKeyDown={(event) => {
+          if (["ArrowUp", "PageUp", "Home", "PageDown", "End"].includes(event.key))
+            follow.current = false;
+        }}
         tabIndex={0}
         aria-label="会话消息"
       >
@@ -168,12 +316,15 @@ export function ChatPane({ view }: { view: SessionView }) {
               measure={measure}
               cwd={view.meta.cwd}
               density={view.density}
+              foundItem={findOpen ? match?.itemId : undefined}
             />
           ))}
           <div
             style={{ height: offsets.at(-1)! - offsets[end] }}
             aria-hidden="true"
           />
+          <RunResults view={view} />
+          <RunRecovery view={view} />
           {isActiveRun(view.run) && (
             <div className="run-progress" role="status">
               <span className="connection-dot online" />
@@ -218,10 +369,24 @@ export function ChatPane({ view }: { view: SessionView }) {
           className="jump-latest"
           onClick={() => {
             follow.current = true;
+            jumpingToLatest.current = true;
             const el = container.current;
             if (el) {
               el.scrollTop = el.scrollHeight;
               onScroll();
+              // Final virtual rows mount after the first scroll. Settle their
+              // measured heights before releasing the explicit follow intent.
+              requestAnimationFrame(() => {
+                if (container.current !== el || previous.current !== positionKey) return;
+                el.scrollTop = el.scrollHeight;
+                onScroll();
+                requestAnimationFrame(() => {
+                  if (container.current !== el || previous.current !== positionKey) return;
+                  el.scrollTop = el.scrollHeight;
+                  onScroll();
+                  jumpingToLatest.current = false;
+                });
+              });
             }
           }}
         >
@@ -237,11 +402,13 @@ function MeasuredRow({
   measure,
   cwd,
   density,
+  foundItem,
 }: {
   row: Row;
   measure: (id: string, height: number) => void;
   cwd: string;
   density: SessionView["density"];
+  foundItem?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -254,11 +421,23 @@ function MeasuredRow({
     return () => observer.disconnect();
   }, [row.id, measure]);
   return (
-    <div ref={ref} className="transcript-row">
+    <div
+      ref={ref}
+      data-conversation-item={row.id}
+      className={
+        "transcript-row " + (row.id === foundItem ? "search-match-row" : "")
+      }
+    >
       {row.kind === "group" ? (
-        <ToolGroup value={row} density={density} />
+        <ToolGroup value={row} density={density} foundItem={foundItem} />
       ) : row.kind === "tool" ? null : (
-        <Message item={row} cwd={cwd} density={density} />
+        <Message
+          item={row}
+          cwd={cwd}
+          density={
+            row.id === foundItem && density === "summary" ? "normal" : density
+          }
+        />
       )}
     </div>
   );
@@ -266,13 +445,48 @@ function MeasuredRow({
 function ToolGroup({
   value,
   density,
+  foundItem,
 }: {
   value: Group;
   density: SessionView["density"];
+  foundItem?: string;
 }) {
   const running = value.items.some((i) => i.status === "in_progress"),
     failed = value.items.some((i) => i.status === "failed");
+  const completedCount = value.items.filter(
+    (item) => item.status === "completed",
+  ).length;
+  const failedCount = value.items.filter(
+    (item) => item.status === "failed",
+  ).length;
+  const current =
+    value.items.find((item) => item.status === "in_progress") ||
+    value.items.at(-1);
+  const currentLabel =
+    current?.rawInput?.command ||
+    current?.rawInput?.path ||
+    current?.rawInput?.file_path ||
+    current?.title;
+  const commandCount = value.items.filter(
+    (item) => typeof item.rawInput?.command === "string",
+  ).length;
+  const fileCount = new Set(
+    value.items.flatMap(
+      (item) => item.locations?.map((location) => location.path) || [],
+    ),
+  ).size;
+  const duration = value.items.reduce(
+    (total, item) => total + (item.durationMs || 0),
+    0,
+  );
   const [shown, setShown] = useState(25);
+  useEffect(() => {
+    const index = value.items.findIndex((item) => item.id === foundItem);
+    if (index >= 0) {
+      setOpen(true);
+      setShown((count) => Math.max(count, index + 1));
+    }
+  }, [foundItem]);
   const [open, setOpen] = useState(running || failed || density === "verbose"),
     touched = useRef(false),
     wasRunning = useRef(running);
@@ -295,13 +509,33 @@ function ToolGroup({
         }}
       >
         <Icon name="wrench" size={14} />
-        <strong>{value.items.length} 个工具调用</strong>
-        <span>{running ? "执行中" : failed ? "执行失败" : "已完成"}</span>
+        <strong>
+          {value.items.length} 个工具调用
+          {commandCount > 0 && ` · ${commandCount} 条命令`}
+          {fileCount > 0 && ` · ${fileCount} 个文件`}
+        </strong>
+        <span className="tool-group-current" title={String(currentLabel || "")}>
+          {String(currentLabel || "")}
+        </span>
+        <span className="tool-group-counts">
+          {running && "执行中 · "}
+          {completedCount} 成功{failedCount > 0 && ` · ${failedCount} 失败`}
+          {duration > 0 && (
+            <small title="工具耗时累计">
+              {" "}
+              · {(duration / 1000).toFixed(1)}s
+            </small>
+          )}
+        </span>
       </summary>
       {open && (
         <div>
           {value.items.slice(0, shown).map((item) => (
-            <div key={item.id}>
+            <div
+              key={item.id}
+              data-conversation-item={item.id}
+              className={item.id === foundItem ? "search-match-row" : ""}
+            >
               {item.title === "music_play" && item.status === "completed" && (
                 <MusicPlayer
                   details={item.details}
@@ -319,6 +553,7 @@ function ToolGroup({
                 details={item.details}
                 terminalOutput={item.terminalOutput}
                 defaultOpen={item.status === "failed" || density === "verbose"}
+                forceOpen={item.id === foundItem}
                 onOpenFile={(path) => useStore.getState().openFileTab(path)}
               />
             </div>

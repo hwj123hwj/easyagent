@@ -23,6 +23,8 @@ export interface RunInfo {
     | "interrupted";
   error?: string;
   prompt?: string;
+  display_prompt?: string;
+  inputs?: PromptInputs;
 }
 export function isActiveRun(run: RunInfo | undefined): boolean {
   return run?.state === "running" || run?.state === "waiting_confirmation";
@@ -42,6 +44,8 @@ export type ChatItem =
     }
   | {
       kind: "tool";
+      startedAt?: number;
+      durationMs?: number;
       id: string;
       toolCallId: string;
       title: string;
@@ -54,6 +58,8 @@ export type ChatItem =
       details?: Record<string, unknown>;
     };
 export interface AgentEvent {
+  timestamp?: number;
+  duration_ms?: number;
   type: string;
   text_delta?: string;
   tool_call_id?: string;
@@ -69,6 +75,7 @@ export interface AgentEvent {
   [key: string]: unknown;
 }
 export interface StoredMessage {
+  duration_ms?: number;
   role: string;
   content?: unknown;
   thinking?: string;
@@ -78,6 +85,8 @@ export interface StoredMessage {
   tool_details?: Record<string, unknown>;
 }
 export interface Envelope {
+  inputs?: PromptInputs;
+  queue?: MessageQueue;
   type: string;
   session_id?: string;
   request_id?: string;
@@ -99,6 +108,41 @@ export interface Envelope {
   prompt?: string;
   duplicate?: boolean;
   [key: string]: unknown;
+}
+
+export interface MessageQueue {
+  items: {
+    id: string;
+    prompt: string;
+    created_at: string;
+    inputs?: PromptInputs;
+  }[];
+  paused: boolean;
+  revision: number;
+}
+
+export interface PromptInputs {
+  attachments?: string[];
+  files?: { path: string; workspace: string }[];
+}
+export interface InputAttachment {
+  id: string;
+  name: string;
+  path: string;
+  workspace: string;
+  mime_type: string;
+  size: number;
+}
+export interface DraftInputs {
+  attachments: InputAttachment[];
+  files: { path: string; workspace: string }[];
+}
+export const EMPTY_INPUTS: DraftInputs = { attachments: [], files: [] };
+export function promptInputs(draft: DraftInputs): PromptInputs {
+  return {
+    attachments: draft.attachments.map((item) => item.id),
+    files: draft.files,
+  };
 }
 export interface RunProjection {
   transcript: ChatItem[];

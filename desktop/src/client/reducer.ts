@@ -109,6 +109,7 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
             ? displayText(outcome.content)
             : undefined,
         details: outcome?.tool_details,
+        durationMs: outcome?.duration_ms,
       });
     }
   });
@@ -168,6 +169,7 @@ function eventProjection(
         toolKind: toolKind(event.tool_name || ""),
         rawInput: event.tool_args,
         status: "in_progress",
+        startedAt: event.timestamp,
         content: [],
       });
     return { ...state, transcript, phase: "tool" };
@@ -182,6 +184,7 @@ function eventProjection(
       item.id.startsWith(runKey + "-tool-")
         ? {
             ...item,
+            durationMs: event.duration_ms ?? item.durationMs,
             content: text ? [{ text }] : item.content,
             terminalOutput:
               item.toolKind === "execute" ? text : item.terminalOutput,
@@ -270,7 +273,7 @@ export function reduceEnvelope(
       next.transcript.push({
         kind: "user",
         id: `${message.run.run_id}-user`,
-        text: message.run.prompt,
+        text: message.run.display_prompt || message.run.prompt,
       });
     (message.events || []).forEach((event, index) => {
       next = eventProjection(next, event as AgentEvent, `snapshot-${index}`);

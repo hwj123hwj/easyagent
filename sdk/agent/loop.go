@@ -512,7 +512,14 @@ func executeToolCallsSequential(ctx context.Context, a *Agent, calls []ai.ToolCa
 	return results, nil
 }
 
-func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) ai.Message {
+func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) (result ai.Message) {
+	started := time.Now()
+	defer func() {
+		if message, ok := result.(ai.ToolResultMessage); ok {
+			message.DurationMS = time.Since(started).Milliseconds()
+			result = message
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return ai.ToolResultMessage{ToolCallID: call.ID, Content: "tool not started: " + err.Error(), IsError: true}
 	}
