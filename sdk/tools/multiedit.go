@@ -227,19 +227,11 @@ func (t *MultiEditTool) applyEditsToFile(ctx context.Context, filePath string, e
 
 	for i, edit := range edits {
 		if !strings.Contains(currentContent, edit.OldString) {
-			// Rollback: restore original content
-			if err := t.ops.WriteFile(ctx, filePath, []byte(originalContent), 0o644); err != nil {
-				slog.Error("multiedit: rollback failed", "path", filePath, "error", err)
-			}
 			return "", applied, fmt.Errorf("edits[%d]: old_string not found in %s", i, filePath)
 		}
 
 		count := strings.Count(currentContent, edit.OldString)
 		if !edit.ReplaceAll && count > 1 {
-			// Rollback
-			if err := t.ops.WriteFile(ctx, filePath, []byte(originalContent), 0o644); err != nil {
-				slog.Error("multiedit: rollback failed", "path", filePath, "error", err)
-			}
 			return "", applied, fmt.Errorf("edits[%d]: old_string appears %d times (must be unique or use replace_all)", i, count)
 		}
 
@@ -261,7 +253,7 @@ func (t *MultiEditTool) applyEditsToFile(ctx context.Context, filePath string, e
 	}
 
 	if t.readTracker != nil {
-		t.readTracker.Invalidate(filePath)
+		t.readTracker.Record(filePath, []byte(currentContent), time.Time{})
 	}
 
 	return fmt.Sprintf("edited %s (%d edits applied)", filePath, applied), applied, nil

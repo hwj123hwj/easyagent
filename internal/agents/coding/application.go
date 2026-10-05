@@ -13,16 +13,14 @@ import (
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
 	basetools "github.com/hwj123hwj/easyagent/sdk/tools"
 	"log/slog"
-	"sync"
 	"time"
 )
 
 // CodingApplication implements runtime.Application for the coding-agent.
 // It is the concrete application that gets injected into the Platform layer.
 type CodingApplication struct {
-	Cfg             config.Config
-	modelReg        *modelsreg.Registry
-	sessionTrackers *sync.Map // sessionID -> *basetools.ReadTracker
+	Cfg      config.Config
+	modelReg *modelsreg.Registry
 }
 
 // NewCodingApplication creates a new CodingApplication with the given config.
@@ -56,9 +54,8 @@ func NewCodingApplication(cfg config.Config) CodingApplication {
 	}
 
 	return CodingApplication{
-		Cfg:             cfg,
-		modelReg:        reg,
-		sessionTrackers: &sync.Map{},
+		Cfg:      cfg,
+		modelReg: reg,
 	}
 }
 
@@ -67,14 +64,9 @@ func (a CodingApplication) BuildTools(opts runtime.ToolBuildOptions) []agent.Too
 	mutationQueue := codingtools.NewFileMutationQueue()
 	backupMgr := commands.GetUndoManager()
 
-	var readTracker *basetools.ReadTracker
-	if opts.SessionID != "" && a.sessionTrackers != nil {
-		val, _ := a.sessionTrackers.LoadOrStore(opts.SessionID, basetools.NewReadTracker())
-		if rt, ok := val.(*basetools.ReadTracker); ok {
-			readTracker = rt
-		}
-	} else {
-		readTracker = basetools.NewReadTracker()
+	readTracker := basetools.NewReadTracker()
+	if ext, ok := opts.SessionExt.(*CodingSessionExt); ok && ext != nil {
+		readTracker = ext.ReadTracker()
 	}
 
 	return codingtools.BuildList(codingtools.ListOptions{

@@ -205,13 +205,14 @@ func (t *EditTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate 
 	data, err := t.ops.ReadFile(ctx, cleanPath)
 	if err != nil {
 		// File doesn't exist: create new file if old_string is empty
-		if isNotExist(err) && params.OldString == "" {
+		if isNotExist(err) && params.OldString == "" && len(params.Edits) == 0 && !t.readTracker.HasRead(cleanPath) {
 			if err := t.ops.MkdirAll(ctx, parentDir(cleanPath), 0o755); err != nil {
 				return agent.ToolResult{IsError: true}, err
 			}
 			if err := t.ops.WriteFile(ctx, cleanPath, []byte(params.NewString), 0o644); err != nil {
 				return agent.ToolResult{IsError: true}, err
 			}
+			t.readTracker.Record(cleanPath, []byte(params.NewString), time.Time{})
 			return agent.ToolResult{Content: fmt.Sprintf("created %s", cleanPath)}, nil
 		}
 		return agent.ToolResult{IsError: true}, err
@@ -245,43 +246,29 @@ func (t *EditTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate 
 			return agent.ToolResult{IsError: true}, err
 		}
 		if t.readTracker != nil {
-			t.readTracker.Invalidate(cleanPath)
+			t.readTracker.Record(cleanPath, []byte(newContent), time.Time{})
 		}
 		return agent.ToolResult{
 			Content: fmt.Sprintf("edited %s (%d edits applied)", cleanPath, len(params.Edits)),
 		}, nil
 	}
 
-	matchIdx, count := resolveOldStringMatch(content, params.OldString)
-	if matchIdx < 0 {
+	matches := resolveOldStringMatches(content, params.OldString)
+	if len(matches) == 0 {
 		diagnostic := buildNotFoundDiagnostic(content, params.OldString)
-		return agent.ToolResult{
-			IsError: true,
-			Content: fmt.Sprintf("%s in %s", diagnostic, cleanPath),
-		}, fmt.Errorf("%s in %s", diagnostic, cleanPath)
+		return agent.ToolResult{IsError: true, Content: fmt.Sprintf("%s in %s", diagnostic, cleanPath)}, fmt.Errorf("%s in %s", diagnostic, cleanPath)
 	}
-
-	matchedOldString := params.OldString
-	if !strings.Contains(content, params.OldString) {
-		// Use the matched substring (e.g. trimmed or stripped line numbers)
-		if strings.Contains(content, strings.Trim(params.OldString, "\r\n")) {
-			matchedOldString = strings.Trim(params.OldString, "\r\n")
-		} else if strings.Contains(content, stripLineNumbers(params.OldString)) {
-			matchedOldString = stripLineNumbers(params.OldString)
-		} else {
-			// normalized line endings
-			matchedOldString = strings.ReplaceAll(params.OldString, "\r\n", "\n")
-		}
-	}
+	count := len(matches)
+	matchedOldString := content[matches[0][0]:matches[0][1]]
 
 	if params.ReplaceAll {
 		// Replace all occurrences
-		newContent := strings.ReplaceAll(content, matchedOldString, params.NewString)
+		newContent := replaceMatchedSpans(content, matches, params.NewString)
 		if err := t.ops.WriteFile(ctx, cleanPath, []byte(newContent), 0o644); err != nil {
 			return agent.ToolResult{IsError: true}, err
 		}
 		if t.readTracker != nil {
-			t.readTracker.Invalidate(cleanPath)
+			t.readTracker.Record(cleanPath, []byte(newContent), time.Time{})
 		}
 
 		return agent.ToolResult{
@@ -297,18 +284,18 @@ func (t *EditTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate 
 		}, fmt.Errorf("old_string is not unique (found %d occurrences) in %s", count, cleanPath)
 	}
 
-	newContent := strings.Replace(content, matchedOldString, params.NewString, 1)
+	newContent := replaceMatchedSpans(content, matches[:1], params.NewString)
 	if err := t.ops.WriteFile(ctx, cleanPath, []byte(newContent), 0o644); err != nil {
 		return agent.ToolResult{IsError: true}, err
 	}
 	if t.readTracker != nil {
-		t.readTracker.Invalidate(cleanPath)
+		t.readTracker.Record(cleanPath, []byte(newContent), time.Time{})
 	}
 
 	// Show diff context
 	oldLines := strings.Count(matchedOldString, "\n") + 1
 	newLines := strings.Count(params.NewString, "\n") + 1
-	before := content[:strings.Index(content, matchedOldString)]
+	before := content[:matches[0][0]]
 	startLine := strings.Count(before, "\n") + 1
 	endLine := startLine + oldLines - 1
 
@@ -372,14 +359,15 @@ func applyEdits(content string, edits []EditEntry) (string, error) {
 
 	// 1. 校验所有 old_string 存在且唯一
 	for i, e := range edits {
-		idx, count := resolveOldStringMatch(content, e.OldString)
-		if idx < 0 {
+		spans := resolveOldStringMatches(content, e.OldString)
+		count := len(spans)
+		if count == 0 {
 			return "", fmt.Errorf("edits[%d]: %s", i, buildNotFoundDiagnostic(content, e.OldString))
 		}
 		if count > 1 {
 			return "", fmt.Errorf("edits[%d]: old_string appears %d times (must be unique)", i, count)
 		}
-		matches = append(matches, match{index: i, start: idx, end: idx + len(e.OldString)})
+		matches = append(matches, match{index: i, start: spans[0][0], end: spans[0][1]})
 	}
 
 	// 2. 按位置从大到小排序（从后往前替换）
@@ -400,58 +388,62 @@ func applyEdits(content string, edits []EditEntry) (string, error) {
 	return result, nil
 }
 
-var lineNumPrefixRe = regexp.MustCompile(`(?m)^\s*\d+[\t:|\s]\s*`)
+// Only strip explicit read-output separators; never strip plain numeric code
+// or indentation following the separator. Horizontal spacing cannot consume lines.
+var lineNumPrefixRe = regexp.MustCompile(`(?m)^[ ]*\d+(?:\t|[ ]*\| ?)`)
 
-// stripLineNumbers removes leading line numbers like "  12 | " or "12\t" that LLMs sometimes copy from tool output.
 func stripLineNumbers(s string) string {
-	if !lineNumPrefixRe.MatchString(s) {
-		return s
-	}
 	return lineNumPrefixRe.ReplaceAllString(s, "")
 }
 
-// resolveOldStringMatch performs exact matching first, followed by safe fallbacks
-// (trimming extra newline/spaces, stripping accidental line numbers, CRLF/LF normalization).
-// It returns the match index and count in content.
-// Crucially, it adheres to the safety invariant: ambiguous matches (count > 1) are never guessed.
-func resolveOldStringMatch(content, target string) (matchIndex int, matchCount int) {
+// resolveOldStringMatches returns offsets into the ORIGINAL content. Matching
+// and replacement must use these same spans, including when newline widths differ.
+// An ambiguous candidate is returned as-is; later fallbacks never guess a winner.
+func resolveOldStringMatches(content, target string) [][2]int {
 	if target == "" {
-		return -1, 0
+		return nil
 	}
-
-	// 1. Exact match
-	if strings.Contains(content, target) {
-		return strings.Index(content, target), strings.Count(content, target)
+	find := func(candidate string) [][2]int {
+		if candidate == "" {
+			return nil
+		}
+		var matches [][2]int
+		for offset := 0; offset <= len(content); {
+			idx := strings.Index(content[offset:], candidate)
+			if idx < 0 {
+				break
+			}
+			start := offset + idx
+			matches = append(matches, [2]int{start, start + len(candidate)})
+			offset = start + len(candidate)
+		}
+		if len(matches) > 0 {
+			return matches
+		}
+		if !strings.Contains(candidate, "\n") {
+			return nil
+		}
+		pattern := regexp.QuoteMeta(strings.ReplaceAll(candidate, "\r\n", "\n"))
+		pattern = strings.ReplaceAll(pattern, "\n", `\r?\n`)
+		for _, span := range regexp.MustCompile(pattern).FindAllStringIndex(content, -1) {
+			matches = append(matches, [2]int{span[0], span[1]})
+		}
+		return matches
 	}
-
-	// 2. Normalizing CRLF vs LF
-	normalizedContent := strings.ReplaceAll(content, "\r\n", "\n")
-	normalizedTarget := strings.ReplaceAll(target, "\r\n", "\n")
-	if normalizedContent != content || normalizedTarget != target {
-		if strings.Contains(content, normalizedTarget) {
-			return strings.Index(content, normalizedTarget), strings.Count(content, normalizedTarget)
+	for _, candidate := range []string{target, strings.Trim(target, "\r\n"), stripLineNumbers(target), strings.Trim(stripLineNumbers(target), "\r\n")} {
+		if matches := find(candidate); len(matches) > 0 {
+			return matches
 		}
 	}
+	return nil
+}
 
-	// 3. Trim leading/trailing newlines
-	trimmedTarget := strings.Trim(target, "\r\n")
-	if trimmedTarget != "" && trimmedTarget != target {
-		if strings.Contains(content, trimmedTarget) {
-			count := strings.Count(content, trimmedTarget)
-			return strings.Index(content, trimmedTarget), count
-		}
+func replaceMatchedSpans(content string, spans [][2]int, replacement string) string {
+	for i := len(spans) - 1; i >= 0; i-- {
+		span := spans[i]
+		content = content[:span[0]] + replacement + content[span[1]:]
 	}
-
-	// 4. Strip line numbers accidentally copied from read tool
-	strippedTarget := stripLineNumbers(target)
-	if strippedTarget != "" && strippedTarget != target {
-		if strings.Contains(content, strippedTarget) {
-			count := strings.Count(content, strippedTarget)
-			return strings.Index(content, strippedTarget), count
-		}
-	}
-
-	return -1, 0
+	return content
 }
 
 // buildNotFoundDiagnostic generates an informative diagnostic message when old_string is not found.

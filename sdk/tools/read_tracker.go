@@ -56,7 +56,8 @@ func (rt *ReadTracker) Record(path string, content []byte, modTime time.Time) {
 	}
 }
 
-// CheckStale checks if the current file content/modTime differs from when it was last read.
+// CheckStale compares content hashes. Modification times are informational;
+// touching a file without changing its contents is safe.
 // Returns (isStale, recordedHash, currentHash).
 // If the file was never recorded by this tracker, it is considered not stale (returns false, "", "").
 func (rt *ReadTracker) CheckStale(path string, currentContent []byte, currentModTime time.Time) (bool, string, string) {
@@ -83,7 +84,19 @@ func (rt *ReadTracker) CheckStale(path string, currentContent []byte, currentMod
 	return false, record.Hash, currentHash
 }
 
-// Invalidate removes or updates the tracked record after an internal modification.
+// HasRead reports whether this path has a baseline, including files later deleted.
+func (rt *ReadTracker) HasRead(path string) bool {
+	if rt == nil {
+		return false
+	}
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+	_, exists := rt.records[rt.normalizePath(path)]
+	return exists
+}
+
+// Invalidate explicitly forgets a baseline. Successful mutations must Record the
+// written bytes instead, so subsequent external changes remain protected.
 func (rt *ReadTracker) Invalidate(path string) {
 	if rt == nil {
 		return

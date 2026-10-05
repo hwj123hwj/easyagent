@@ -147,6 +147,8 @@ func (t *WriteTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate
 					Content: errMsg,
 				}, fmt.Errorf("%s", errMsg)
 			}
+		} else if !isNotExist(readErr) || t.readTracker.HasRead(cleanPath) {
+			return agent.ToolResult{IsError: true}, fmt.Errorf("cannot verify %s before writing: %w", cleanPath, readErr)
 		}
 	}
 
@@ -169,7 +171,7 @@ func (t *WriteTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate
 	}
 
 	if t.readTracker != nil {
-		t.readTracker.Invalidate(cleanPath)
+		t.readTracker.Record(cleanPath, content, time.Time{})
 	}
 
 	// Count bytes and lines
