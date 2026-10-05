@@ -142,7 +142,7 @@ export async function apiRequest<T>(
       "Content-Type": "application/json",
       ...(browserToken ? { Authorization: "Bearer " + browserToken } : {}),
     },
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(path.endsWith("/compact") ? 300000 : 20000),
   };
   if (body !== undefined) {
     opts.body = JSON.stringify(body);

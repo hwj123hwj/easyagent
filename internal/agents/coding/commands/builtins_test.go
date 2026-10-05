@@ -584,10 +584,10 @@ func TestCompact_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "not enough messages")
 }
 
-func TestCompact_TruncatesLongSummary(t *testing.T) {
+func TestCompact_PreservesCompleteUnicodeSummary(t *testing.T) {
 	reg := newRegistry()
 
-	longSummary := strings.Repeat("x", 600)
+	longSummary := strings.Repeat("上下文保留要求", 600)
 	sess := &mockSession{
 		sessionID:     "test",
 		compactResult: longSummary,
@@ -602,7 +602,8 @@ func TestCompact_TruncatesLongSummary(t *testing.T) {
 	result, err := reg.Execute(cmdCtx, "/compact")
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "20 → 5")
-	assert.Contains(t, result.Output, "...")
+	assert.Contains(t, result.Output, longSummary)
+	assert.Contains(t, result.Output, fmt.Sprintf("%d chars", len([]rune(longSummary))))
 }
 
 func TestHelp_IncludesNewCommands(t *testing.T) {

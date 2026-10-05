@@ -22,8 +22,8 @@ export const commands: Command[] = [
   { name: "tools", label: "可用工具", description: "查看当前 Agent 的工具" },
   {
     name: "context",
-    label: "会话信息",
-    description: "查看模型、工作区与路径权限",
+    label: "检查上下文",
+    description: "展开模型输入、工具定义与压缩记录",
   },
   {
     name: "compact",

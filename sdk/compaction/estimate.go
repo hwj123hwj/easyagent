@@ -75,7 +75,8 @@ func SplitMessages(msgs []ai.Message, keepRecentTokens int) (history []ai.Messag
 	}
 
 	// 往前找到最近的安全切割点（msgs[cutIndex-1] 是完整 turn 收尾）。
-	for cutIndex > 0 && !isSafeCutBoundary(msgs[cutIndex-1]) {
+	safe := safeCutBoundaries(msgs)
+	for cutIndex > 0 && !safe[cutIndex] {
 		cutIndex--
 	}
 
@@ -86,21 +87,24 @@ func SplitMessages(msgs []ai.Message, keepRecentTokens int) (history []ai.Messag
 	return msgs[:cutIndex], msgs[cutIndex:]
 }
 
-// isSafeCutBoundary 判断一条消息是否可作为 history 的安全收尾。
-// 安全 = 该消息后面可以开始新的 turn，不会割裂正在进行的工具调用。
-func isSafeCutBoundary(msg ai.Message) bool {
-	switch m := msg.(type) {
-	case ai.ToolResultMessage:
-		// tool 结果后是新 turn，安全
-		return true
-	case ai.AssistantMessage:
-		// 纯文本 assistant（不带未完成 tool_call）是安全边界；
-		// 带 tool_call 的 assistant 后面还有 tool_result，不能在此切。
-		return len(m.ToolCalls) == 0
-	default:
-		// user 消息后是它触发的 assistant，不能切
-		return false
+// A tool batch is complete only after every call has a result. Cutting after
+// its first result can otherwise leave orphan results in the retained context.
+func safeCutBoundaries(msgs []ai.Message) []bool {
+	safe := make([]bool, len(msgs)+1)
+	pending := make(map[string]bool)
+	for i, msg := range msgs {
+		switch m := msg.(type) {
+		case ai.AssistantMessage:
+			for _, call := range m.ToolCalls {
+				pending[call.ID] = true
+			}
+			safe[i+1] = len(pending) == 0
+		case ai.ToolResultMessage:
+			delete(pending, m.ToolCallID)
+			safe[i+1] = len(pending) == 0
+		}
 	}
+	return safe
 }
 
 // SummarizePrompt 生成摘要的 prompt。
@@ -146,8 +150,8 @@ func SummarizePrompt(history []ai.Message, customInstructions string) string {
 			b.WriteString("Tool result: ")
 			// 截断过长的 tool result
 			content := m.Content
-			if len(content) > 500 {
-				content = content[:500] + "...(truncated)"
+			if runes := []rune(content); len(runes) > 500 {
+				content = string(runes[:500]) + "...(truncated)"
 			}
 			b.WriteString(content)
 			b.WriteString("\n")

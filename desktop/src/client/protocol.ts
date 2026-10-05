@@ -53,9 +53,24 @@ export interface SessionInfo {
   access_mode?: AccessMode;
   context_usage?: ContextUsage;
 }
+export interface CompactionRecord {
+ id: string;
+ timestamp: number;
+ summary: string;
+ info?: { trigger: string; instructions?: string; messages_before: number; messages_after: number; tokens_before: number; tokens_after: number };
+}
+export interface ContextSnapshot {
+ model: { id: string; provider: string };
+ system: string;
+ messages: { role: string; message: unknown }[];
+ tools: { name: string; description: string; parameters?: unknown }[];
+ usage: ContextUsage;
+ compactions: CompactionRecord[];
+}
 export type ChatItem =
   | {
-      kind: "user" | "assistant" | "thought" | "system" | "error";
+      kind: "user" | "assistant" | "thought" | "system" | "error" | "compaction";
+      compaction?: CompactionRecord;
       id: string;
       text: string;
       startedAt?: number;
@@ -78,6 +93,7 @@ export type ChatItem =
       details?: Record<string, unknown>;
     };
 export interface AgentEvent {
+ compaction_info?: CompactionRecord["info"];
   context_usage?: ContextUsage;
   timestamp?: number;
   duration_ms?: number;
@@ -97,6 +113,7 @@ export interface AgentEvent {
   [key: string]: unknown;
 }
 export interface StoredMessage {
+ compaction?: CompactionRecord;
   duration_ms?: number;
   role: string;
   content?: unknown;

@@ -582,6 +582,12 @@ const Message = memo(function Message({
     [error, setError] = useState("");
   if (item.kind === "thought")
     return <Thought item={item} />;
+  if (item.kind === "compaction")
+    return <details className="compaction-card">
+      <summary><Icon name="activity" size={14} /><span>上下文摘要已更新</span>{item.compaction?.info && <small>{item.compaction.info.trigger === "manual" ? "手动" : "自动"} · {item.compaction.info.messages_before} → {item.compaction.info.messages_after} 条消息</small>}</summary>
+      {item.compaction?.info?.instructions && <p className="compaction-instructions">压缩要求：{item.compaction.info.instructions}</p>}
+      <Markdown text={item.text} basePath={cwd ? cwd + "/" : undefined} />
+    </details>;
   if (item.kind === "system")
     return <div className="msg-system">{item.text}</div>;
   if (item.kind === "error")

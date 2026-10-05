@@ -789,3 +789,16 @@ func (s *AgentSession) ContextUsage(ctx context.Context) (agent.ContextUsage, er
 	defer s.mu.RUnlock()
 	return s.agent.ContextUsage(ctx)
 }
+
+// ContextSnapshot rejects live mutations so the preview cannot race a prompt or compaction.
+func (s *AgentSession) ContextSnapshot(ctx context.Context) (agent.ContextSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.busyLocked() {
+		return agent.ContextSnapshot{}, agent.ErrAgentBusy
+	}
+	if s.agent == nil {
+		return agent.ContextSnapshot{}, fmt.Errorf("no active agent")
+	}
+	return s.agent.ContextSnapshot(ctx)
+}
