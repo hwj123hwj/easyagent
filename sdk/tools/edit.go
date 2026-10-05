@@ -439,11 +439,15 @@ func resolveOldStringMatches(content, target string) [][2]int {
 }
 
 func replaceMatchedSpans(content string, spans [][2]int, replacement string) string {
-	for i := len(spans) - 1; i >= 0; i-- {
-		span := spans[i]
-		content = content[:span[0]] + replacement + content[span[1]:]
+	var result strings.Builder
+	offset := 0
+	for _, span := range spans {
+		result.WriteString(content[offset:span[0]])
+		result.WriteString(replacement)
+		offset = span[1]
 	}
-	return content
+	result.WriteString(content[offset:])
+	return result.String()
 }
 
 // buildNotFoundDiagnostic generates an informative diagnostic message when old_string is not found.
