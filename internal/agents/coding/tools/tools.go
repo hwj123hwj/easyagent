@@ -22,6 +22,7 @@ type ListOptions struct {
 	BlockedTools          []string
 	FileMutationQueue     *FileMutationQueue       // 可选：per-file 写操作串行化
 	BackupManager         *basetools.BackupManager // 可选：操作前自动快照
+	ReadTracker           *basetools.ReadTracker   // 可选：读后外部修改保护
 	ToolRegistry          basetools.ToolRegistry   // 可选：batch 工具需要的 tool registry
 }
 
@@ -68,6 +69,7 @@ func BuildList(opts ListOptions) []agent.Tool {
 			basetools.WithReadPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithReadMaxOutputLen(opts.MaxOutputLen),
 			basetools.WithReadOperations(opts.FileOps),
+			basetools.WithReadTracker(opts.ReadTracker),
 		),
 		basetools.NewWriteTool(
 			basetools.WithWriteWorkspace(opts.Workspace),
@@ -75,6 +77,7 @@ func BuildList(opts ListOptions) []agent.Tool {
 			basetools.WithWriteOperations(opts.FileOps),
 			basetools.WithWriteMutationQueue(opts.FileMutationQueue),
 			basetools.WithWriteBackupManager(opts.BackupManager),
+			basetools.WithWriteReadTracker(opts.ReadTracker),
 		),
 		basetools.NewEditTool(
 			basetools.WithEditWorkspace(opts.Workspace),
@@ -82,6 +85,7 @@ func BuildList(opts ListOptions) []agent.Tool {
 			basetools.WithEditOperations(opts.FileOps),
 			basetools.WithEditMutationQueue(opts.FileMutationQueue),
 			basetools.WithEditBackupManager(opts.BackupManager),
+			basetools.WithEditReadTracker(opts.ReadTracker),
 		),
 		basetools.NewGrepTool(
 			basetools.WithGrepWorkspace(opts.Workspace),
@@ -106,6 +110,7 @@ func BuildList(opts ListOptions) []agent.Tool {
 			basetools.WithMultiEditPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithMultiEditOperations(opts.FileOps),
 			basetools.WithMultiEditBackupManager(opts.BackupManager),
+			basetools.WithMultiEditReadTracker(opts.ReadTracker),
 		),
 		basetools.NewPatchTool(
 			basetools.WithPatchWorkspace(opts.Workspace),
@@ -130,6 +135,7 @@ func BuildList(opts ListOptions) []agent.Tool {
 			basetools.WithReadManyFilesPathPolicy(basetools.PathPolicy{AllowOutsideWorkspace: opts.AllowOutsideWorkspace}),
 			basetools.WithReadManyFilesMaxOutputLen(opts.MaxOutputLen),
 			basetools.WithReadManyFilesOperations(opts.FileOps),
+			basetools.WithReadManyFilesTracker(opts.ReadTracker),
 		),
 		basetools.NewAskUserTool(),
 	)

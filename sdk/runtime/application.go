@@ -48,6 +48,8 @@ type SessionExt interface {
 
 // ToolBuildOptions contains the context needed by an Application to build its tool list.
 type ToolBuildOptions struct {
+	// SessionExt is the live per-session state, preserved across tool rebuilds.
+	SessionExt     SessionExt
 	SessionID      string
 	Workspace      string
 	MaxOutputLen   int

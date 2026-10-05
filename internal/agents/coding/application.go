@@ -11,6 +11,7 @@ import (
 	"github.com/hwj123hwj/easyagent/sdk/config"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
+	basetools "github.com/hwj123hwj/easyagent/sdk/tools"
 	"log/slog"
 	"time"
 )
@@ -62,6 +63,12 @@ func NewCodingApplication(cfg config.Config) CodingApplication {
 func (a CodingApplication) BuildTools(opts runtime.ToolBuildOptions) []agent.Tool {
 	mutationQueue := codingtools.NewFileMutationQueue()
 	backupMgr := commands.GetUndoManager()
+
+	readTracker := basetools.NewReadTracker()
+	if ext, ok := opts.SessionExt.(*CodingSessionExt); ok && ext != nil {
+		readTracker = ext.ReadTracker()
+	}
+
 	return codingtools.BuildList(codingtools.ListOptions{
 		Workspace:             opts.Workspace,
 		AllowOutsideWorkspace: a.Cfg.AllowOutsideWorkspace,
@@ -77,6 +84,7 @@ func (a CodingApplication) BuildTools(opts runtime.ToolBuildOptions) []agent.Too
 		BlockedTools:          opts.BlockedTools,
 		FileMutationQueue:     mutationQueue,
 		BackupManager:         backupMgr,
+		ReadTracker:           readTracker,
 	})
 }
 

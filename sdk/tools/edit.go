@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/operations"
@@ -27,6 +29,7 @@ type EditTool struct {
 	ops           operations.FileOperations
 	mutationQueue MutationQueue  // 可选：per-file 串行化
 	backupMgr     *BackupManager // 可选：操作前自动快照
+	readTracker   *ReadTracker   // 可选：检测读后外部修改保护
 }
 
 type EditParams struct {
@@ -45,6 +48,11 @@ type EditEntry struct {
 
 // EditToolOption configures an EditTool during construction.
 type EditToolOption func(*EditTool)
+
+// WithEditReadTracker sets the ReadTracker for stale-read detection.
+func WithEditReadTracker(tracker *ReadTracker) EditToolOption {
+	return func(t *EditTool) { t.readTracker = tracker }
+}
 
 // WithEditPathPolicy explicitly controls access outside the workspace.
 func WithEditPathPolicy(policy PathPolicy) EditToolOption {
@@ -197,19 +205,36 @@ func (t *EditTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate 
 	data, err := t.ops.ReadFile(ctx, cleanPath)
 	if err != nil {
 		// File doesn't exist: create new file if old_string is empty
-		if isNotExist(err) && params.OldString == "" {
+		if isNotExist(err) && params.OldString == "" && len(params.Edits) == 0 && !t.readTracker.HasRead(cleanPath) {
 			if err := t.ops.MkdirAll(ctx, parentDir(cleanPath), 0o755); err != nil {
 				return agent.ToolResult{IsError: true}, err
 			}
 			if err := t.ops.WriteFile(ctx, cleanPath, []byte(params.NewString), 0o644); err != nil {
 				return agent.ToolResult{IsError: true}, err
 			}
+			t.readTracker.Record(cleanPath, []byte(params.NewString), time.Time{})
 			return agent.ToolResult{Content: fmt.Sprintf("created %s", cleanPath)}, nil
 		}
 		return agent.ToolResult{IsError: true}, err
 	}
 
 	content := string(data)
+
+	// Check stale read if readTracker is set
+	if t.readTracker != nil {
+		var modTime time.Time
+		if stat, statErr := t.ops.Stat(ctx, cleanPath); statErr == nil {
+			modTime = stat.ModTime
+		}
+		if isStale, recordedHash, currentHash := t.readTracker.CheckStale(cleanPath, data, modTime); isStale {
+			errMsg := fmt.Sprintf("file %s was modified externally since last read (recorded hash: %.8s..., current hash: %.8s...); re-read the file before editing",
+				cleanPath, recordedHash, currentHash)
+			return agent.ToolResult{
+				IsError: true,
+				Content: errMsg,
+			}, fmt.Errorf("%s", errMsg)
+		}
+	}
 
 	// 批量编辑模式
 	if len(params.Edits) > 0 {
@@ -220,26 +245,30 @@ func (t *EditTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate 
 		if err := t.ops.WriteFile(ctx, cleanPath, []byte(newContent), 0o644); err != nil {
 			return agent.ToolResult{IsError: true}, err
 		}
+		if t.readTracker != nil {
+			t.readTracker.Record(cleanPath, []byte(newContent), time.Time{})
+		}
 		return agent.ToolResult{
 			Content: fmt.Sprintf("edited %s (%d edits applied)", cleanPath, len(params.Edits)),
 		}, nil
 	}
 
-	// Check old_string exists
-	if !strings.Contains(content, params.OldString) {
-		return agent.ToolResult{
-			IsError: true,
-			Content: fmt.Sprintf("old_string not found in %s", cleanPath),
-		}, fmt.Errorf("old_string not found in %s", cleanPath)
+	matches := resolveOldStringMatches(content, params.OldString)
+	if len(matches) == 0 {
+		diagnostic := buildNotFoundDiagnostic(content, params.OldString)
+		return agent.ToolResult{IsError: true, Content: fmt.Sprintf("%s in %s", diagnostic, cleanPath)}, fmt.Errorf("%s in %s", diagnostic, cleanPath)
 	}
-
-	count := strings.Count(content, params.OldString)
+	count := len(matches)
+	matchedOldString := content[matches[0][0]:matches[0][1]]
 
 	if params.ReplaceAll {
 		// Replace all occurrences
-		newContent := strings.ReplaceAll(content, params.OldString, params.NewString)
+		newContent := replaceMatchedSpans(content, matches, params.NewString)
 		if err := t.ops.WriteFile(ctx, cleanPath, []byte(newContent), 0o644); err != nil {
 			return agent.ToolResult{IsError: true}, err
+		}
+		if t.readTracker != nil {
+			t.readTracker.Record(cleanPath, []byte(newContent), time.Time{})
 		}
 
 		return agent.ToolResult{
@@ -255,15 +284,18 @@ func (t *EditTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate 
 		}, fmt.Errorf("old_string is not unique (found %d occurrences) in %s", count, cleanPath)
 	}
 
-	newContent := strings.Replace(content, params.OldString, params.NewString, 1)
+	newContent := replaceMatchedSpans(content, matches[:1], params.NewString)
 	if err := t.ops.WriteFile(ctx, cleanPath, []byte(newContent), 0o644); err != nil {
 		return agent.ToolResult{IsError: true}, err
 	}
+	if t.readTracker != nil {
+		t.readTracker.Record(cleanPath, []byte(newContent), time.Time{})
+	}
 
 	// Show diff context
-	oldLines := strings.Count(params.OldString, "\n") + 1
+	oldLines := strings.Count(matchedOldString, "\n") + 1
 	newLines := strings.Count(params.NewString, "\n") + 1
-	before := content[:strings.Index(content, params.OldString)]
+	before := content[:matches[0][0]]
 	startLine := strings.Count(before, "\n") + 1
 	endLine := startLine + oldLines - 1
 
@@ -327,15 +359,15 @@ func applyEdits(content string, edits []EditEntry) (string, error) {
 
 	// 1. 校验所有 old_string 存在且唯一
 	for i, e := range edits {
-		idx := strings.Index(content, e.OldString)
-		if idx < 0 {
-			return "", fmt.Errorf("edits[%d]: old_string not found in file", i)
+		spans := resolveOldStringMatches(content, e.OldString)
+		count := len(spans)
+		if count == 0 {
+			return "", fmt.Errorf("edits[%d]: %s", i, buildNotFoundDiagnostic(content, e.OldString))
 		}
-		count := strings.Count(content, e.OldString)
 		if count > 1 {
 			return "", fmt.Errorf("edits[%d]: old_string appears %d times (must be unique)", i, count)
 		}
-		matches = append(matches, match{index: i, start: idx, end: idx + len(e.OldString)})
+		matches = append(matches, match{index: i, start: spans[0][0], end: spans[0][1]})
 	}
 
 	// 2. 按位置从大到小排序（从后往前替换）
@@ -354,4 +386,122 @@ func applyEdits(content string, edits []EditEntry) (string, error) {
 		result = result[:m.start] + edits[m.index].NewString + result[m.end:]
 	}
 	return result, nil
+}
+
+// Only strip explicit read-output separators; never strip plain numeric code
+// or indentation following the separator. Horizontal spacing cannot consume lines.
+var lineNumPrefixRe = regexp.MustCompile(`(?m)^[ ]*\d+(?:\t|[ ]*\| ?)`)
+
+func stripLineNumbers(s string) string {
+	return lineNumPrefixRe.ReplaceAllString(s, "")
+}
+
+// resolveOldStringMatches returns offsets into the ORIGINAL content. Matching
+// and replacement must use these same spans, including when newline widths differ.
+// An ambiguous candidate is returned as-is; later fallbacks never guess a winner.
+func resolveOldStringMatches(content, target string) [][2]int {
+	if target == "" {
+		return nil
+	}
+	find := func(candidate string) [][2]int {
+		if candidate == "" {
+			return nil
+		}
+		var matches [][2]int
+		for offset := 0; offset <= len(content); {
+			idx := strings.Index(content[offset:], candidate)
+			if idx < 0 {
+				break
+			}
+			start := offset + idx
+			matches = append(matches, [2]int{start, start + len(candidate)})
+			offset = start + len(candidate)
+		}
+		if len(matches) > 0 {
+			return matches
+		}
+		if !strings.Contains(candidate, "\n") {
+			return nil
+		}
+		pattern := regexp.QuoteMeta(strings.ReplaceAll(candidate, "\r\n", "\n"))
+		pattern = strings.ReplaceAll(pattern, "\n", `\r?\n`)
+		for _, span := range regexp.MustCompile(pattern).FindAllStringIndex(content, -1) {
+			matches = append(matches, [2]int{span[0], span[1]})
+		}
+		return matches
+	}
+	for _, candidate := range []string{target, strings.Trim(target, "\r\n"), stripLineNumbers(target), strings.Trim(stripLineNumbers(target), "\r\n")} {
+		if matches := find(candidate); len(matches) > 0 {
+			return matches
+		}
+	}
+	return nil
+}
+
+func replaceMatchedSpans(content string, spans [][2]int, replacement string) string {
+	var result strings.Builder
+	offset := 0
+	for _, span := range spans {
+		result.WriteString(content[offset:span[0]])
+		result.WriteString(replacement)
+		offset = span[1]
+	}
+	result.WriteString(content[offset:])
+	return result.String()
+}
+
+// buildNotFoundDiagnostic generates an informative diagnostic message when old_string is not found.
+func buildNotFoundDiagnostic(content, oldString string) string {
+	var b strings.Builder
+	b.WriteString("old_string not found in file")
+
+	// Check if stripping line numbers or trimming would match
+	stripped := stripLineNumbers(oldString)
+	trimmed := strings.Trim(oldString, "\r\n")
+	if (stripped != oldString && strings.Contains(content, stripped)) ||
+		(trimmed != oldString && strings.Contains(content, trimmed)) {
+		b.WriteString(" (hint: old_string may contain extraneous line numbers or leading/trailing newlines)")
+		return b.String()
+	}
+
+	// Find the closest line in content to oldString's first non-empty line
+	lines := strings.Split(content, "\n")
+	oldLines := strings.Split(strings.TrimSpace(oldString), "\n")
+	if len(oldLines) > 0 && len(lines) > 0 {
+		firstOldLine := strings.TrimSpace(oldLines[0])
+		if len(firstOldLine) > 0 {
+			firstWords := strings.Fields(firstOldLine)
+			var candidateLines []string
+			for idx, line := range lines {
+				trimmedLine := strings.TrimSpace(line)
+				if trimmedLine == "" {
+					continue
+				}
+				matched := false
+				if trimmedLine == firstOldLine || strings.Contains(trimmedLine, firstOldLine) || strings.Contains(firstOldLine, trimmedLine) {
+					matched = true
+				} else if len(firstWords) > 0 {
+					// Check if any significant word/prefix matches
+					for _, w := range firstWords {
+						if len(w) >= 3 && strings.Contains(trimmedLine, w) {
+							matched = true
+							break
+						}
+					}
+				}
+
+				if matched {
+					candidateLines = append(candidateLines, fmt.Sprintf("line %d: %s", idx+1, strings.TrimSpace(line)))
+					if len(candidateLines) >= 3 {
+						break
+					}
+				}
+			}
+			if len(candidateLines) > 0 {
+				b.WriteString(fmt.Sprintf(". Nearest line match:\n  %s", strings.Join(candidateLines, "\n  ")))
+			}
+		}
+	}
+
+	return b.String()
 }

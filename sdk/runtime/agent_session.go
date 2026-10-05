@@ -728,6 +728,7 @@ func (s *AgentSession) toolBuildOptions(cwd string) ToolBuildOptions {
 	}
 
 	return ToolBuildOptions{
+		SessionExt:     s.ext,
 		SessionID:      s.sessionID,
 		Workspace:      workspace,
 		MaxOutputLen:   cfg.MaxOutputLen,

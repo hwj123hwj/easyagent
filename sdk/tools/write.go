@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/operations"
@@ -16,6 +17,7 @@ type WriteTool struct {
 	ops           operations.FileOperations
 	mutationQueue MutationQueue  // 可选：per-file 串行化
 	backupMgr     *BackupManager // 可选：操作前自动快照
+	readTracker   *ReadTracker   // 可选：检测读后外部修改保护
 }
 
 type WriteParams struct {
@@ -25,6 +27,11 @@ type WriteParams struct {
 
 // WriteToolOption configures a WriteTool during construction.
 type WriteToolOption func(*WriteTool)
+
+// WithWriteReadTracker sets the ReadTracker for stale-read detection.
+func WithWriteReadTracker(tracker *ReadTracker) WriteToolOption {
+	return func(t *WriteTool) { t.readTracker = tracker }
+}
 
 // WithWritePathPolicy explicitly controls access outside the workspace.
 func WithWritePathPolicy(policy PathPolicy) WriteToolOption {
@@ -125,6 +132,26 @@ func (t *WriteTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate
 		}, fmt.Errorf("path escapes workspace")
 	}
 
+	// Check stale read if file exists and readTracker is set
+	if t.readTracker != nil {
+		if currentData, readErr := t.ops.ReadFile(ctx, cleanPath); readErr == nil {
+			var modTime time.Time
+			if stat, statErr := t.ops.Stat(ctx, cleanPath); statErr == nil {
+				modTime = stat.ModTime
+			}
+			if isStale, recordedHash, currentHash := t.readTracker.CheckStale(cleanPath, currentData, modTime); isStale {
+				errMsg := fmt.Sprintf("file %s was modified externally since last read (recorded hash: %.8s..., current hash: %.8s...); re-read the file before writing",
+					cleanPath, recordedHash, currentHash)
+				return agent.ToolResult{
+					IsError: true,
+					Content: errMsg,
+				}, fmt.Errorf("%s", errMsg)
+			}
+		} else if !isNotExist(readErr) || t.readTracker.HasRead(cleanPath) {
+			return agent.ToolResult{IsError: true}, fmt.Errorf("cannot verify %s before writing: %w", cleanPath, readErr)
+		}
+	}
+
 	// Auto-snapshot before modification (if backup manager is set)
 	if t.backupMgr != nil {
 		if _, err := t.backupMgr.Snapshot(cleanPath); err != nil {
@@ -141,6 +168,10 @@ func (t *WriteTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate
 	content := []byte(params.Content)
 	if err := t.ops.WriteFile(ctx, cleanPath, content, 0o644); err != nil {
 		return agent.ToolResult{IsError: true}, err
+	}
+
+	if t.readTracker != nil {
+		t.readTracker.Record(cleanPath, content, time.Time{})
 	}
 
 	// Count bytes and lines
