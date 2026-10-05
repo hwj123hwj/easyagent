@@ -223,6 +223,8 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 	unsubscribe := a.Subscribe(func(ctx context.Context, event AgentEvent) {
 		var ev AgentStreamEvent
 		switch e := event.(type) {
+		case EventContextUsage:
+			ev = AgentStreamEvent{Type: StreamEventContextUsage, ContextUsage: &e.Usage}
 		case EventTurnEnd:
 			ev = AgentStreamEvent{Type: StreamEventTurnEnd, Message: e.Message}
 		case EventToolExecutionStart:
@@ -300,6 +302,21 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 		// PromptStream 的 stream consumer：转发 text delta 事件到 channel
 		consume := func(stream *ai.EventStream) (ai.StreamAssistantMessage, error) {
 			var streamMsg ai.StreamAssistantMessage
+			var thinkingStart time.Time
+			var thinkingDuration time.Duration
+			finishThinking := func() {
+				if thinkingStart.IsZero() {
+					return
+				}
+				duration := time.Since(thinkingStart)
+				thinkingDuration += duration
+				select {
+				case ch <- AgentStreamEvent{Type: StreamEventThinkingEnd, Timestamp: time.Now().UnixMilli(), DurationMS: duration.Milliseconds()}:
+				case <-ctx.Done():
+				}
+				thinkingStart = time.Time{}
+			}
+			defer finishThinking()
 			for event := range stream.Events() {
 				select {
 				case <-ctx.Done():
@@ -307,14 +324,28 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 				default:
 				}
 				switch e := event.(type) {
+				case ai.EventThinkingDelta:
+					if thinkingStart.IsZero() {
+						thinkingStart = time.Now()
+					}
+					select {
+					case ch <- AgentStreamEvent{Type: StreamEventThinkingDelta, TextDelta: e.Delta, Timestamp: time.Now().UnixMilli()}:
+					case <-ctx.Done():
+						return streamMsg, ctx.Err()
+					}
+				case ai.EventToolCallStart:
+					finishThinking()
 				case ai.EventTextDelta:
+					finishThinking()
 					select {
 					case ch <- AgentStreamEvent{Type: StreamEventTextDelta, TextDelta: e.Delta}:
 					case <-ctx.Done():
 						return streamMsg, ctx.Err()
 					}
 				case ai.EventDone:
+					finishThinking()
 					streamMsg = e.Message
+					streamMsg.ThinkingDurationMS = thinkingDuration.Milliseconds()
 				case ai.EventError:
 					select {
 					case ch <- AgentStreamEvent{Type: StreamEventError, Error: e.Error}:
@@ -446,12 +477,13 @@ func (a *Agent) llmRequest(messages []ai.Message) ai.StreamRequest {
 
 func (a *Agent) handleAssistantMessage(message ai.StreamAssistantMessage) (ai.AssistantMessage, error) {
 	assistant := ai.AssistantMessage{
-		Text:       message.Text,
-		Thinking:   message.Thinking,
-		ToolCalls:  message.ToolCalls,
-		StopReason: message.StopReason,
-		ErrorMsg:   message.ErrorMsg,
-		Usage:      message.Usage,
+		Text:               message.Text,
+		Thinking:           message.Thinking,
+		ThinkingDurationMS: message.ThinkingDurationMS,
+		ToolCalls:          message.ToolCalls,
+		StopReason:         message.StopReason,
+		ErrorMsg:           message.ErrorMsg,
+		Usage:              message.Usage,
 	}
 	return assistant, nil
 }
@@ -473,6 +505,9 @@ type StreamEventType string
 
 const (
 	StreamEventTextDelta       StreamEventType = "text_delta"
+	StreamEventThinkingDelta   StreamEventType = "thinking_delta"
+	StreamEventThinkingEnd     StreamEventType = "thinking_end"
+	StreamEventContextUsage    StreamEventType = "context_usage"
 	StreamEventTurnEnd         StreamEventType = "turn_end"
 	StreamEventToolStart       StreamEventType = "tool_start"
 	StreamEventToolUpdate      StreamEventType = "tool_update"
@@ -487,6 +522,7 @@ const (
 )
 
 type AgentStreamEvent struct {
+	ContextUsage  *ContextUsage       `json:"context_usage,omitempty"`
 	Timestamp     int64               `json:"timestamp,omitempty"`
 	DurationMS    int64               `json:"duration_ms,omitempty"`
 	Type          StreamEventType     `json:"type"`

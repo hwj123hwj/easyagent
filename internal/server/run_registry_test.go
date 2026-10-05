@@ -127,7 +127,12 @@ func waitRunText(t *testing.T, srv *Server, run *sessionRun) {
 	require.Eventually(t, func() bool {
 		srv.runs.mu.Lock()
 		defer srv.runs.mu.Unlock()
-		return len(run.projection) > 0 && run.projection[0].Type == agent.StreamEventTextDelta
+		for _, event := range run.projection {
+			if event.Type == agent.StreamEventTextDelta {
+				return true
+			}
+		}
+		return false
 	}, 3*time.Second, time.Millisecond)
 }
 
@@ -146,7 +151,14 @@ func TestRunWebSocketDisconnectReplaysWithoutRestartOrCancellation(t *testing.T)
 	reconnected := dialRunWS(t, server)
 	require.NoError(t, reconnected.WriteJSON(wsClientMessage{Type: "subscribe", SessionID: sessionID, RunID: runID}))
 	snapshot := readRunMessage(t, reconnected, "snapshot")
-	require.Equal(t, "first ", snapshot["events"].([]any)[0].(map[string]any)["text_delta"])
+	var replayedText string
+	for _, value := range snapshot["events"].([]any) {
+		event := value.(map[string]any)
+		if event["type"] == string(agent.StreamEventTextDelta) {
+			replayedText += event["text_delta"].(string)
+		}
+	}
+	require.Equal(t, "first ", replayedText)
 	require.NoError(t, reconnected.WriteJSON(wsClientMessage{Type: "prompt", SessionID: sessionID, Prompt: "hello", RequestID: "once"}))
 	duplicate := readRunMessage(t, reconnected, "accepted")
 	require.Equal(t, true, duplicate["duplicate"])
@@ -273,7 +285,13 @@ func TestRunReplayWindowGapReturnsCompleteProjection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "snapshot", snapshot.Type)
 	events := snapshot.Events.([]agent.AgentStreamEvent)
-	require.Equal(t, "first "+strings.Repeat("x", runReplayLimit+10), events[0].TextDelta)
+	var text string
+	for _, event := range events {
+		if event.Type == agent.StreamEventTextDelta {
+			text += event.TextDelta
+		}
+	}
+	require.Equal(t, "first "+strings.Repeat("x", runReplayLimit+10), text)
 	close(gateway.finish)
 	_, err = srv.waitRun(context.Background(), run)
 	require.NoError(t, err)
@@ -371,7 +389,11 @@ func TestRunReplayByteBudgetCannotPretendOversizeEventWasReplayed(t *testing.T) 
 	snapshot, err := srv.runSnapshot(run.SessionID, 1, run.ID, nil)
 	require.NoError(t, err)
 	require.Equal(t, "snapshot", snapshot.Type)
-	require.Len(t, snapshot.Events.([]agent.AgentStreamEvent), 2)
+	events := snapshot.Events.([]agent.AgentStreamEvent)
+	require.Len(t, events, 3)
+	require.Equal(t, agent.StreamEventContextUsage, events[0].Type)
+	require.Equal(t, agent.StreamEventTextDelta, events[1].Type)
+	require.Equal(t, event.ToolResult, events[2].ToolResult)
 	close(gateway.finish)
 	_, err = srv.waitRun(context.Background(), run)
 	require.NoError(t, err)
@@ -449,4 +471,49 @@ func TestRunUntrustedMCPStillWaitsForApprovalWithConfirmOff(t *testing.T) {
 	close(gateway.finish)
 	_, err = srv.waitRun(context.Background(), run)
 	require.NoError(t, err)
+}
+
+func TestSessionPermissionModesControlRealWritesAndRejectBusySwitch(t *testing.T) {
+	srv, server, gateway := newFileRunTestServer(t, "result.txt")
+	sess, err := srv.app.NewSession(context.Background())
+	require.NoError(t, err)
+	id := sess.SessionID()
+	setMode := func(mode string, wantStatus int) {
+		response, err := http.Post(server.URL+"/sessions/"+id+"/permissions", "application/json", strings.NewReader(`{"mode":"`+mode+`"}`))
+		require.NoError(t, err)
+		defer response.Body.Close()
+		require.Equal(t, wantStatus, response.StatusCode)
+	}
+	require.Equal(t, "full", sess.AccessMode(), "startup auto-approve is reflected before an override")
+	setMode("bad", http.StatusBadRequest)
+	setMode("ask", http.StatusOK)
+	run, _, err := srv.startRun(id, "write file", "ask-write")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { srv.runs.mu.Lock(); defer srv.runs.mu.Unlock(); return len(run.pending) == 1 }, 3*time.Second, time.Millisecond)
+	file := filepath.Join(sess.Config().Workspace, "result.txt")
+	_, err = os.Stat(file)
+	require.True(t, os.IsNotExist(err), "write must wait for approval")
+	setMode("full", http.StatusConflict)
+	require.Equal(t, "ask", sess.AccessMode())
+	snapshot, err := srv.runSnapshot(id, 0, run.ID, nil)
+	require.NoError(t, err)
+	require.NoError(t, srv.confirmRun(id, run.ID, snapshot.PendingConfirmations[0].ID, false, "denied"))
+	close(gateway.finish)
+	_, err = srv.waitRun(context.Background(), run)
+	require.NoError(t, err)
+	_, err = os.Stat(file)
+	require.True(t, os.IsNotExist(err), "denied write must not execute")
+	setMode("full", http.StatusOK)
+	next, _, err := srv.startRun(id, "write again", "full-write")
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err = srv.waitRun(ctx, next)
+	require.NoError(t, err)
+	data, err := os.ReadFile(file)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "tool-result-")
+	require.Equal(t, "full", sess.AccessMode(), "installing the run callback must retain explicit mode")
+	setMode("ask", http.StatusOK)
+	require.Equal(t, "ask", sess.AccessMode())
 }

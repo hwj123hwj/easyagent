@@ -524,6 +524,69 @@ test("history pairs reused tool IDs with their own assistant invocation", () => 
   );
 });
 
+test("reasoning streams before tools; snapshot replay retains duration without duplicating text", () => {
+  const usage = { estimated_tokens: 4321, context_window: 128000, window_known: true, model: 'gpt-4o', messages: 3000, system: 1000, tools: 321 };
+  const events = [
+    { type: 'context_usage', context_usage: usage },
+    { type: 'thinking_delta', text_delta: '先检查', timestamp: 1000 },
+    { type: 'thinking_delta', text_delta: '目录' },
+    { type: 'thinking_end', duration_ms: 2100 },
+    { type: 'tool_start', tool_call_id: 'read', tool_name: 'read' },
+  ];
+  let s = accepted();
+  events.forEach((event, index) => { s = reduceEnvelope(s, { type: 'event', run_id: 'run', seq: index + 1, event }); });
+  const thought = s.transcript.find(i => i.kind === 'thought');
+  assert.equal(thought.text, '先检查目录');
+  assert.equal(thought.durationMs, 2100);
+  assert.equal(thought.active, false);
+  assert.equal(s.contextUsage.estimated_tokens, 4321);
+  const restored = reduceEnvelope(emptyProjection(), { type: 'snapshot', seq: 5, run: s.run, messages: [], events });
+  assert.equal(restored.transcript.filter(i => i.kind === 'thought').length, 1);
+  assert.equal(restored.transcript.find(i => i.kind === 'thought').text, thought.text);
+  assert.deepEqual(restored.contextUsage, usage);
+  assert.deepEqual(reduceEnvelope(restored, { type: 'event', run_id: 'run', seq: 5, event: events[1] }), restored);
+  const history = historyProjection([{ role: 'assistant', thinking: '保存的思考', thinking_duration_ms: 900 }]);
+  assert.equal(history.transcript[0].durationMs, 900);
+});
+
+test("cancelled reasoning stops its live clock and context counters replace rather than accumulate", () => {
+  let s = accepted();
+  s = reduceEnvelope(s, { type: 'event', run_id: 'run', seq: 1, event: { type: 'thinking_delta', text_delta: '思考片段', timestamp: 1000 } });
+  assert.equal(s.transcript.at(-1).active, true);
+  s = reduceEnvelope(s, { type: 'status', run_id: 'run', seq: 2, state: 'cancelled' });
+  assert.equal(s.transcript.at(-1).active, false);
+  for (const count of [100, 80]) s = reduceEnvelope(s, { type: 'event', run_id: 'run', event: { type: 'context_usage', context_usage: { estimated_tokens: count } } });
+  assert.equal(s.contextUsage.estimated_tokens, 80);
+});
+
+test('separate reasoning blocks preserve their own duration and never merge with historical thinking', () => {
+ let s = accepted();
+ for (const [i,event] of [
+  {type:'thinking_delta',text_delta:'first',timestamp:1000},
+  {type:'thinking_end',duration_ms:300},
+  {type:'thinking_delta',text_delta:'second',timestamp:1400},
+  {type:'thinking_end',duration_ms:600},
+ ].entries()) s=reduceEnvelope(s,{type:'event',run_id:'run',seq:i+1,event});
+ const thoughts=s.transcript.filter(item=>item.kind==='thought');
+ assert.equal(thoughts.length,2);
+ assert.equal(thoughts[0].text,'first');
+ assert.equal(thoughts[0].durationMs,300);
+ assert.equal(thoughts[1].text,'second');
+ assert.equal(thoughts[1].durationMs,600);
+});
+
+test("declined tool remains distinct from success in live events and history", () => {
+  let s = accepted();
+  s = reduceEnvelope(s, { type: "event", run_id: "run", seq: 1, event: { type: "tool_start", tool_call_id: "deny", tool_name: "write" } });
+  s = reduceEnvelope(s, { type: "event", run_id: "run", seq: 2, event: { type: "tool_end", tool_call_id: "deny", is_error: false, tool_result: "user declined this action", tool_details: { approval: "declined" } } });
+  assert.equal(s.transcript.find(item => item.kind === "tool").status, "declined");
+  const history = historyProjection([
+    { role: "assistant", tool_calls: [{ id: "deny", name: "write" }] },
+    { role: "tool", tool_call_id: "deny", content: "user declined this action", is_error: false, tool_details: { approval: "declined" } },
+  ]);
+  assert.equal(history.transcript[0].status, "declined");
+});
+
 test("expired approval is cleared by running status from older servers", () => {
   let state = accepted();
   state = reduceEnvelope(state, { type: "confirmation", run_id: "run", seq: 1, confirmation: { confirmation_id: "expired", tool_name: "edit" } });

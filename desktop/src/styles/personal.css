@@ -1141,3 +1141,33 @@ textarea::placeholder {
   justify-content: flex-end;
   gap: 12px;
 }
+
+/* Composer status controls use the native top layer to escape clipped panels. */
+.personal-composer .composer-status-trigger { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; min-height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); white-space: nowrap; }
+.composer-status-trigger:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.personal-composer .access-full, .personal-composer .context-high { color: var(--amber); }
+.composer-status-popover { position: fixed; inset: auto; margin: 0; width: min(332px, calc(100vw - 24px)); max-height: min(520px, calc(100dvh - 80px)); overflow-y: auto; box-sizing: border-box; padding: 16px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg-elev); color: var(--text); font-size: 12px; }
+.composer-status-popover > strong { display: flex; justify-content: space-between; font-size: 13px; }
+.composer-status-popover > strong > span { font-size: 11px; font-weight: 400; color: var(--text-dim); }
+.composer-status-popover [role="listbox"] { margin-top: 12px; }
+.composer-status-popover [role="option"] { display: flex; align-items: center; gap: 10px; padding: 10px 8px; width: 100%; border: 0; border-radius: 8px; color: var(--text); background: transparent; text-align: left; }
+.composer-status-popover [role="option"]:hover { background: var(--bg-hover); }
+.composer-status-popover [aria-selected="true"] { background: var(--bg-active); color: var(--accent); }
+.composer-status-popover [role="option"] > span { flex: 1; }
+.composer-status-popover small { display: block; margin-top: 4px; color: var(--text-dim); font-size: 11px; }
+.composer-status-popover p { font-size: 11px; line-height: 1.6; margin: 12px 0 0; color: var(--text-dim); }
+.context-total { margin: 16px 0 10px; font-variant-numeric: tabular-nums; font-size: 18px; }
+.context-total span { color: var(--text-dim); font-size: 12px; }
+.composer-status-popover progress { width: 100%; height: 7px; accent-color: var(--accent); }
+.context-breakdown { margin: 14px 0 0; }
+.context-breakdown > div { display: flex; justify-content: space-between; gap: 16px; margin: 8px 0; }
+.context-breakdown dt { color: var(--text-dim); }
+.context-breakdown dd { margin: 0; font-variant-numeric: tabular-nums; }
+.context-measurement { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 16px; }
+.composer-status-popover .context-budget-note { color: var(--amber); }
+.message-thought summary { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.message-thought .thought-content { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; padding: 10px 0 4px 20px; color: var(--text-dim); }
+@container session (max-width: 680px) {
+  .personal-composer .composer-actions { flex-wrap: wrap; }
+  .personal-composer .composer-status-trigger { font-size: 11px; padding-inline: 5px; }
+}

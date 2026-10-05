@@ -126,3 +126,8 @@ type EventMicroCompacted struct {
 }
 
 func (EventMicroCompacted) agentEventMarker() {}
+
+// EventContextUsage describes this request, never cumulative billed tokens.
+type EventContextUsage struct{ Usage ContextUsage }
+
+func (EventContextUsage) agentEventMarker() {}

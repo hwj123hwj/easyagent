@@ -459,6 +459,7 @@ function ToolGroup({
   const failedCount = value.items.filter(
     (item) => item.status === "failed",
   ).length;
+  const declinedCount = value.items.filter((item) => item.status === "declined").length;
   const current =
     value.items.find((item) => item.status === "in_progress") ||
     value.items.at(-1);
@@ -519,7 +520,7 @@ function ToolGroup({
         </span>
         <span className="tool-group-counts">
           {running && "执行中 · "}
-          {completedCount} 成功{failedCount > 0 && ` · ${failedCount} 失败`}
+          {completedCount > 0 && `${completedCount} 成功`}{failedCount > 0 && `${completedCount > 0 ? " · " : ""}${failedCount} 失败`}{declinedCount > 0 && `${completedCount + failedCount > 0 ? " · " : ""}${declinedCount} 已拒绝`}
           {duration > 0 && (
             <small title="工具耗时累计">
               {" "}
@@ -580,12 +581,7 @@ const Message = memo(function Message({
   const [copied, setCopied] = useState(false),
     [error, setError] = useState("");
   if (item.kind === "thought")
-    return density === "summary" ? null : (
-      <details className="message-thought">
-        <summary>思考过程</summary>
-        <p>{item.text}</p>
-      </details>
-    );
+    return <Thought item={item} />;
   if (item.kind === "system")
     return <div className="msg-system">{item.text}</div>;
   if (item.kind === "error")
@@ -624,3 +620,22 @@ const Message = memo(function Message({
     </article>
   );
 });
+
+function Thought({ item }: { item: Exclude<ChatItem, { kind: "tool" }> }) {
+  const [open, setOpen] = useState(!!item.active), [now, setNow] = useState(Date.now());
+  const touched = useRef(false);
+  useEffect(() => { if (!touched.current) setOpen(!!item.active); }, [item.active]);
+  useEffect(() => {
+    if (!item.active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [item.active]);
+  const elapsed = item.active && item.startedAt ? Math.max(0, now - item.startedAt) : item.durationMs;
+  return <details className="message-thought" open={open} onToggle={e => setOpen(e.currentTarget.open)}>
+    <summary onClick={() => { touched.current = true; }}><Icon name={open ? "chevron-down" : "chevron-right"} size={13} /><Icon name="think" size={14} />
+      {item.active ? "正在思考" : "思考过程"}
+      {elapsed !== undefined && <span> · {(elapsed / 1000).toFixed(1)}s</span>}
+    </summary>
+    <div className="thought-content">{item.text}</div>
+  </details>;
+}

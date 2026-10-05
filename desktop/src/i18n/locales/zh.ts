@@ -215,6 +215,7 @@ export const zh = {
   'tool.status.pending': '等待',
   'tool.status.in_progress': '执行中',
   'tool.status.completed': '完成',
+  'tool.status.declined': '已拒绝',
   'tool.status.failed': '失败',
 
   // ── tool result summaries (single-line description, VSCode-plugin style) ───────────────

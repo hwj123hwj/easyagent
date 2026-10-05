@@ -80,6 +80,7 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
         kind: "thought",
         id: prefix + "-thought",
         text: message.thinking,
+        durationMs: message.thinking_duration_ms,
       });
     if (message.content)
       result.transcript.push({
@@ -96,7 +97,7 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
         title: call.name,
         toolKind: toolKind(call.name),
         rawInput: args(call.args),
-        status: !outcome || outcome.is_error ? "failed" : "completed",
+        status: outcome?.tool_details?.approval === "declined" ? "declined" : !outcome || outcome.is_error ? "failed" : "completed",
         content: [
           {
             text: outcome
@@ -120,7 +121,9 @@ function eventProjection(
   event: AgentEvent,
   key: string,
 ): RunProjection {
-  const transcript = [...state.transcript];
+  if (event.type === "context_usage" && event.context_usage)
+    return { ...state, contextUsage: event.context_usage };
+  const transcript = state.transcript.map(item => item.kind === "thought" && item.active && event.type !== "thinking_delta" && event.type !== "thinking_end" ? { ...item, active: false } : item);
   const runKey = state.run?.run_id || "stream";
   if (event.type === "text_delta" && event.text_delta) {
     const last = transcript.at(-1);
@@ -139,7 +142,7 @@ function eventProjection(
   }
   if (event.type === "thinking_delta" && event.text_delta) {
     const last = transcript.at(-1);
-    if (last?.kind === "thought")
+    if (last?.kind === "thought" && last.active)
       transcript[transcript.length - 1] = {
         ...last,
         text: last.text + event.text_delta,
@@ -149,8 +152,20 @@ function eventProjection(
         kind: "thought",
         id: `${runKey}-${key}-thought`,
         text: event.text_delta,
+        startedAt: event.timestamp,
+        active: true,
       });
     return { ...state, transcript, phase: "thinking" };
+  }
+  if (event.type === "thinking_end") {
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      const item = transcript[i];
+      if (item.kind === "thought" && item.id.startsWith(runKey + "-")) {
+        transcript[i] = { ...item, active: false, durationMs: event.duration_ms };
+        break;
+      }
+    }
+    return { ...state, transcript };
   }
   if (event.type === "tool_start") {
     if (
@@ -190,8 +205,9 @@ function eventProjection(
               item.toolKind === "execute" ? text : item.terminalOutput,
             status:
               event.type === "tool_end"
-                ? ((event.is_error ? "failed" : "completed") as
+                ? ((event.tool_details?.approval === "declined" ? "declined" : event.is_error ? "failed" : "completed") as
                     | "failed"
+                    | "declined"
                     | "completed")
                 : item.status,
             details: (event.tool_details ||
@@ -280,6 +296,7 @@ export function reduceEnvelope(
     });
     return terminalProjection({
       ...next,
+      contextUsage: next.contextUsage || state.contextUsage,
       seq: message.seq || 0,
       confirmations: message.pending_confirmations || [],
       phase: message.pending_confirmations?.length
@@ -444,8 +461,8 @@ function terminalProjection(state: RunProjection): RunProjection {
     });
   return {
     ...state,
-    transcript,
     confirmations: [],
+    transcript: transcript.map(item => item.kind === "thought" ? { ...item, active: false } : item),
     phase:
       status === "interrupted"
         ? "interrupted"

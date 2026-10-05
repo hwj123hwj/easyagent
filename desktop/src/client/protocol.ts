@@ -36,11 +36,31 @@ export interface Confirmation {
   description: string;
   args?: unknown;
 }
+export type AccessMode = "ask" | "full";
+export interface ContextUsage {
+  estimated_tokens: number;
+  context_window: number;
+  window_known: boolean;
+  model: string;
+  messages: number;
+  system: number;
+  tools: number;
+  last_request?: { input_tokens: number; output_tokens: number; cached_input_tokens?: number };
+}
+export interface SessionInfo {
+  workspace: string;
+  model: string;
+  access_mode?: AccessMode;
+  context_usage?: ContextUsage;
+}
 export type ChatItem =
   | {
       kind: "user" | "assistant" | "thought" | "system" | "error";
       id: string;
       text: string;
+      startedAt?: number;
+      durationMs?: number;
+      active?: boolean;
     }
   | {
       kind: "tool";
@@ -58,6 +78,7 @@ export type ChatItem =
       details?: Record<string, unknown>;
     };
 export interface AgentEvent {
+  context_usage?: ContextUsage;
   timestamp?: number;
   duration_ms?: number;
   type: string;
@@ -65,6 +86,7 @@ export interface AgentEvent {
   tool_call_id?: string;
   tool_name?: string;
   tool_args?: Record<string, unknown>;
+  tool_details?: Record<string, unknown>;
   tool_result?: unknown;
   partial_result?: unknown;
   is_error?: boolean;
@@ -79,6 +101,7 @@ export interface StoredMessage {
   role: string;
   content?: unknown;
   thinking?: string;
+  thinking_duration_ms?: number;
   tool_calls?: Array<{ id: string; name: string; args?: unknown }>;
   tool_call_id?: string;
   is_error?: boolean;
@@ -145,6 +168,7 @@ export function promptInputs(draft: DraftInputs): PromptInputs {
   };
 }
 export interface RunProjection {
+  contextUsage?: ContextUsage;
   transcript: ChatItem[];
   seq: number;
   run?: RunInfo;

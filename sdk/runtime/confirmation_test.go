@@ -68,3 +68,22 @@ func TestWrapConfirmPreservesFullAccessAcrossAgentRebuilds(t *testing.T) {
 	assert.False(t, decision.Approved, "turning confirmation back on must call the handler")
 	assert.Equal(t, 1, confirmCalls)
 }
+
+func TestExplicitAccessModeRetainsMCPApprovalRule(t *testing.T) {
+	session := &AgentSession{}
+	calls := 0
+	confirm := func(context.Context, agent.ConfirmationRequest) agent.ConfirmDecision {
+		calls++
+		return agent.ConfirmDecision{Approved: false}
+	}
+	require.NoError(t, session.TrySetAccessMode(confirm, false))
+	require.Equal(t, "full", session.AccessMode())
+	require.True(t, session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{}).Approved)
+	require.False(t, session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{RequiresApproval: true}).Approved)
+	require.Equal(t, 1, calls)
+	require.NoError(t, session.TrySetConfirmFunc(confirm))
+	require.Equal(t, "full", session.AccessMode())
+	require.NoError(t, session.TrySetAccessMode(confirm, true))
+	require.False(t, session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{}).Approved)
+	require.Equal(t, 2, calls)
+}

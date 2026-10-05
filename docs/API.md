@@ -98,7 +98,8 @@ GET /ws
 | `GET` | `/sessions` | 列出所有会话 |
 | `POST` | `/sessions` | 创建新会话 |
 | `GET` | `/sessions/{id}/messages` | 获取会话消息 |
-| `GET` | `/sessions/{id}/info` | 获取会话信息 |
+| `GET` | `/sessions/{id}/info` | 获取会话信息、`access_mode` 及 `context_usage` |
+| `POST` | `/sessions/{id}/permissions` | 切换空闲会话权限，body 为 `{"mode":"ask"}` 或 `{"mode":"full"}` |
 | `DELETE` | `/sessions/{id}` | 删除会话 |
 | `POST` | `/sessions/{id}/model` | 切换会话模型 |
 | `POST` | `/sessions/{id}/compact` | 压缩会话上下文 |
@@ -109,6 +110,14 @@ GET /ws
 | `GET` | `/sessions/{id}/diff` | 获取会话 Git diff |
 | `GET` | `/sessions/{id}/file` | 获取会话文件内容 |
 | `PUT` | `/sessions/{id}/file` | 写入会话文件 |
+
+`access_mode` 为 `ask`（确认危险工具）或 `full`（自动批准普通工具）；仅在当前服务进程的会话内保留，活跃任务及工作流 Actor 返回 409。不会解决已经等待的批准，MCP 独立审批及工作区边界仍有效。
+
+工具被拒绝时，`tool_details.approval` 为 `declined`（流及历史均保留）；`is_error` 仍为 false，以避免将用户拒绝当作系统故障重试。
+
+Agent 流新增 `thinking_delta`（`text_delta` 携带思考片段、`timestamp` 为毫秒）、`thinking_end`（`duration_ms`）和 `context_usage`（同名对象字段）。历史消息包括 `thinking_duration_ms`。只有上游返回的思考片段才产生思考事件。
+
+`context_usage` 包含 `estimated_tokens`、`messages`、`system`、`tools`、`context_window`、`window_known`、`model` 及 `last_request`。前三类相加得到当前估算占用，图片未计入；`window_known:false` 表示默认运行预算。`last_request` 为最近一次请求的实际 `input_tokens` / `output_tokens`，可选 `cached_input_tokens` 区分未报告与零命中，不累加多轮用量。
 
 ### 切换模型
 

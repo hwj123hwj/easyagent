@@ -203,7 +203,9 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 	history = a.maybeCompact(ctx, history)
 
 	// 用完整历史调用 LLM
-	stream, err := provider.Stream(ctx, a.llmRequest(history))
+	request := a.llmRequest(history)
+	a.emit(ctx, EventContextUsage{Usage: estimateContext(request, latestRequestUsage(history))})
+	stream, err := provider.Stream(ctx, request)
 	if err != nil {
 		return turnResult{}, history, err
 	}
@@ -218,6 +220,8 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 	if err != nil {
 		return turnResult{}, history, err
 	}
+
+	a.emit(ctx, EventContextUsage{Usage: estimateContext(a.llmRequest(append(append([]ai.Message{}, history...), message)), message.Usage)})
 
 	// 将 assistant message 追加到历史
 	history = append(history, message)
@@ -619,8 +623,9 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) (result ai.
 				if reason != "" {
 					msg = fmt.Sprintf("user declined this action: %s", reason)
 				}
-				a.emit(ctx, EventToolExecutionEnd{ToolCallID: call.ID, ToolName: call.Name, Result: msg, IsError: false})
-				return ai.ToolResultMessage{ToolCallID: call.ID, Content: msg, IsError: false}
+				details := map[string]any{"approval": "declined"}
+				a.emit(ctx, EventToolExecutionEnd{ToolCallID: call.ID, ToolName: call.Name, Result: msg, Details: details, IsError: false})
+				return ai.ToolResultMessage{ToolCallID: call.ID, Content: msg, Details: details, IsError: false}
 			}
 		}
 	}

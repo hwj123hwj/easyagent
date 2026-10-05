@@ -243,24 +243,31 @@ func (p *AnthropicProvider) handleSSEEvent(
 				ID    string `json:"id"`
 				Model string `json:"model"`
 				Usage struct {
-					InputTokens int `json:"input_tokens"`
+					InputTokens int  `json:"input_tokens"`
+					CacheRead   *int `json:"cache_read_input_tokens"`
+					CacheWrite  int  `json:"cache_creation_input_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
 		}
 		_ = json.Unmarshal([]byte(data), &msg)
-		if msg.Message.Usage.InputTokens > 0 {
-			partial.Usage = ai.Usage{InputTokens: msg.Message.Usage.InputTokens}
+		if msg.Message.Usage.InputTokens > 0 || msg.Message.Usage.CacheRead != nil || msg.Message.Usage.CacheWrite > 0 {
+			u := msg.Message.Usage
+			partial.Usage = ai.Usage{InputTokens: u.InputTokens + u.CacheWrite, CachedInputTokens: u.CacheRead}
+			if u.CacheRead != nil {
+				partial.Usage.InputTokens += *u.CacheRead
+			}
 		}
 
 	case "content_block_start":
 		var raw struct {
 			Index        int `json:"index"`
 			ContentBlock struct {
-				Type  string `json:"type"`
-				ID    string `json:"id,omitempty"`
-				Name  string `json:"name,omitempty"`
-				Text  string `json:"text,omitempty"`
-				Input any    `json:"input,omitempty"`
+				Type     string `json:"type"`
+				ID       string `json:"id,omitempty"`
+				Name     string `json:"name,omitempty"`
+				Text     string `json:"text,omitempty"`
+				Thinking string `json:"thinking,omitempty"`
+				Input    any    `json:"input,omitempty"`
 			} `json:"content_block"`
 		}
 		if err := json.Unmarshal([]byte(data), &raw); err != nil {
@@ -279,7 +286,10 @@ func (p *AnthropicProvider) handleSSEEvent(
 			*toolCallCounter++
 			_ = stream.Push(ctx, ai.EventToolCallStart{ContentIndex: idx, Partial: *partial})
 		case "thinking":
-			// thinking 块暂不详细处理
+			if raw.ContentBlock.Thinking != "" {
+				partial.Thinking += raw.ContentBlock.Thinking
+				_ = stream.Push(ctx, ai.EventThinkingDelta{Delta: raw.ContentBlock.Thinking})
+			}
 		}
 
 	case "content_block_delta":
@@ -303,6 +313,7 @@ func (p *AnthropicProvider) handleSSEEvent(
 			_ = stream.Push(ctx, ai.EventTextDelta{ContentIndex: idx, Delta: raw.Delta.Text, Partial: *partial})
 		case "thinking_delta":
 			partial.Thinking += raw.Delta.Thinking
+			_ = stream.Push(ctx, ai.EventThinkingDelta{Delta: raw.Delta.Thinking})
 		case "input_json_delta":
 			if tcIdx, ok := toolCallIndexMap[idx]; ok && tcIdx < len(partial.ToolCalls) {
 				partial.ToolCalls[tcIdx].Args += raw.Delta.PartialJSON
