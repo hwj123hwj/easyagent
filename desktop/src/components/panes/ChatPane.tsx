@@ -315,6 +315,7 @@ export function ChatPane({ view }: { view: SessionView }) {
               row={row}
               measure={measure}
               cwd={view.meta.cwd}
+              sessionId={view.meta.id}
               density={view.density}
               foundItem={findOpen ? match?.itemId : undefined}
             />
@@ -401,12 +402,14 @@ function MeasuredRow({
   row,
   measure,
   cwd,
+  sessionId,
   density,
   foundItem,
 }: {
   row: Row;
   measure: (id: string, height: number) => void;
   cwd: string;
+  sessionId: string;
   density: SessionView["density"];
   foundItem?: string;
 }) {
@@ -434,6 +437,7 @@ function MeasuredRow({
         <Message
           item={row}
           cwd={cwd}
+          sessionId={sessionId}
           density={
             row.id === foundItem && density === "summary" ? "normal" : density
           }
@@ -571,14 +575,20 @@ function ToolGroup({
 const Message = memo(function Message({
   item,
   cwd,
+  sessionId,
   density,
 }: {
   item: Exclude<ChatItem, { kind: "tool" }>;
   cwd: string;
+  sessionId: string;
   density: SessionView["density"];
 }) {
   const [copied, setCopied] = useState(false),
     [error, setError] = useState("");
+  const [lightbox, setLightbox] = useState<{ url: string; name: string } | null>(
+    null,
+  );
+  const forkSession = useStore((s) => s.forkSession);
   if (item.kind === "thought")
     return density === "summary" ? null : (
       <details className="message-thought">
@@ -598,6 +608,74 @@ const Message = memo(function Message({
     return (
       <div className="personal-user">
         <div>{item.text}</div>
+        {!!item.images?.length && (
+          <div className="user-message-images">
+            {item.images.map((img) => (
+              <img
+                key={img.id}
+                src={img.url}
+                alt={img.name}
+                className="user-message-image-thumb"
+                onClick={() => setLightbox(img)}
+              />
+            ))}
+          </div>
+        )}
+        <div className="user-message-actions">
+          <button
+            className="user-fork-btn"
+            title={
+              item.entryId
+                ? "从此消息分叉新会话"
+                : "分叉会话（此消息在服务端历史中无定位，从当前完整状态分叉）"
+            }
+            onClick={() => {
+              void (async () => {
+                try {
+                  await forkSession(sessionId, {
+                    entryId: item.entryId || undefined,
+                  });
+                } catch (forkError) {
+                  setError(
+                    forkError instanceof Error
+                      ? forkError.message
+                      : String(forkError),
+                  );
+                }
+              })();
+            }}
+          >
+            <Icon name="git-branch" size={12} />
+            从此分叉
+          </button>
+        </div>
+        {error && <span className="inline-error">{error}</span>}
+        {lightbox && (
+          <div
+            className="attachment-image-lightbox"
+            onClick={() => setLightbox(null)}
+            role="dialog"
+            aria-label={lightbox.name}
+          >
+            <div
+              className="attachment-image-lightbox-content"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <header>
+                <span>{lightbox.name}</span>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => setLightbox(null)}
+                  aria-label="关闭"
+                >
+                  ×
+                </button>
+              </header>
+              <img src={lightbox.url} alt={lightbox.name} />
+            </div>
+          </div>
+        )}
       </div>
     );
   return (

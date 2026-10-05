@@ -37,16 +37,17 @@ type pendingConfirmation struct {
 // sessionRun is owned by the session, never by a socket or HTTP request.
 type sessionRun struct {
 	files          *runFiles
-	DisplayPrompt  string       `json:"display_prompt,omitempty"`
-	Inputs         promptInputs `json:"inputs,omitempty"`
-	ID             string       `json:"run_id"`
-	RequestID      string       `json:"request_id"`
-	SessionID      string       `json:"session_id"`
-	Prompt         string       `json:"prompt"`
-	State          string       `json:"state"`
-	StartedAt      time.Time    `json:"started_at"`
-	EndedAt        *time.Time   `json:"ended_at,omitempty"`
-	Error          string       `json:"error,omitempty"`
+	DisplayPrompt  string            `json:"display_prompt,omitempty"`
+	Inputs         promptInputs      `json:"inputs,omitempty"`
+	Attachments    []inputAttachment `json:"attachments,omitempty"`
+	ID             string            `json:"run_id"`
+	RequestID      string            `json:"request_id"`
+	SessionID      string            `json:"session_id"`
+	Prompt         string            `json:"prompt"`
+	State          string            `json:"state"`
+	StartedAt      time.Time         `json:"started_at"`
+	EndedAt        *time.Time        `json:"ended_at,omitempty"`
+	Error          string            `json:"error,omitempty"`
 	baseline       []map[string]any
 	projection     []agent.AgentStreamEvent
 	projectionText strings.Builder
@@ -205,6 +206,7 @@ func (s *Server) startRun(sessionID, prompt, requestID string, values ...promptI
 	state := g.sessionLocked(run.SessionID)
 	state.run = run
 	run.DisplayPrompt = message.DisplayText
+	run.Attachments = s.resolvePromptAttachments(run.SessionID, run.Inputs.Attachments)
 	state.replay, state.replayBytes = nil, 0
 	g.requests[requestID] = run
 	g.requestOrder = append(g.requestOrder, requestID)

@@ -34,6 +34,7 @@ type SessionInfo struct {
 	Application  string `json:"application,omitempty"` // e.g. "coding", "music", "kb"
 	Pinned       bool   `json:"pinned"`
 	Archived     bool   `json:"archived"`
+	ForkedFrom   string `json:"forked_from,omitempty"` // source session id when this session is a fork
 }
 
 // NewManager creates a new session manager rooted at dataDir.
@@ -202,6 +203,12 @@ func (m *Manager) Open(ctx context.Context, id string) (*session.Session, string
 // Fork creates a new session by copying an existing session file
 // and optionally branching at a specific entry.
 // Returns the new session ID and path.
+//
+// The fork inherits the source session's meta.json (workspace, application,
+// title preferences) so it stays grouped under the same project, with a
+// "(分叉)" title suffix and a forked_from marker pointing at the source.
+// Attachment metadata is copied too, so prompts in the forked session can
+// still reference attachments uploaded to the source conversation.
 func (m *Manager) Fork(ctx context.Context, sourceID string, entryID string) (string, string, error) {
 	sourcePath := m.SessionPath(sourceID)
 	if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
@@ -223,6 +230,15 @@ func (m *Manager) Fork(ctx context.Context, sourceID string, entryID string) (st
 		return "", "", fmt.Errorf("write forked session: %w", err)
 	}
 
+	// Inherit metadata (workspace/application) so List keeps the fork in the
+	// same project group, and mark its origin for the UI "Fork of" badge.
+	if err := m.copyMeta(sourceID, newID); err != nil {
+		return "", "", fmt.Errorf("copy session metadata: %w", err)
+	}
+	if err := m.copyAttachments(sourceID, newID); err != nil {
+		return "", "", fmt.Errorf("copy attachment metadata: %w", err)
+	}
+
 	// If entryID specified, set leaf to that entry
 	if entryID != "" {
 		storage := session.NewJSONLStorage(newPath)
@@ -242,6 +258,68 @@ func (m *Manager) Fork(ctx context.Context, sourceID string, entryID string) (st
 	}
 
 	return newID, newPath, nil
+}
+
+// copyMeta clones the source meta.json into the forked session, appending a
+// "(分叉)" title and recording the source id as forked_from. Missing source
+// metadata is tolerated: the fork simply starts with defaults.
+func (m *Manager) copyMeta(sourceID, newID string) error {
+	meta := map[string]any{}
+	if data, err := os.ReadFile(filepath.Join(m.SessionsDir(), sourceID, "meta.json")); err == nil {
+		if json.Unmarshal(data, &meta) != nil {
+			meta = map[string]any{}
+		}
+	}
+	title, _ := meta["title"].(string)
+	if strings.TrimSpace(title) == "" {
+		// Match List()'s fallback title derivation so forks of untitled
+		// sessions still read as "源标题 (分叉)" once the source gets named.
+		_, _, firstUserMsg, err := countMessages(m.SessionPath(sourceID))
+		if err == nil && firstUserMsg != "" {
+			title = strings.SplitN(firstUserMsg, "\n", 2)[0]
+		}
+	}
+	if strings.TrimSpace(title) != "" {
+		meta["title"] = strings.TrimSpace(title) + " (分叉)"
+	}
+	meta["forked_from"] = sourceID
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(m.SessionsDir(), newID, "meta.json"), data, 0o644)
+}
+
+// copyAttachments copies the attachment metadata directory so the forked
+// session can resolve attachment ids uploaded in the source conversation.
+// Only the small JSON metadata files are copied; the actual bytes stay in the
+// source workspace path they already point at (paths are absolute).
+func (m *Manager) copyAttachments(sourceID, newID string) error {
+	sourceDir := filepath.Join(m.SessionsDir(), sourceID, "attachments")
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	targetDir := filepath.Join(m.SessionsDir(), newID, "attachments")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(sourceDir, entry.Name()))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(targetDir, entry.Name()), data, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // List returns metadata for all sessions, sorted by LastActive descending.
@@ -287,15 +365,17 @@ func (m *Manager) List(ctx context.Context) ([]SessionInfo, error) {
 			info.Title = strings.SplitN(firstUserMsg, "\n", 2)[0]
 		}
 		var preferences struct {
-			Title    string `json:"title"`
-			Pinned   bool   `json:"pinned"`
-			Archived bool   `json:"archived"`
+			Title      string `json:"title"`
+			Pinned     bool   `json:"pinned"`
+			Archived   bool   `json:"archived"`
+			ForkedFrom string `json:"forked_from"`
 		}
 		if data, err := os.ReadFile(filepath.Join(sessionsDir, id, "meta.json")); err == nil && json.Unmarshal(data, &preferences) == nil {
 			if preferences.Title != "" {
 				info.Title = preferences.Title
 			}
 			info.Pinned, info.Archived = preferences.Pinned, preferences.Archived
+			info.ForkedFrom = preferences.ForkedFrom
 		}
 
 		infos = append(infos, info)

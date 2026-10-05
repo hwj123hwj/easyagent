@@ -22,6 +22,7 @@ export function Sidebar() {
   const active = useStore((s) => s.activeSessionId);
   const setActive = useStore((s) => s.setActive);
   const createSession = useStore((s) => s.createSession);
+  const forkSession = useStore((s) => s.forkSession);
   const deleteSession = useStore((s) => s.deleteSession);
   const refreshSessions = useStore((s) => s.refreshSessions);
   const updateSession = useStore((s) => s.updateSession);
@@ -182,6 +183,11 @@ export function Sidebar() {
           <>
             <span className="session-title" title={v.meta.title}>
               {v.meta.pinned && <Icon name="circle-check" size={12} />}
+              {v.meta.forked_from && (
+                <span title="从此会话分叉" style={{ display: 'inline-flex', verticalAlign: 'middle', marginRight: 4, opacity: 0.85 }}>
+                  <Icon name="git-branch" size={11} />
+                </span>
+              )}
               {v.meta.title}
             </span>
             {v.meta.application && (
@@ -204,6 +210,19 @@ export function Sidebar() {
             }
           >
             {v.meta.pinned ? "取消置顶" : "置顶"}
+          </button>
+          <button
+            onClick={() => {
+              void (async () => {
+                try {
+                  await forkSession(v.meta.id);
+                } catch (error) {
+                  reportError(error);
+                }
+              })();
+            }}
+          >
+            分叉会话
           </button>
           <button
             onClick={() => {

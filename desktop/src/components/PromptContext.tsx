@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiRequest, useStore } from "../store";
+import { apiRequest, attachmentRawUrl, useStore } from "../store";
 import { EMPTY_INPUTS, type InputAttachment } from "../client/protocol";
 import { Icon } from "./Icon";
 
@@ -35,6 +35,7 @@ export function PromptContext({
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [previewImage, setPreviewImage] = useState<{ url: string; name: string } | null>(null);
   const mention = /(?:^|\s)@([^\s@]*)$/.exec(text);
   const query = mention?.[1].toLocaleLowerCase();
   const matches = useMemo(
@@ -260,31 +261,45 @@ export function PromptContext({
         draft.files.length > 0 ||
         uploading) && (
         <div className="composer-context" aria-label="消息上下文">
-          {draft.attachments.map((item) => (
-            <span
-              key={item.id}
-              title={`${host} · ${item.workspace}\n${item.path}`}
-            >
-              <Icon name="file" size={12} />
-              {item.name}
-              <small>{host}</small>
-              <button
-                aria-label={`移除 ${item.name}`}
-                onClick={() =>
-                  useStore
-                    .getState()
-                    .setDraftInputs(id, {
-                      ...draft,
-                      attachments: draft.attachments.filter(
-                        (attachment) => attachment.id !== item.id,
-                      ),
-                    })
-                }
+          {draft.attachments.map((item) => {
+            const isImage = item.mime_type?.startsWith("image/");
+            const rawUrl = isImage ? attachmentRawUrl(id, item.id) : "";
+            return (
+              <span
+                key={item.id}
+                className={isImage ? "is-image" : undefined}
+                title={`${host} · ${item.workspace}\n${item.path}`}
               >
-                ×
-              </button>
-            </span>
-          ))}
+                {isImage ? (
+                  <img
+                    src={rawUrl}
+                    alt={item.name}
+                    className="composer-attachment-thumb"
+                    onClick={() => setPreviewImage({ url: rawUrl, name: item.name })}
+                  />
+                ) : (
+                  <Icon name="file" size={12} />
+                )}
+                {item.name}
+                <small>{host}</small>
+                <button
+                  aria-label={`移除 ${item.name}`}
+                  onClick={() =>
+                    useStore
+                      .getState()
+                      .setDraftInputs(id, {
+                        ...draft,
+                        attachments: draft.attachments.filter(
+                          (attachment) => attachment.id !== item.id,
+                        ),
+                      })
+                  }
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
           {draft.files.map((item) => (
             <span key={item.path} title={`${host} · ${item.workspace}`}>
               <Icon name="folder" size={12} />@{item.path.split(/[\\/]/).pop()}
@@ -338,6 +353,32 @@ export function PromptContext({
               {id === "__new__" ? "创建项目会话后可引用文件" : "没有匹配的文件"}
             </p>
           )}
+        </div>
+      )}
+      {previewImage && (
+        <div
+          className="attachment-image-lightbox"
+          onClick={() => setPreviewImage(null)}
+          role="dialog"
+          aria-label={previewImage.name}
+        >
+          <div
+            className="attachment-image-lightbox-content"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header>
+              <span>{previewImage.name}</span>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setPreviewImage(null)}
+                aria-label="关闭"
+              >
+                ×
+              </button>
+            </header>
+            <img src={previewImage.url} alt={previewImage.name} />
+          </div>
         </div>
       )}
     </>

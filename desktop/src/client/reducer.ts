@@ -7,6 +7,7 @@ import type {
 } from "./protocol";
 import type { AcpToolKind } from "../types";
 import { isActiveRun } from "./protocol";
+import { attachmentRawUrl } from "../store";
 export function emptyProjection(): RunProjection {
   return { transcript: [], seq: 0, confirmations: [], phase: "idle" };
 }
@@ -73,6 +74,10 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
         kind: "user",
         id: prefix,
         text: displayText(message.content),
+        entryId: message.entry_id,
+        images: message.images
+          ?.filter((img) => typeof img?.data_url === "string" && img.data_url)
+          .map((img) => ({ url: img.data_url, name: "附件图片", id: `${prefix}-img` })),
       });
     if (message.role !== "assistant") return;
     if (message.thinking)
@@ -274,6 +279,13 @@ export function reduceEnvelope(
         kind: "user",
         id: `${message.run.run_id}-user`,
         text: message.run.display_prompt || message.run.prompt,
+        images: (message.run.attachments || [])
+          .filter((att) => att.mime_type?.startsWith("image/"))
+          .map((att) => ({
+            id: att.id,
+            name: att.name,
+            url: attachmentRawUrl(next.run?.session_id || "", att.id),
+          })),
       });
     (message.events || []).forEach((event, index) => {
       next = eventProjection(next, event as AgentEvent, `snapshot-${index}`);
@@ -330,7 +342,21 @@ export function reduceEnvelope(
       transcript: message.prompt
         ? [
             ...state.transcript,
-            { kind: "user", id: `${run.run_id}-user`, text: message.prompt },
+            {
+              kind: "user" as const,
+              id: `${run.run_id}-user`,
+              text: message.prompt,
+              images: (message.run?.attachments || [])
+                .filter((att) => att.mime_type?.startsWith("image/"))
+                .map((att) => ({
+                  id: att.id,
+                  name: att.name,
+                  url: attachmentRawUrl(
+                    message.run?.session_id || "",
+                    att.id,
+                  ),
+                })),
+            },
           ]
         : state.transcript,
     });

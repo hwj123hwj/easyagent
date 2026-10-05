@@ -174,6 +174,8 @@ func (s *Server) Handler() http.Handler {
 	restMux.HandleFunc("POST /chat/stream", s.chatStream)
 	restMux.HandleFunc("GET /sessions", s.listSessions)
 	restMux.HandleFunc("POST /sessions", s.createSession)
+	restMux.HandleFunc("POST /sessions/{id}/fork", s.forkSession)
+	restMux.HandleFunc("GET /sessions/{id}/attachments/{attID}/raw", s.getAttachmentRaw)
 	restMux.HandleFunc("GET /sessions/{id}/messages", s.getSessionMessages)
 	restMux.HandleFunc("GET /sessions/{id}/info", s.getSessionInfo)
 	restMux.HandleFunc("GET /sessions/{id}/run", s.getRun)
@@ -478,10 +480,22 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	entryIDs, _ := sess.Session().BuildContextEntryIDs(r.Context())
+	entryAt := func(i int) string {
+		if i < len(entryIDs) {
+			return entryIDs[i]
+		}
+		return ""
+	}
+
 	type toolCallEntry struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 		Args string `json:"args"`
+	}
+
+	type imageEntry struct {
+		DataURL string `json:"data_url"`
 	}
 
 	type messageEntry struct {
@@ -493,17 +507,24 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 		ToolCallID  string          `json:"tool_call_id,omitempty"`
 		ToolDetails any             `json:"tool_details,omitempty"`
 		IsError     bool            `json:"is_error,omitempty"`
+		EntryID     string          `json:"entry_id,omitempty"`
+		Images      []imageEntry    `json:"images,omitempty"`
 	}
 
 	var result []messageEntry
-	for _, msg := range messages {
-		entry := messageEntry{Role: string(msg.Role())}
+	for i, msg := range messages {
+		entry := messageEntry{Role: string(msg.Role()), EntryID: entryAt(i)}
 		switch m := msg.(type) {
 		case ai.UserMessage:
 			var texts []string
 			for _, block := range m.Content {
-				if block.Type == "text" {
+				switch {
+				case block.Type == "text":
 					texts = append(texts, block.Text)
+				case block.Type == "image" && block.Image != nil:
+					entry.Images = append(entry.Images, imageEntry{
+						DataURL: fmt.Sprintf("data:%s;base64,%s", block.Image.MediaType, base64.StdEncoding.EncodeToString(block.Image.Data)),
+					})
 				}
 			}
 			entry.Content = joinTexts(texts)

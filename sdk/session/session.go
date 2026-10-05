@@ -111,6 +111,39 @@ func entryToMessages(entry Entry) []ai.Message {
 	return nil
 }
 
+// BuildContextEntryIDs returns the JSONL entry id behind each message
+// produced by BuildContext, position-aligned with that output. Entries that
+// expand to multiple messages repeat their id; synthetic messages injected
+// outside the entry path (e.g. the compaction summary header) carry "".
+// Callers use the ids as fork anchors: "branch from this message".
+func (s *Session) BuildContextEntryIDs(ctx context.Context) ([]string, error) {
+	entries, err := s.storage.GetPathToRoot(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0, len(entries))
+	lastCompactionIdx := -1
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Type == EntryTypeCompaction {
+			lastCompactionIdx = i
+			break
+		}
+	}
+
+	tail := entries
+	if lastCompactionIdx >= 0 {
+		ids = append(ids, "") // compaction summary header message
+		tail = entries[lastCompactionIdx+1:]
+	}
+	for _, entry := range tail {
+		for range entryToMessages(entry) {
+			ids = append(ids, entry.ID)
+		}
+	}
+	return ids, nil
+}
+
 // AppendCompaction writes a compaction entry to the session storage.
 // The summary replaces all prior messages when BuildContext is called.
 func (s *Session) AppendCompaction(ctx context.Context, summary string) error {

@@ -24,7 +24,14 @@ export interface RunInfo {
   error?: string;
   prompt?: string;
   display_prompt?: string;
+  session_id?: string;
   inputs?: PromptInputs;
+  attachments?: Array<{
+    id: string;
+    name: string;
+    mime_type?: string;
+    size?: number;
+  }>;
 }
 export function isActiveRun(run: RunInfo | undefined): boolean {
   return run?.state === "running" || run?.state === "waiting_confirmation";
@@ -41,6 +48,9 @@ export type ChatItem =
       kind: "user" | "assistant" | "thought" | "system" | "error";
       id: string;
       text: string;
+      entryId?: string;
+      sessionId?: string;
+      images?: { id: string; name: string; url: string }[];
     }
   | {
       kind: "tool";
@@ -83,6 +93,8 @@ export interface StoredMessage {
   tool_call_id?: string;
   is_error?: boolean;
   tool_details?: Record<string, unknown>;
+  entry_id?: string;
+  images?: { data_url: string }[];
 }
 export interface Envelope {
   inputs?: PromptInputs;

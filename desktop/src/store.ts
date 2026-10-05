@@ -67,6 +67,11 @@ export function getBaseUrl(): string {
   return baseUrl;
 }
 
+export function attachmentRawUrl(sessionId: string, attId: string): string {
+  const base = getBaseUrl().replace(/\/+$/, "");
+  return `${base}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attId)}/raw`;
+}
+
 // Extract file paths from tool result text for clickable locations.
 // Matches: paths with known extensions, paths after "文件:" prefix,
 // directory paths (ending with /), and paths with ≥2 segments but no extension.
@@ -309,6 +314,16 @@ interface StoreState {
     model?: string;
     application?: string;
   }) => Promise<string>;
+  forkSession: (
+    sourceId: string,
+    opts?: { entryId?: string; beforeMessageIndex?: number },
+  ) => Promise<{
+    id: string;
+    source_id: string;
+    kept_messages: number;
+    kept_user_messages: number;
+    dropped_messages: number;
+  }>;
   deleteSession: (id: string) => Promise<void>;
   sendPrompt: (
     id: string,
@@ -1077,6 +1092,7 @@ export const useStore = create<StoreState>((set, get) => ({
             application,
             pinned: !!sess.pinned,
             archived: !!sess.archived,
+            forked_from: sess.forked_from,
             availableModels: defaultModels(),
             createdAt: timestampMillis(sess.created_at),
             updatedAt: timestampMillis(sess.last_active),
@@ -1093,6 +1109,7 @@ export const useStore = create<StoreState>((set, get) => ({
                 application,
                 pinned: !!sess.pinned,
                 archived: !!sess.archived,
+                forked_from: sess.forked_from,
                 updatedAt: timestampMillis(sess.last_active),
               },
             };
@@ -1206,6 +1223,28 @@ export const useStore = create<StoreState>((set, get) => ({
       workspace: workspaceForSession(s, meta.cwd),
     }));
     return result.id;
+  },
+
+  forkSession: async (sourceId, opts) => {
+    const epoch = connectionEpoch;
+    const body: Record<string, any> = {};
+    if (opts?.entryId) body.entry_id = opts.entryId;
+    if (typeof opts?.beforeMessageIndex === "number") {
+      body.before_message_index = opts.beforeMessageIndex;
+    }
+    const result = await apiRequest<{
+      id: string;
+      source_id: string;
+      kept_messages: number;
+      kept_user_messages: number;
+      dropped_messages: number;
+    }>("POST", `/sessions/${encodeURIComponent(sourceId)}/fork`, body);
+    if (epoch !== connectionEpoch) {
+      throw new Error("运行主机已切换，原服务的分叉结果已忽略");
+    }
+    await get().refreshSessions();
+    await get().setActive(result.id);
+    return result;
   },
 
   deleteSession: async (id) => {

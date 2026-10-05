@@ -32,6 +32,7 @@ export type IconName =
   | 'tasks'
   | 'terminal'
   | 'diff'
+  | 'git-branch'
   // status
   | 'circle'
   | 'circle-check'
@@ -130,6 +131,8 @@ const PATHS: Record<IconName, string> = {
   terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
   diff:
     '<path d="M12 4v6"/><path d="M9 7h6"/><path d="M9 17h6"/>',
+  'git-branch':
+    '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   circle: '<circle cx="12" cy="12" r="9"/>',
   'circle-check': '<circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/>',
   'circle-dot': '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/>',
