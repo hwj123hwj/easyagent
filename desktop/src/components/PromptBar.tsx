@@ -224,13 +224,15 @@ export function PromptBar({
     <div className="promptbar personal-composer">
       <div className="promptbar-inner">
         <ConversationQueue view={view} />
-        {view.confirmations.map((confirmation) => (
-          <ConfirmationPrompt
-            key={confirmation.confirmation_id}
-            id={id}
-            value={confirmation}
-          />
-        ))}
+        <div className="confirmation-list">
+          {view.confirmations.map((confirmation) => (
+            <ConfirmationPrompt
+              key={confirmation.confirmation_id}
+              id={id}
+              value={confirmation}
+            />
+          ))}
+        </div>
         {output && (
           <section className="command-output">
             <button
