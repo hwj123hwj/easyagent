@@ -217,6 +217,7 @@ export const en = {
   'tool.status.pending': 'Pending',
   'tool.status.in_progress': 'Running',
   'tool.status.completed': 'Done',
+  'tool.status.declined': 'Declined',
   'tool.status.failed': 'Failed',
 
   // ── tool result summaries (single-line description, VSCode-plugin style) ───────────────

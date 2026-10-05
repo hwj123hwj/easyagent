@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiRequest, useStore, type SessionView } from "../store";
 import { Icon } from "./Icon";
+import { ComposerStatus } from "./ComposerStatus";
 import { ModelPicker } from "./ModelPicker";
 import { useVoiceInput } from "../hooks/useVoiceInput";
 import { filterCommands, parseCommand } from "../client/commands";
@@ -131,6 +132,7 @@ export function PromptBar({
           `/sessions/${targetId}/compact`,
           { custom_instructions: args },
         );
+        await useStore.getState().refreshSessionInfo(targetId);
         return value.summary || "上下文已压缩";
       }
       default:
@@ -355,6 +357,7 @@ export function PromptBar({
             }}
           />
           <div className="composer-actions">
+            <ComposerStatus view={view} disabled={!connected || busy || pending || loading || commandBusy} onStart={onStart} onError={setError} />
             <ModelPicker
               value={view.meta.model}
               disabled={!connected || busy || pending || modelBusy}

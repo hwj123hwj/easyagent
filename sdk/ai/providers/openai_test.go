@@ -376,7 +376,7 @@ func reasoningChunk(content string) string {
 }
 
 // TestStreamReasoningContent：deepseek 系推理内容累积进 partial.Thinking，
-// 与文本/工具调用共存（对齐 anthropic.go 的 thinking 处理：不发事件、进最终消息）。
+// 与文本/工具调用共存，思考同时流式发送并保留在最终消息。
 func TestStreamReasoningContent(t *testing.T) {
 	srv := sseServer(t,
 		roleChunk(),
@@ -599,4 +599,26 @@ func TestStreamEmptyExhaustsRetries(t *testing.T) {
 	assert.Equal(t, int32(streamRetryAttempts), atomic.LoadInt32(&hits))
 	assert.Equal(t, ai.StopReasonError, msg.StopReason)
 	assert.Contains(t, err.Error(), "empty stream")
+}
+
+func TestStreamUsageOnlyFrameAndLiveThinking(t *testing.T) {
+	srv := sseServer(t, reasoningChunk("first"), textChunk("answer"), finishChunk("stop"), `{"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":25,"prompt_tokens_details":{"cached_tokens":800}}}`, "[DONE]")
+	events, msg, err := collectStream(t, NewOpenAIProvider("test", srv.URL))
+	require.NoError(t, err)
+	require.Equal(t, 1200, msg.Usage.InputTokens)
+	require.Equal(t, 25, msg.Usage.OutputTokens)
+	require.NotNil(t, msg.Usage.CachedInputTokens)
+	require.Equal(t, 800, *msg.Usage.CachedInputTokens)
+	thinkingIndex, textIndex := -1, -1
+	for i, event := range events {
+		if e, ok := event.(ai.EventThinkingDelta); ok {
+			thinkingIndex = i
+			require.Equal(t, "first", e.Delta)
+		}
+		if _, ok := event.(ai.EventTextDelta); ok {
+			textIndex = i
+		}
+	}
+	require.GreaterOrEqual(t, thinkingIndex, 0)
+	require.Greater(t, textIndex, thinkingIndex)
 }

@@ -323,9 +323,13 @@ func (s *Server) consumeRun(ctx context.Context, run *sessionRun, stream <-chan 
 
 // 文本片段合并，工具进度只保留最后一次；恢复快照不依赖有限 replay 窗口。
 func appendRunProjection(run *sessionRun, event agent.AgentStreamEvent) {
-	if event.Type == agent.StreamEventTextDelta {
-		if len(run.projection) == 0 || run.projection[len(run.projection)-1].Type != agent.StreamEventTextDelta {
-			run.projection = append(run.projection, agent.AgentStreamEvent{Type: agent.StreamEventTextDelta})
+	if event.Type == agent.StreamEventTextDelta || event.Type == agent.StreamEventThinkingDelta {
+		if len(run.projection) == 0 || run.projection[len(run.projection)-1].Type != event.Type {
+			if run.projectionText.Len() > 0 {
+				run.projection[len(run.projection)-1].TextDelta = run.projectionText.String()
+				run.projectionText.Reset()
+			}
+			run.projection = append(run.projection, agent.AgentStreamEvent{Type: event.Type, Timestamp: event.Timestamp})
 		}
 		run.projectionText.WriteString(event.TextDelta)
 		return
@@ -556,6 +560,7 @@ func serializeRunMessages(messages []ai.Message) []map[string]any {
 			}
 		case ai.AssistantMessage:
 			entry["content"], entry["thinking"], entry["tool_calls"] = msg.Text, msg.Thinking, msg.ToolCalls
+			entry["thinking_duration_ms"], entry["usage"] = msg.ThinkingDurationMS, msg.Usage
 		case ai.ToolResultMessage:
 			entry["duration_ms"] = msg.DurationMS
 			entry["content"], entry["tool_call_id"], entry["is_error"], entry["tool_details"] = msg.Content, msg.ToolCallID, msg.IsError, msg.Details

@@ -394,3 +394,27 @@ test("session activation and creation clear file tabs only when the project chan
     delete window.piAPI;
   }
 });
+
+test('permission selection uses the server response and preserves drafts when switching is rejected', async () => {
+ const before=useStore.getState(), api=window.piAPI;
+ const calls=[];
+ window.piAPI={request:async(method,path,body)=>{
+  calls.push({method,path,body});
+  if(path.endsWith('/permissions')) {
+   if(body.mode==='ask') throw Error('task is running');
+   return {access_mode:'full'};
+  }
+  return {access_mode:'full',context_usage:{estimated_tokens:125,context_window:128000}};
+ }};
+ try {
+  useStore.setState({sessions:{s:{...view(),accessMode:'ask'}},drafts:{s:'keep draft'}});
+  await useStore.getState().setAccessMode('s','full');
+  assert.equal(useStore.getState().sessions.s.accessMode,'full');
+  assert.deepEqual(calls[0],{method:'POST',path:'/sessions/s/permissions',body:{mode:'full'}});
+  await assert.rejects(useStore.getState().setAccessMode('s','ask'),/task is running/);
+  assert.equal(useStore.getState().sessions.s.accessMode,'full');
+  assert.equal(useStore.getState().drafts.s,'keep draft');
+  await useStore.getState().refreshSessionInfo('s');
+  assert.equal(useStore.getState().sessions.s.contextUsage.estimated_tokens,125);
+ } finally {window.piAPI=api;useStore.setState(before);}
+});

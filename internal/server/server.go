@@ -176,6 +176,7 @@ func (s *Server) Handler() http.Handler {
 	restMux.HandleFunc("POST /sessions", s.createSession)
 	restMux.HandleFunc("GET /sessions/{id}/messages", s.getSessionMessages)
 	restMux.HandleFunc("GET /sessions/{id}/info", s.getSessionInfo)
+	restMux.HandleFunc("POST /sessions/{id}/permissions", s.setSessionPermissions)
 	restMux.HandleFunc("GET /sessions/{id}/run", s.getRun)
 	restMux.HandleFunc("POST /sessions/{id}/run/cancel", s.cancelRunHTTP)
 	restMux.HandleFunc("POST /sessions/{id}/run/confirm", s.confirmRunHTTP)
@@ -485,14 +486,16 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type messageEntry struct {
-		DurationMS  int64           `json:"duration_ms,omitempty"`
-		Role        string          `json:"role"`
-		Content     string          `json:"content"`
-		Thinking    string          `json:"thinking,omitempty"`
-		ToolCalls   []toolCallEntry `json:"tool_calls,omitempty"`
-		ToolCallID  string          `json:"tool_call_id,omitempty"`
-		ToolDetails any             `json:"tool_details,omitempty"`
-		IsError     bool            `json:"is_error,omitempty"`
+		ThinkingDurationMS int64           `json:"thinking_duration_ms,omitempty"`
+		Usage              ai.Usage        `json:"usage,omitempty"`
+		DurationMS         int64           `json:"duration_ms,omitempty"`
+		Role               string          `json:"role"`
+		Content            string          `json:"content"`
+		Thinking           string          `json:"thinking,omitempty"`
+		ToolCalls          []toolCallEntry `json:"tool_calls,omitempty"`
+		ToolCallID         string          `json:"tool_call_id,omitempty"`
+		ToolDetails        any             `json:"tool_details,omitempty"`
+		IsError            bool            `json:"is_error,omitempty"`
 	}
 
 	var result []messageEntry
@@ -513,6 +516,8 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 		case ai.AssistantMessage:
 			entry.Content = m.Text
 			entry.Thinking = m.Thinking
+			entry.ThinkingDurationMS = m.ThinkingDurationMS
+			entry.Usage = m.Usage
 			if len(m.ToolCalls) > 0 {
 				for _, tc := range m.ToolCalls {
 					entry.ToolCalls = append(entry.ToolCalls, toolCallEntry{
@@ -728,11 +733,19 @@ func (s *Server) getSessionInfo(w http.ResponseWriter, r *http.Request) {
 
 	provider, modelID := sess.ModelInfo()
 
+	usage, err := sess.ContextUsage(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	// Get workspace from config
 	workspace := sess.Config().Workspace
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
+		"access_mode":             sess.AccessMode(),
+		"context_usage":           usage,
 		"id":                      sess.SessionID(),
 		"provider":                provider,
 		"model":                   modelID,
@@ -1547,4 +1560,36 @@ func (rw *responseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWrite
 // through the logging middleware wrapper.
 func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return rw.ResponseWriter.(http.Hijacker).Hijack()
+}
+
+// setSessionPermissions does not resolve an already pending approval or change a busy run.
+func (s *Server) setSessionPermissions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.rejectActiveWorkflowActor(w, id) {
+		return
+	}
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if json.NewDecoder(r.Body).Decode(&req) != nil || (req.Mode != "ask" && req.Mode != "full") {
+		writeError(w, http.StatusBadRequest, "mode must be ask or full")
+		return
+	}
+	s.runs.mu.Lock()
+	defer s.runs.mu.Unlock()
+	if state := s.runs.sessions[id]; state != nil && state.run != nil && runActive(state.run) {
+		writeError(w, http.StatusConflict, "请等待当前任务完成后切换权限")
+		return
+	}
+	sess, err := s.app.LoadSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if err := sess.TrySetAccessMode(s.confirmRunTool, req.Mode == "ask"); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"access_mode": sess.AccessMode()})
 }

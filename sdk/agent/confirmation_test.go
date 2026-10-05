@@ -89,6 +89,7 @@ func newConfirmableAgent(confirm ConfirmFunc) (*Agent, *confirmableTool) {
 func TestConfirmation_DeclinedBlocksAndReportsToLLM(t *testing.T) {
 	// 捕获回告给 LLM 的 tool result 内容：检查第二轮 provider 收到的 messages。
 	var seenToolResult string
+	var seenDetails any
 	mp := &mockTestProvider{responses: []mockTestResponse{
 		{toolCalls: []ai.ToolCall{{ID: "c1", Name: "danger", Args: `{}`}}, stop: ai.StopReasonToolUse},
 		{text: "ok", stop: ai.StopReasonStop},
@@ -97,6 +98,8 @@ func TestConfirmation_DeclinedBlocksAndReportsToLLM(t *testing.T) {
 		for _, m := range msgs {
 			if tr, ok := m.(ai.ToolResultMessage); ok {
 				seenToolResult = tr.Content
+				seenDetails = tr.Details
+				assert.False(t, tr.IsError, "拒绝不是系统错误")
 			}
 		}
 	}}
@@ -121,6 +124,7 @@ func TestConfirmation_DeclinedBlocksAndReportsToLLM(t *testing.T) {
 	assert.Equal(t, int32(0), tool.executed.Load(), "拒绝时工具不应执行")
 	assert.Contains(t, seenToolResult, "user declined", "回告 LLM 的内容应含拒绝信息")
 	assert.Contains(t, seenToolResult, "too risky", "拒绝理由应回告 LLM")
+	assert.Equal(t, map[string]any{"approval": "declined"}, seenDetails)
 }
 
 // 用户同意时：工具执行，正常继续。
