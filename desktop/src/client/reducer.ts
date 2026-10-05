@@ -7,7 +7,6 @@ import type {
 } from "./protocol";
 import type { AcpToolKind } from "../types";
 import { isActiveRun } from "./protocol";
-import { attachmentRawUrl } from "../store";
 export function emptyProjection(): RunProjection {
   return { transcript: [], seq: 0, confirmations: [], phase: "idle" };
 }
@@ -69,6 +68,8 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
   });
   messages.forEach((message, index) => {
     const prefix = `history-${index}`;
+    if (message.role === "compaction" && message.compaction)
+      result.transcript.push({ kind: "compaction", id: "compaction-" + message.compaction.id, text: message.compaction.summary, compaction: message.compaction });
     if (message.role === "user" && message.content)
       result.transcript.push({
         kind: "user",
@@ -77,7 +78,7 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
         entryId: message.entry_id,
         images: message.images
           ?.filter((img) => typeof img?.data_url === "string" && img.data_url)
-          .map((img) => ({ url: img.data_url, name: "附件图片", id: `${prefix}-img` })),
+          .map((img, index) => ({ url: img.data_url, name: "附件图片", id: `${prefix}-img-${index}` })),
       });
     if (message.role !== "assistant") return;
     if (message.thinking)
@@ -85,6 +86,7 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
         kind: "thought",
         id: prefix + "-thought",
         text: message.thinking,
+        durationMs: message.thinking_duration_ms,
       });
     if (message.content)
       result.transcript.push({
@@ -101,7 +103,7 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
         title: call.name,
         toolKind: toolKind(call.name),
         rawInput: args(call.args),
-        status: !outcome || outcome.is_error ? "failed" : "completed",
+        status: outcome?.tool_details?.approval === "declined" ? "declined" : !outcome || outcome.is_error ? "failed" : "completed",
         content: [
           {
             text: outcome
@@ -125,8 +127,23 @@ function eventProjection(
   event: AgentEvent,
   key: string,
 ): RunProjection {
-  const transcript = [...state.transcript];
+  if (event.type === "context_usage" && event.context_usage)
+    return { ...state, contextUsage: event.context_usage };
+  const transcript = state.transcript.map(item => item.kind === "thought" && item.active && event.type !== "thinking_delta" && event.type !== "thinking_end" ? { ...item, active: false } : item);
   const runKey = state.run?.run_id || "stream";
+  if (event.type === "compacted") {
+    transcript.push({ kind: "compaction", id: `${runKey}-${key}-compaction`, text: String(event.summary || ""), compaction: event.compaction_info ? { id: `${runKey}-${key}`, timestamp: event.timestamp || Date.now(), summary: String(event.summary || ""), info: event.compaction_info } : undefined });
+    return { ...state, transcript };
+  }
+  if (event.type === "micro_compacted") {
+    transcript.push({ kind: "system", id: `${runKey}-${key}-micro`, text: `微压缩：清理 ${event.cleared_count || 0} 个旧工具输出，消息估算 ${event.tokens_before || 0} → ${event.tokens_after || 0} tokens（仅本轮请求）` });
+    return { ...state, transcript };
+  }
+  if (event.type === "compaction_failed") {
+    transcript.push({ kind: "error", id: `${runKey}-${key}-compaction-failed`, text: `上下文压缩失败，继续使用原上下文：${event.error || "未知错误"}` });
+    return { ...state, transcript };
+  }
+
   if (event.type === "text_delta" && event.text_delta) {
     const last = transcript.at(-1);
     if (last?.kind === "assistant")
@@ -144,7 +161,7 @@ function eventProjection(
   }
   if (event.type === "thinking_delta" && event.text_delta) {
     const last = transcript.at(-1);
-    if (last?.kind === "thought")
+    if (last?.kind === "thought" && last.active)
       transcript[transcript.length - 1] = {
         ...last,
         text: last.text + event.text_delta,
@@ -154,8 +171,20 @@ function eventProjection(
         kind: "thought",
         id: `${runKey}-${key}-thought`,
         text: event.text_delta,
+        startedAt: event.timestamp,
+        active: true,
       });
     return { ...state, transcript, phase: "thinking" };
+  }
+  if (event.type === "thinking_end") {
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      const item = transcript[i];
+      if (item.kind === "thought" && item.id.startsWith(runKey + "-")) {
+        transcript[i] = { ...item, active: false, durationMs: event.duration_ms };
+        break;
+      }
+    }
+    return { ...state, transcript };
   }
   if (event.type === "tool_start") {
     if (
@@ -195,8 +224,9 @@ function eventProjection(
               item.toolKind === "execute" ? text : item.terminalOutput,
             status:
               event.type === "tool_end"
-                ? ((event.is_error ? "failed" : "completed") as
+                ? ((event.tool_details?.approval === "declined" ? "declined" : event.is_error ? "failed" : "completed") as
                     | "failed"
+                    | "declined"
                     | "completed")
                 : item.status,
             details: (event.tool_details ||
@@ -279,12 +309,13 @@ export function reduceEnvelope(
         kind: "user",
         id: `${message.run.run_id}-user`,
         text: message.run.display_prompt || message.run.prompt,
+        entryId: message.run.user_entry_id,
         images: (message.run.attachments || [])
           .filter((att) => att.mime_type?.startsWith("image/"))
           .map((att) => ({
             id: att.id,
             name: att.name,
-            url: attachmentRawUrl(next.run?.session_id || "", att.id),
+            attachmentId: att.id, sessionId: message.session_id || next.run?.session_id,
           })),
       });
     (message.events || []).forEach((event, index) => {
@@ -292,6 +323,7 @@ export function reduceEnvelope(
     });
     return terminalProjection({
       ...next,
+      contextUsage: next.contextUsage || state.contextUsage,
       seq: message.seq || 0,
       confirmations: message.pending_confirmations || [],
       phase: message.pending_confirmations?.length
@@ -351,10 +383,7 @@ export function reduceEnvelope(
                 .map((att) => ({
                   id: att.id,
                   name: att.name,
-                  url: attachmentRawUrl(
-                    message.run?.session_id || "",
-                    att.id,
-                  ),
+                  attachmentId: att.id, sessionId: message.session_id || message.run?.session_id,
                 })),
             },
           ]
@@ -390,6 +419,9 @@ export function reduceEnvelope(
       String(message.seq || Date.now()),
     );
   if (message.type === "status") {
+    if (message.run?.user_entry_id) {
+      next.transcript = next.transcript.map(item => item.kind === "user" && item.id === `${message.run_id}-user` ? { ...item, entryId: message.run!.user_entry_id } : item);
+    }
     const status =
       message.state || (message.streaming ? "running" : "completed");
     const active = status === "running" || status === "waiting_confirmation";
@@ -470,8 +502,8 @@ function terminalProjection(state: RunProjection): RunProjection {
     });
   return {
     ...state,
-    transcript,
     confirmations: [],
+    transcript: transcript.map(item => item.kind === "thought" ? { ...item, active: false } : item),
     phase:
       status === "interrupted"
         ? "interrupted"

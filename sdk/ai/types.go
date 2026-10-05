@@ -44,12 +44,13 @@ func NewTextUserMessage(text string) UserMessage {
 }
 
 type AssistantMessage struct {
-	Text       string     `json:"text,omitempty"`
-	Thinking   string     `json:"thinking,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	StopReason StopReason `json:"stop_reason,omitempty"`
-	ErrorMsg   string     `json:"error_msg,omitempty"`
-	Usage      Usage      `json:"usage,omitempty"`
+	ThinkingDurationMS int64      `json:"thinking_duration_ms,omitempty"`
+	Text               string     `json:"text,omitempty"`
+	Thinking           string     `json:"thinking,omitempty"`
+	ToolCalls          []ToolCall `json:"tool_calls,omitempty"`
+	StopReason         StopReason `json:"stop_reason,omitempty"`
+	ErrorMsg           string     `json:"error_msg,omitempty"`
+	Usage              Usage      `json:"usage,omitempty"`
 }
 
 func (AssistantMessage) Role() Role     { return RoleAssistant }
@@ -102,8 +103,9 @@ type Model struct {
 }
 
 type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens       int  `json:"input_tokens"`
+	OutputTokens      int  `json:"output_tokens"`
+	CachedInputTokens *int `json:"cached_input_tokens,omitempty"`
 }
 
 type StopReason string
@@ -117,12 +119,13 @@ const (
 )
 
 type StreamAssistantMessage struct {
-	Text       string     `json:"text,omitempty"`
-	Thinking   string     `json:"thinking,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	StopReason StopReason `json:"stop_reason,omitempty"`
-	ErrorMsg   string     `json:"error_msg,omitempty"`
-	Usage      Usage      `json:"usage,omitempty"`
+	ThinkingDurationMS int64      `json:"thinking_duration_ms,omitempty"`
+	Text               string     `json:"text,omitempty"`
+	Thinking           string     `json:"thinking,omitempty"`
+	ToolCalls          []ToolCall `json:"tool_calls,omitempty"`
+	StopReason         StopReason `json:"stop_reason,omitempty"`
+	ErrorMsg           string     `json:"error_msg,omitempty"`
+	Usage              Usage      `json:"usage,omitempty"`
 }
 
 type StreamRequest struct {

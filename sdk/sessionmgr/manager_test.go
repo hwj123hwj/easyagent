@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -169,4 +170,51 @@ func TestManager_MessageCount(t *testing.T) {
 	assert.Len(t, sessions, 1)
 	// MessageCount should be 1 (only EntryTypeMessage)
 	assert.Equal(t, 1, sessions[0].MessageCount)
+}
+
+func TestForkRetainedSnapshotKeepsClearedToolsAndIndependentPreferences(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewManager(t.TempDir())
+	sourceID, _, err := mgr.Create(ctx)
+	require.NoError(t, err)
+	require.NoError(t, mgr.SaveMeta(sourceID, "/project", "coding"))
+	title, flag := "source", true
+	require.NoError(t, mgr.UpdatePreferences(sourceID, PreferencePatch{Title: &title, Pinned: &flag, Archived: &flag}))
+	source, _, err := mgr.Open(ctx, sourceID)
+	require.NoError(t, err)
+	defer source.Storage().Close()
+	original := []ai.Message{ai.NewTextUserMessage("question"), ai.AssistantMessage{ToolCalls: []ai.ToolCall{{ID: "call", Name: "read"}}}, ai.ToolResultMessage{ToolCallID: "call", Content: "large original output"}}
+	for _, msg := range original {
+		require.NoError(t, source.AppendMessage(ctx, msg))
+	}
+	ids, err := source.BuildContextEntryIDs(ctx)
+	require.NoError(t, err)
+	retained := append([]ai.Message(nil), original...)
+	retained[2] = ai.ToolResultMessage{ToolCallID: "call", Content: "[cleared]"}
+	require.NoError(t, source.AppendCompactionKeeping(ctx, "summary", retained, nil))
+	newID, _, err := mgr.ForkAt(ctx, sourceID, &ids[2])
+	require.NoError(t, err)
+	fork, _, err := mgr.Open(ctx, newID)
+	require.NoError(t, err)
+	defer fork.Storage().Close()
+	messages, err := fork.BuildContext(ctx)
+	require.NoError(t, err)
+	require.Len(t, messages, 4)
+	require.Equal(t, "[cleared]", messages[3].(ai.ToolResultMessage).Content)
+	infos, err := mgr.List(ctx)
+	require.NoError(t, err)
+	for _, info := range infos {
+		if info.ID == newID {
+			require.False(t, info.Archived)
+			require.False(t, info.Pinned)
+			require.Equal(t, "/project", info.Workspace)
+			require.Equal(t, sourceID, info.ForkedFrom)
+		}
+	}
+	invalid := "absent"
+	_, _, err = mgr.ForkAt(ctx, sourceID, &invalid)
+	require.Error(t, err)
+	infos, err = mgr.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, infos, 2)
 }

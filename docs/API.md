@@ -97,8 +97,11 @@ GET /ws
 |------|------|------|
 | `GET` | `/sessions` | 列出所有会话 |
 | `POST` | `/sessions` | 创建新会话 |
-| `GET` | `/sessions/{id}/messages` | 获取会话消息 |
-| `GET` | `/sessions/{id}/info` | 获取会话信息 |
+| `GET` | `/sessions/{id}/messages` | 获取会话消息（含压缩记录、消息 `entry_id` 与图片） |
+| `POST` | `/sessions/{id}/fork` | 分叉空闲会话：省略参数复制完整分支，`entry_id` 保留至指定当前上下文消息；空字符串创建空分叉；或 `before_message_index` 在第 N 条用户消息之前分叉（0 从空开始），两者互斥 |
+| `GET` | `/sessions/{id}/attachments/{attID}/raw` | 认证读取工作区内附件；`?format=data_url` 返回受支持图片的 JSON `data_url`，供桌面认证通道预览 |
+| `GET` | `/sessions/{id}/info` | 获取会话信息、`access_mode` 及 `context_usage` |
+| `POST` | `/sessions/{id}/permissions` | 切换空闲会话权限，body 为 `{"mode":"ask"}` 或 `{"mode":"full"}` |
 | `DELETE` | `/sessions/{id}` | 删除会话 |
 | `POST` | `/sessions/{id}/model` | 切换会话模型 |
 | `POST` | `/sessions/{id}/compact` | 压缩会话上下文 |
@@ -109,6 +112,14 @@ GET /ws
 | `GET` | `/sessions/{id}/diff` | 获取会话 Git diff |
 | `GET` | `/sessions/{id}/file` | 获取会话文件内容 |
 | `PUT` | `/sessions/{id}/file` | 写入会话文件 |
+
+`access_mode` 为 `ask`（确认危险工具）或 `full`（自动批准普通工具）；仅在当前服务进程的会话内保留，活跃任务及工作流 Actor 返回 409。不会解决已经等待的批准，MCP 独立审批及工作区边界仍有效。
+
+工具被拒绝时，`tool_details.approval` 为 `declined`（流及历史均保留）；`is_error` 仍为 false，以避免将用户拒绝当作系统故障重试。
+
+Agent 流新增 `thinking_delta`（`text_delta` 携带思考片段、`timestamp` 为毫秒）、`thinking_end`（`duration_ms`）和 `context_usage`（同名对象字段）。历史消息包括 `thinking_duration_ms`。只有上游返回的思考片段才产生思考事件。
+
+`context_usage` 包含 `estimated_tokens`、`messages`、`system`、`tools`、`context_window`、`window_known`、`model` 及 `last_request`。前三类相加得到当前估算占用，图片未计入；`window_known:false` 表示默认运行预算。`last_request` 为最近一次请求的实际 `input_tokens` / `output_tokens`，可选 `cached_input_tokens` 区分未报告与零命中，不累加多轮用量。
 
 ### 切换模型
 
@@ -266,3 +277,11 @@ GET /health
 ## 部署控制
 
 `GET /admin/deploy` 返回 `active` 和 `draining`。`POST /admin/deploy` 仅在无活动任务时返回 `lease` 与 `expires_at`，忙碌时返回 409；租约期间新执行请求返回 503。`DELETE /admin/deploy` 的 body 为 `{"lease":"原租约"}`，释放该租约。三个操作均要求显式服务令牌认证，详见 [部署保护](MINI_DEPLOY.md)。
+
+### 检查当前上下文
+
+`GET /sessions/{id}/context` 遵循现有 Bearer 认证。响应包含 `model`、`system`、`messages`（每项为 `{role, message}`）、`tools`、`usage` 和 `compactions`。这是当前分支的逻辑模型输入，尚未执行供应商格式转换，也不包含未发送草稿与待发消息；并非上一轮实际 HTTP 请求。`usage` 计入消息、系统和工具定义的文本估算，不计图片等多模态成本。
+
+`compactions` 按时间顺序包含 `id`、毫秒 `timestamp`、完整 `summary` 和可选 `info`。新记录的 `info` 包含 `trigger`（`manual` / `automatic`）、可选 `instructions`、`messages_before/after` 与 `tokens_before/after`（仅消息估算）。历史记录可能没有 `info`。微压缩仅影响当前请求，其数量和估算变化通过 `micro_compacted` 事件传递，不作为全量摘要记录。
+
+运行中或有其他会话修改操作时返回 `409`，避免展示不一致的快照。响应禁止缓存。`POST /sessions/{id}/compact` 接收 `{ "custom_instructions": "保留接口约定与未完成测试" }`，空要求使用默认摘要策略。压缩生成或持久化失败不替换原上下文；成功后重连和重启保留摘要及近期完整消息。

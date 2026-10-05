@@ -80,6 +80,7 @@ export type ToolCallStatus =
   | 'pending'
   | 'in_progress'
   | 'completed'
+  | 'declined'
   | 'failed';
 
 export interface ToolLocation {

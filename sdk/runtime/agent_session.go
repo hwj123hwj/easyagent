@@ -624,6 +624,15 @@ func (s *AgentSession) SetConfirmFunc(fn agent.ConfirmFunc) {
 
 // TrySetConfirmFunc refuses to replace an active run's agent or approval owner.
 func (s *AgentSession) TrySetConfirmFunc(fn agent.ConfirmFunc) error {
+	return s.trySetConfirmFunc(fn, nil)
+}
+
+// TrySetAccessMode changes the confirmation owner and mode atomically while idle.
+func (s *AgentSession) TrySetAccessMode(fn agent.ConfirmFunc, ask bool) error {
+	return s.trySetConfirmFunc(fn, &ask)
+}
+
+func (s *AgentSession) trySetConfirmFunc(fn agent.ConfirmFunc, ask *bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.busyLocked() {
@@ -636,6 +645,9 @@ func (s *AgentSession) TrySetConfirmFunc(fn agent.ConfirmFunc) error {
 		// Installing an interactive callback enables confirmations by default.
 		// Callers such as `easyagent -y` can immediately override this below.
 		s.confirmEnabled.Store(true)
+	}
+	if ask != nil {
+		s.confirmEnabled.Store(*ask)
 	}
 	if s.agent != nil {
 		if err := s.refreshToolsLocked(context.Background()); err != nil {
@@ -756,4 +768,47 @@ func (s *AgentSession) ConfirmationCallback() agent.ConfirmFunc {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.wrapConfirm(s.confirmFunc)
+}
+
+// AccessMode includes the server's secure default before a callback is installed.
+func (s *AgentSession) AccessMode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ask := s.confirmEnabled.Load()
+	if s.confirmFunc == nil {
+		ask = true // The server installs an interactive callback before the first run.
+	}
+	if ask {
+		return "ask"
+	}
+	return "full"
+}
+
+func (s *AgentSession) ContextUsage(ctx context.Context) (agent.ContextUsage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.agent.ContextUsage(ctx)
+}
+
+// ContextSnapshot rejects live mutations so the preview cannot race a prompt or compaction.
+func (s *AgentSession) ContextSnapshot(ctx context.Context) (agent.ContextSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.busyLocked() {
+		return agent.ContextSnapshot{}, agent.ErrAgentBusy
+	}
+	if s.agent == nil {
+		return agent.ContextSnapshot{}, fmt.Errorf("no active agent")
+	}
+	return s.agent.ContextSnapshot(ctx)
+}
+
+// Fork snapshots this session while blocking concurrent prompts and mutations.
+func (s *AgentSession) Fork(ctx context.Context, entryID *string) (string, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.busyLocked() {
+		return "", "", agent.ErrAgentBusy
+	}
+	return s.sessionMgr.ForkAt(ctx, s.sessionID, entryID)
 }

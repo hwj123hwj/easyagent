@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { useStore, type ChatItem, type SessionView } from "../../store";
+import { AttachmentImage } from "../AttachmentImage";
 import { Markdown } from "../Markdown";
 import { ToolCall } from "../ToolCall";
 import { RunRecovery } from "../RunRecovery";
@@ -463,6 +464,7 @@ function ToolGroup({
   const failedCount = value.items.filter(
     (item) => item.status === "failed",
   ).length;
+  const declinedCount = value.items.filter((item) => item.status === "declined").length;
   const current =
     value.items.find((item) => item.status === "in_progress") ||
     value.items.at(-1);
@@ -523,7 +525,7 @@ function ToolGroup({
         </span>
         <span className="tool-group-counts">
           {running && "执行中 · "}
-          {completedCount} 成功{failedCount > 0 && ` · ${failedCount} 失败`}
+          {completedCount > 0 && `${completedCount} 成功`}{failedCount > 0 && `${completedCount > 0 ? " · " : ""}${failedCount} 失败`}{declinedCount > 0 && `${completedCount + failedCount > 0 ? " · " : ""}${declinedCount} 已拒绝`}
           {duration > 0 && (
             <small title="工具耗时累计">
               {" "}
@@ -585,17 +587,17 @@ const Message = memo(function Message({
 }) {
   const [copied, setCopied] = useState(false),
     [error, setError] = useState("");
-  const [lightbox, setLightbox] = useState<{ url: string; name: string } | null>(
-    null,
-  );
   const forkSession = useStore((s) => s.forkSession);
+  const busy = useStore(s => isActiveRun(s.sessions[sessionId]?.run));
+  const [forking, setForking] = useState(false);
   if (item.kind === "thought")
-    return density === "summary" ? null : (
-      <details className="message-thought">
-        <summary>思考过程</summary>
-        <p>{item.text}</p>
-      </details>
-    );
+    return <Thought item={item} />;
+  if (item.kind === "compaction")
+    return <details className="compaction-card">
+      <summary><Icon name="activity" size={14} /><span>上下文摘要已更新</span>{item.compaction?.info && <small>{item.compaction.info.trigger === "manual" ? "手动" : "自动"} · {item.compaction.info.messages_before} → {item.compaction.info.messages_after} 条消息</small>}</summary>
+      {item.compaction?.info?.instructions && <p className="compaction-instructions">压缩要求：{item.compaction.info.instructions}</p>}
+      <Markdown text={item.text} basePath={cwd ? cwd + "/" : undefined} />
+    </details>;
   if (item.kind === "system")
     return <div className="msg-system">{item.text}</div>;
   if (item.kind === "error")
@@ -611,29 +613,21 @@ const Message = memo(function Message({
         {!!item.images?.length && (
           <div className="user-message-images">
             {item.images.map((img) => (
-              <img
-                key={img.id}
-                src={img.url}
-                alt={img.name}
-                className="user-message-image-thumb"
-                onClick={() => setLightbox(img)}
-              />
+              <AttachmentImage key={img.id} url={img.url} attachmentId={img.attachmentId} sessionId={img.sessionId || sessionId} name={img.name} className="user-message-image-thumb" />
             ))}
           </div>
         )}
         <div className="user-message-actions">
           <button
             className="user-fork-btn"
-            title={
-              item.entryId
-                ? "从此消息分叉新会话"
-                : "分叉会话（此消息在服务端历史中无定位，从当前完整状态分叉）"
-            }
+            title="保留至此消息，创建独立会话"
+            disabled={!item.entryId || busy || forking}
             onClick={() => {
               void (async () => {
+                setForking(true); setError("");
                 try {
                   await forkSession(sessionId, {
-                    entryId: item.entryId || undefined,
+                    entryId: item.entryId,
                   });
                 } catch (forkError) {
                   setError(
@@ -641,41 +635,16 @@ const Message = memo(function Message({
                       ? forkError.message
                       : String(forkError),
                   );
-                }
+                } finally { setForking(false); }
               })();
             }}
           >
             <Icon name="git-branch" size={12} />
-            从此分叉
+            {forking ? "正在分叉…" : "从此分叉"}
           </button>
         </div>
         {error && <span className="inline-error">{error}</span>}
-        {lightbox && (
-          <div
-            className="attachment-image-lightbox"
-            onClick={() => setLightbox(null)}
-            role="dialog"
-            aria-label={lightbox.name}
-          >
-            <div
-              className="attachment-image-lightbox-content"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <header>
-                <span>{lightbox.name}</span>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  onClick={() => setLightbox(null)}
-                  aria-label="关闭"
-                >
-                  ×
-                </button>
-              </header>
-              <img src={lightbox.url} alt={lightbox.name} />
-            </div>
-          </div>
-        )}
+
       </div>
     );
   return (
@@ -702,3 +671,22 @@ const Message = memo(function Message({
     </article>
   );
 });
+
+function Thought({ item }: { item: Exclude<ChatItem, { kind: "tool" }> }) {
+  const [open, setOpen] = useState(!!item.active), [now, setNow] = useState(Date.now());
+  const touched = useRef(false);
+  useEffect(() => { if (!touched.current) setOpen(!!item.active); }, [item.active]);
+  useEffect(() => {
+    if (!item.active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [item.active]);
+  const elapsed = item.active && item.startedAt ? Math.max(0, now - item.startedAt) : item.durationMs;
+  return <details className="message-thought" open={open} onToggle={e => setOpen(e.currentTarget.open)}>
+    <summary onClick={() => { touched.current = true; }}><Icon name={open ? "chevron-down" : "chevron-right"} size={13} /><Icon name="think" size={14} />
+      {item.active ? "正在思考" : "思考过程"}
+      {elapsed !== undefined && <span> · {(elapsed / 1000).toFixed(1)}s</span>}
+    </summary>
+    <div className="thought-content">{item.text}</div>
+  </details>;
+}

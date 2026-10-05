@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiRequest, attachmentRawUrl, useStore } from "../store";
+import { apiRequest, useStore } from "../store";
 import { EMPTY_INPUTS, type InputAttachment } from "../client/protocol";
+import { AttachmentImage } from "./AttachmentImage";
 import { Icon } from "./Icon";
 
 export const WORKSPACE_FILE_DRAG = "application/x-easyagent-workspace-file";
@@ -35,7 +36,6 @@ export function PromptContext({
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [previewImage, setPreviewImage] = useState<{ url: string; name: string } | null>(null);
   const mention = /(?:^|\s)@([^\s@]*)$/.exec(text);
   const query = mention?.[1].toLocaleLowerCase();
   const matches = useMemo(
@@ -263,7 +263,6 @@ export function PromptContext({
         <div className="composer-context" aria-label="消息上下文">
           {draft.attachments.map((item) => {
             const isImage = item.mime_type?.startsWith("image/");
-            const rawUrl = isImage ? attachmentRawUrl(id, item.id) : "";
             return (
               <span
                 key={item.id}
@@ -271,12 +270,7 @@ export function PromptContext({
                 title={`${host} · ${item.workspace}\n${item.path}`}
               >
                 {isImage ? (
-                  <img
-                    src={rawUrl}
-                    alt={item.name}
-                    className="composer-attachment-thumb"
-                    onClick={() => setPreviewImage({ url: rawUrl, name: item.name })}
-                  />
+                  <AttachmentImage attachmentId={item.id} sessionId={id} name={item.name} className="composer-attachment-thumb" />
                 ) : (
                   <Icon name="file" size={12} />
                 )}
@@ -355,32 +349,7 @@ export function PromptContext({
           )}
         </div>
       )}
-      {previewImage && (
-        <div
-          className="attachment-image-lightbox"
-          onClick={() => setPreviewImage(null)}
-          role="dialog"
-          aria-label={previewImage.name}
-        >
-          <div
-            className="attachment-image-lightbox-content"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <header>
-              <span>{previewImage.name}</span>
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => setPreviewImage(null)}
-                aria-label="关闭"
-              >
-                ×
-              </button>
-            </header>
-            <img src={previewImage.url} alt={previewImage.name} />
-          </div>
-        </div>
-      )}
+
     </>
   );
 }

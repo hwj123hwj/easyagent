@@ -24,6 +24,8 @@ import {
 } from "./client/reducer";
 import type {
   ChatItem,
+  AccessMode,
+  SessionInfo,
   ConnectionProfile,
   Envelope,
   RunProjection,
@@ -65,11 +67,6 @@ export function authHeaders(): Record<string, string> {
 }
 export function getBaseUrl(): string {
   return baseUrl;
-}
-
-export function attachmentRawUrl(sessionId: string, attId: string): string {
-  const base = getBaseUrl().replace(/\/+$/, "");
-  return `${base}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attId)}/raw`;
 }
 
 // Extract file paths from tool result text for clickable locations.
@@ -145,7 +142,7 @@ export async function apiRequest<T>(
       "Content-Type": "application/json",
       ...(browserToken ? { Authorization: "Bearer " + browserToken } : {}),
     },
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(path.endsWith("/compact") ? 300000 : 20000),
   };
   if (body !== undefined) {
     opts.body = JSON.stringify(body);
@@ -204,6 +201,7 @@ export const WORKSPACE_SIZE_LIMITS = {
 } as const;
 
 export interface SessionView extends RunProjection {
+  accessMode?: AccessMode;
   queue?: MessageQueue;
   meta: SessionMeta;
   transcript: ChatItem[];
@@ -333,6 +331,8 @@ interface StoreState {
   retryRun: (id: string) => Promise<void>;
   cancel: (id: string) => Promise<void>;
   setModel: (id: string, modelId: string) => Promise<void>;
+  setAccessMode: (id: string, mode: AccessMode) => Promise<void>;
+  refreshSessionInfo: (id: string) => Promise<void>;
   setDensity: (id: string, density: ViewDensity) => void;
   togglePane: (id: string, pane: PaneKind) => void;
   refreshDiff: (id: string) => Promise<void>;
@@ -1151,6 +1151,8 @@ export const useStore = create<StoreState>((set, get) => ({
         const projection = reduceEnvelope(v, snapshot);
         return {
           ...projection,
+          accessMode: info.access_mode,
+          contextUsage: isActiveRun(projection.run) ? projection.contextUsage || info.context_usage : info.context_usage,
           queue: snapshot.queue || v.queue,
           meta: {
             ...v.meta,
@@ -1222,6 +1224,9 @@ export const useStore = create<StoreState>((set, get) => ({
       activeSessionId: result.id,
       workspace: workspaceForSession(s, meta.cwd),
     }));
+    await get().refreshSessionInfo(result.id).catch(error => {
+      if (epoch === connectionEpoch) set({ connectionError: error.message });
+    });
     return result.id;
   },
 
@@ -1243,6 +1248,7 @@ export const useStore = create<StoreState>((set, get) => ({
       throw new Error("运行主机已切换，原服务的分叉结果已忽略");
     }
     await get().refreshSessions();
+    if (epoch !== connectionEpoch) throw new Error("运行主机已切换，原服务的分叉结果已忽略");
     await get().setActive(result.id);
     return result;
   },
@@ -1342,6 +1348,18 @@ export const useStore = create<StoreState>((set, get) => ({
     });
   },
 
+  refreshSessionInfo: async (id) => {
+    const epoch = connectionEpoch;
+    const info = await apiRequest<SessionInfo>("GET", `/sessions/${encodeURIComponent(id)}/info`);
+    if (epoch !== connectionEpoch) return;
+    updateView(set, id, () => ({ accessMode: info.access_mode, contextUsage: info.context_usage }));
+  },
+  setAccessMode: async (id, mode) => {
+    const epoch = connectionEpoch;
+    const result = await apiRequest<{ access_mode: AccessMode }>("POST", `/sessions/${encodeURIComponent(id)}/permissions`, { mode });
+    if (epoch !== connectionEpoch) return;
+    updateView(set, id, () => ({ accessMode: result.access_mode }));
+  },
   setModel: async (id, modelId) => {
     try {
       await apiRequest("POST", `/sessions/${id}/model`, { model: modelId });
@@ -1349,6 +1367,7 @@ export const useStore = create<StoreState>((set, get) => ({
         ...v,
         meta: { ...v.meta, model: modelId },
       }));
+      await get().refreshSessionInfo(id);
     } catch (err) {
       throw err;
     }

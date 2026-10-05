@@ -210,60 +210,100 @@ func (m *Manager) Open(ctx context.Context, id string) (*session.Session, string
 // Attachment metadata is copied too, so prompts in the forked session can
 // still reference attachments uploaded to the source conversation.
 func (m *Manager) Fork(ctx context.Context, sourceID string, entryID string) (string, string, error) {
-	sourcePath := m.SessionPath(sourceID)
-	if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
-		return "", "", fmt.Errorf("source session %q not found", sourceID)
+	var target *string
+	if entryID != "" {
+		target = &entryID
 	}
+	return m.ForkAt(ctx, sourceID, target)
+}
 
-	// Create new session
-	newID, newPath, err := m.Create(ctx)
+// ForkAt copies the active branch. nil means the entire branch; an empty ID
+// means an empty conversation. Retained compaction messages preserve the summary
+// and the retained prefix, instead of resurrecting discarded tool outputs.
+// The runtime caller must keep source writes idle during the snapshot.
+func (m *Manager) ForkAt(ctx context.Context, sourceID string, entryID *string) (newID, newPath string, err error) {
+	if sourceID == "" || strings.ContainsAny(sourceID, `/\\`) || sourceID == "." || sourceID == ".." {
+		return "", "", fmt.Errorf("invalid source session")
+	}
+	storage := session.NewJSONLStorage(m.SessionPath(sourceID))
+	if !m.Exists(sourceID) {
+		return "", "", fmt.Errorf("source session not found")
+	}
+	if err = storage.Init(); err != nil {
+		return
+	}
+	defer storage.Close()
+	entries, err := storage.GetPathToRoot(ctx, "")
 	if err != nil {
 		return "", "", err
 	}
-
-	// Copy source JSONL to new session
-	data, err := os.ReadFile(sourcePath)
+	if entryID != nil {
+		if *entryID == "" {
+			entries = nil
+		} else {
+			cut := -1
+			// Prefer the latest retained snapshot over the original pre-compaction entry.
+			for i := len(entries) - 1; i >= 0; i-- {
+				if entries[i].Type != session.EntryTypeCompaction {
+					continue
+				}
+				for j, retained := range entries[i].Retained {
+					if retained.ID == *entryID {
+						entries[i].Retained = append([]session.Entry(nil), entries[i].Retained[:j+1]...)
+						cut = i + 1
+						break
+					}
+				}
+				break
+			}
+			if cut < 0 {
+				for i, entry := range entries {
+					if entry.ID == *entryID {
+						cut = i + 1
+						break
+					}
+				}
+			}
+			if cut < 0 {
+				return "", "", fmt.Errorf("entry not found on active branch")
+			}
+			entries = entries[:cut]
+		}
+	}
+	data := make([]byte, 0)
+	for _, entry := range entries {
+		encoded, encodeErr := json.Marshal(entry)
+		if encodeErr != nil {
+			return "", "", encodeErr
+		}
+		data = append(data, encoded...)
+		data = append(data, '\n')
+	}
+	newID, newPath, err = m.Create(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("read source session: %w", err)
+		return
 	}
-	if err := os.WriteFile(newPath, data, 0o644); err != nil {
-		return "", "", fmt.Errorf("write forked session: %w", err)
-	}
-
-	// Inherit metadata (workspace/application) so List keeps the fork in the
-	// same project group, and mark its origin for the UI "Fork of" badge.
-	if err := m.copyMeta(sourceID, newID); err != nil {
-		return "", "", fmt.Errorf("copy session metadata: %w", err)
-	}
-	if err := m.copyAttachments(sourceID, newID); err != nil {
-		return "", "", fmt.Errorf("copy attachment metadata: %w", err)
-	}
-
-	// If entryID specified, set leaf to that entry
-	if entryID != "" {
-		storage := session.NewJSONLStorage(newPath)
-		if err := storage.Init(); err != nil {
-			return "", "", fmt.Errorf("init forked storage: %w", err)
+	defer func() {
+		if err != nil {
+			_ = m.Delete(newID)
 		}
-		sess := session.New(storage)
-		if err := sess.InitFromStorage(ctx); err != nil {
-			storage.Close()
-			return "", "", fmt.Errorf("init forked session: %w", err)
-		}
-		if err := sess.MoveTo(ctx, entryID, ""); err != nil {
-			storage.Close()
-			return "", "", fmt.Errorf("move forked session to entry %q: %w", entryID, err)
-		}
-		storage.Close()
+	}()
+	if err = os.WriteFile(newPath, data, 0600); err != nil {
+		return
 	}
-
-	return newID, newPath, nil
+	if err = m.copyMeta(sourceID, newID); err != nil {
+		return
+	}
+	err = m.copyAttachments(sourceID, newID)
+	return
 }
 
 // copyMeta clones the source meta.json into the forked session, appending a
 // "(分叉)" title and recording the source id as forked_from. Missing source
 // metadata is tolerated: the fork simply starts with defaults.
 func (m *Manager) copyMeta(sourceID, newID string) error {
+	m.metaMu.Lock()
+	defer m.metaMu.Unlock()
 	meta := map[string]any{}
 	if data, err := os.ReadFile(filepath.Join(m.SessionsDir(), sourceID, "meta.json")); err == nil {
 		if json.Unmarshal(data, &meta) != nil {
@@ -283,6 +323,7 @@ func (m *Manager) copyMeta(sourceID, newID string) error {
 		meta["title"] = strings.TrimSpace(title) + " (分叉)"
 	}
 	meta["forked_from"] = sourceID
+	meta["archived"], meta["pinned"] = false, false
 	data, err := json.Marshal(meta)
 	if err != nil {
 		return err

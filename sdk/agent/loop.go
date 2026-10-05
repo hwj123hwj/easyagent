@@ -203,7 +203,9 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 	history = a.maybeCompact(ctx, history)
 
 	// 用完整历史调用 LLM
-	stream, err := provider.Stream(ctx, a.llmRequest(history))
+	request := a.llmRequest(history)
+	a.emit(ctx, EventContextUsage{Usage: estimateContext(request, latestRequestUsage(history))})
+	stream, err := provider.Stream(ctx, request)
 	if err != nil {
 		return turnResult{}, history, err
 	}
@@ -218,6 +220,8 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 	if err != nil {
 		return turnResult{}, history, err
 	}
+
+	a.emit(ctx, EventContextUsage{Usage: estimateContext(a.llmRequest(append(append([]ai.Message{}, history...), message)), message.Usage)})
 
 	// 将 assistant message 追加到历史
 	history = append(history, message)
@@ -318,7 +322,7 @@ func (a *Agent) maybeCompact(ctx context.Context, history []ai.Message) []ai.Mes
 	if compaction.ShouldMicroCompact(contextTokens, contextWindow, a.compactionSettings) {
 		newHistory, cleared := compaction.MicroCompact(history, a.compactionSettings.MicroKeepRecent)
 		if cleared > 0 {
-			a.emit(ctx, EventMicroCompacted{ClearedResults: cleared, TokensBefore: contextTokens})
+			a.emit(ctx, EventMicroCompacted{ClearedResults: cleared, TokensBefore: contextTokens, TokensAfter: compaction.EstimateTokens(newHistory)})
 			history = newHistory
 			contextTokens = compaction.EstimateTokens(history) // 重算：Micro 后可能降到全量阈值以下
 		}
@@ -352,16 +356,19 @@ func (a *Agent) maybeCompact(ctx context.Context, history []ai.Message) []ai.Mes
 		return history
 	}
 
+	info := compactionInfo("automatic", "", history, summary, recentPart)
 	// Persist compaction entry to session storage so it survives across prompts.
 	if a.session != nil {
-		if pErr := a.session.AppendCompaction(ctx, summary); pErr != nil {
-			slog.Warn("failed to persist compaction entry", "error", pErr)
+		if pErr := a.session.AppendCompactionKeeping(ctx, summary, recentPart, info); pErr != nil {
+			a.emit(ctx, EventCompactionFailed{Error: "persist compaction: " + pErr.Error()})
+			return history
 		}
 	}
 
 	a.emit(ctx, EventCompacted{
+		Info:        info,
 		Summary:     summary,
-		TrimmedFrom: len(historyPart),
+		TrimmedFrom: len(history),
 		TrimmedTo:   len(recentPart) + 1,
 	})
 
@@ -619,8 +626,9 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) (result ai.
 				if reason != "" {
 					msg = fmt.Sprintf("user declined this action: %s", reason)
 				}
-				a.emit(ctx, EventToolExecutionEnd{ToolCallID: call.ID, ToolName: call.Name, Result: msg, IsError: false})
-				return ai.ToolResultMessage{ToolCallID: call.ID, Content: msg, IsError: false}
+				details := map[string]any{"approval": "declined"}
+				a.emit(ctx, EventToolExecutionEnd{ToolCallID: call.ID, ToolName: call.Name, Result: msg, Details: details, IsError: false})
+				return ai.ToolResultMessage{ToolCallID: call.ID, Content: msg, Details: details, IsError: false}
 			}
 		}
 	}

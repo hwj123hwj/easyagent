@@ -88,6 +88,9 @@ type openAIToolParam struct {
 }
 
 type openAIRequest struct {
+	StreamOptions *struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options,omitempty"`
 	Model       string            `json:"model"`
 	Messages    []openAIMessage   `json:"messages"`
 	MaxTokens   int               `json:"max_tokens,omitempty"`
@@ -122,6 +125,13 @@ type openAIStreamToolCall struct {
 }
 
 type openAIStreamChunk struct {
+	Usage *struct {
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens *int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+	} `json:"usage,omitempty"`
 	ID      string               `json:"id"`
 	Object  string               `json:"object"`
 	Model   string               `json:"model"`
@@ -246,6 +256,9 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
 		}
+		if chunk.Usage != nil {
+			partial.Usage = ai.Usage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens, CachedInputTokens: chunk.Usage.PromptTokensDetails.CachedTokens}
+		}
 		if len(chunk.Choices) == 0 {
 			continue
 		}
@@ -253,12 +266,14 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 		choice := chunk.Choices[0]
 		delta := choice.Delta
 
-		// --- 推理内容（不发事件，累积进最终消息，与 anthropic.go 的 thinking 处理对齐）---
+		// 同时持久化和实时转发上游明确返回的推理片段。
 		if delta.ReasoningContent != "" {
 			partial.Thinking += delta.ReasoningContent
+			_ = stream.Push(ctx, ai.EventThinkingDelta{Delta: delta.ReasoningContent})
 		}
 		if delta.Reasoning != "" {
 			partial.Thinking += delta.Reasoning
+			_ = stream.Push(ctx, ai.EventThinkingDelta{Delta: delta.Reasoning})
 		}
 
 		// --- 文本内容 ---
@@ -373,6 +388,12 @@ func (p *OpenAIProvider) buildOpenAIRequest(req ai.StreamRequest, stream bool) o
 		MaxTokens:   maxTokens,
 		Stream:      stream,
 		Temperature: 0.7,
+	}
+
+	if stream {
+		oaiReq.StreamOptions = &struct {
+			IncludeUsage bool `json:"include_usage"`
+		}{true}
 	}
 
 	// system prompt 作为第一条 system 消息

@@ -57,6 +57,7 @@ type ConfirmationMsg struct {
 
 // CompactionMsg signals context compaction completed.
 type CompactionMsg struct {
+	Kind    string // empty = full, micro, failed
 	Summary string
 }
 

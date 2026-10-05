@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiRequest, useStore, type SessionView } from "../store";
 import { Icon } from "./Icon";
+import { ContextInspector } from "./ContextInspector";
+import { ComposerStatus } from "./ComposerStatus";
 import { ModelPicker } from "./ModelPicker";
 import { useVoiceInput } from "../hooks/useVoiceInput";
 import { filterCommands, parseCommand } from "../client/commands";
@@ -26,6 +28,7 @@ export function PromptBar({
     setDraft = useStore((s) => s.setDraft),
     setCommandOutput = useStore((s) => s.setCommandOutput);
   const draftInputs = useStore((state) => state.draftInputs[id] || EMPTY_INPUTS);
+  const [inspect, setInspect] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const hasInputs = !!(draftInputs.attachments.length + draftInputs.files.length);
   const [error, setError] = useState(""),
@@ -76,6 +79,7 @@ export function PromptBar({
   useEffect(() => {
     setError("");
     setLocalOutput("");
+    setInspect(false);
     setMenuOpen(false);
     input.current?.focus();
   }, [id]);
@@ -118,11 +122,9 @@ export function PromptBar({
         return (value.tools || []).join("\n");
       }
       case "context": {
-        const value = await apiRequest<any>(
-          "GET",
-          `/sessions/${targetId}/info`,
-        );
-        return `模型：${value.provider} / ${value.model}\n工作区：${value.workspace}\n工作区外访问：${value.allow_outside_workspace ? "已开启" : "已限制"}`;
+        if (busy) throw new Error("任务完成后才能查看当前上下文");
+        setInspect(true);
+        return;
       }
       case "compact": {
         if (busy) throw new Error("任务完成后才能压缩上下文");
@@ -131,6 +133,7 @@ export function PromptBar({
           `/sessions/${targetId}/compact`,
           { custom_instructions: args },
         );
+        await useStore.getState().refreshSessionInfo(targetId);
         return value.summary || "上下文已压缩";
       }
       default:
@@ -224,6 +227,7 @@ export function PromptBar({
     <div className="promptbar personal-composer">
       <div className="promptbar-inner">
         <ConversationQueue view={view} />
+        {inspect && <ContextInspector key={id} view={view} onBusy={setCommandBusy} onClose={() => { setInspect(false); input.current?.focus(); }} />}
         <div className="confirmation-list">
           {view.confirmations.map((confirmation) => (
             <ConfirmationPrompt
@@ -357,6 +361,7 @@ export function PromptBar({
             }}
           />
           <div className="composer-actions">
+            <ComposerStatus onInspect={id === "__new__" ? undefined : () => setInspect(true)} view={view} disabled={!connected || busy || pending || loading || commandBusy} onStart={onStart} onError={setError} />
             <ModelPicker
               value={view.meta.model}
               disabled={!connected || busy || pending || modelBusy}

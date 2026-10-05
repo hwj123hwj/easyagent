@@ -271,7 +271,7 @@ func (s *Server) resolvePromptAttachments(sessionID string, ids []string) []inpu
 func (s *Server) getAttachmentRaw(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	attID := r.PathValue("attID")
-	if sessionID == "" || attID == "" {
+	if sessionID == "" || strings.ContainsAny(sessionID, `/\\`) || sessionID == "." || sessionID == ".." || !s.app.SessionManager().Exists(sessionID) || attID == "" {
 		writeError(w, http.StatusBadRequest, "session id and attachment id are required")
 		return
 	}
@@ -298,7 +298,21 @@ func (s *Server) getAttachmentRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, err := os.Open(meta.Path)
+	sess, err := s.app.LoadSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, 404, "session not found")
+		return
+	}
+	if meta.ID != attID || meta.Workspace != sess.Workspace() {
+		writeError(w, 400, "attachment workspace mismatch")
+		return
+	}
+	safe, err := securePath(sess.Workspace(), meta.Path)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	file, err := os.Open(safe)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeError(w, http.StatusNotFound, "attachment file not found on disk")
@@ -315,7 +329,29 @@ func (s *Server) getAttachmentRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mimeType := meta.MimeType
+	if !stat.Mode().IsRegular() || stat.Size() > maxAttachmentBytes {
+		writeError(w, 400, "invalid attachment file")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	header := make([]byte, 512)
+	count, _ := file.ReadAt(header, 0)
+	mimeType := http.DetectContentType(header[:count])
+	if r.URL.Query().Get("format") == "data_url" {
+		if mimeType != "image/png" && mimeType != "image/jpeg" && mimeType != "image/gif" && mimeType != "image/webp" {
+			writeError(w, 400, "attachment is not a supported image")
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(file, maxAttachmentBytes+1))
+		if err != nil || len(data) > maxAttachmentBytes {
+			writeError(w, 400, "cannot read attachment")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"data_url": "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)})
+		return
+	}
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}

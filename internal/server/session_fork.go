@@ -1,29 +1,19 @@
 package server
 
 import (
-	"bufio"
-	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"io"
 	"net/http"
-	"os"
 
-	"github.com/hwj123hwj/easyagent/sdk/runtime"
-	"github.com/hwj123hwj/easyagent/sdk/session"
+	"github.com/hwj123hwj/easyagent/sdk/agent"
+	"github.com/hwj123hwj/easyagent/sdk/ai"
 )
 
-// ─── POST /sessions/{id}/fork ────────────────────────────────────────────────
-
-// forkRequest selects the branch point. Exactly one of EntryID (explicit JSONL
-// entry) or BeforeMessageIndex (N-th user message in context order, 0 = before
-// everything) is interpreted; EntryID wins when both are set.
 type forkRequest struct {
-	EntryID            string `json:"entry_id,omitempty"`
-	BeforeMessageIndex *int   `json:"before_message_index,omitempty"`
+	EntryID            *string `json:"entry_id,omitempty"`
+	BeforeMessageIndex *int    `json:"before_message_index,omitempty"`
 }
-
-// forkResponse mirrors zcode's fork contract: the new session id plus counts
-// so the UI can toast "已保留 N 条消息，后面的 M 条留在原会话".
 type forkResponse struct {
 	ID                 string `json:"id"`
 	SourceID           string `json:"source_id"`
@@ -38,181 +28,118 @@ func (s *Server) forkSession(w http.ResponseWriter, r *http.Request) {
 	if s.rejectActiveWorkflowActor(w, sourceID) {
 		return
 	}
-	mgr := s.app.SessionManager()
-	if !mgr.Exists(sourceID) {
-		writeError(w, http.StatusNotFound, "session not found")
+	var req forkRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, 400, "invalid fork request")
 		return
 	}
-
-	var req forkRequest
-	// Allow empty body: forking the full transcript is the default.
-	_ = json.NewDecoder(r.Body).Decode(&req)
-
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		writeError(w, 400, "invalid fork request")
+		return
+	}
+	if req.EntryID != nil && req.BeforeMessageIndex != nil {
+		writeError(w, 400, "select one fork point")
+		return
+	}
+	// Share admission lock with prompts/deletion. Runtime Fork also protects
+	// writes from other entrypoints and manual compaction.
+	s.runs.mu.Lock()
+	defer s.runs.mu.Unlock()
+	if state := s.runs.sessions[sourceID]; state != nil && state.run != nil && runActive(state.run) {
+		writeError(w, 409, "会话正在运行，请等待完成后分叉")
+		return
+	}
 	source, err := s.app.LoadSession(r.Context(), sourceID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "session not found")
+		writeError(w, 404, "session not found")
 		return
 	}
-	// NOTE: no Storage().Close() — LoadSession returns the registry cached
-
-	entryID := req.EntryID
-	branchIndex := -1
-	if entryID == "" && req.BeforeMessageIndex != nil {
-		if *req.BeforeMessageIndex < 0 {
+	if source.IsBusy() {
+		writeError(w, 409, "会话正在运行，请等待完成后分叉")
+		return
+	}
+	messages, err := source.Session().BuildContext(r.Context())
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	ids, err := source.Session().BuildContextEntryIDs(r.Context())
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	records, err := source.Session().Compactions(r.Context())
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	// The compaction header is a synthetic input, not a user turn.
+	if len(records) > 0 && len(messages) > 0 {
+		messages, ids = messages[1:], ids[1:]
+	}
+	target := req.EntryID
+	cut := len(messages)
+	if req.BeforeMessageIndex != nil {
+		index := *req.BeforeMessageIndex
+		if index < 0 {
 			writeError(w, 400, "before_message_index must be >= 0")
 			return
 		}
-		entryID, branchIndex, err = entryIDBeforeUserMessage(r.Context(), source, *req.BeforeMessageIndex)
-		if err != nil {
-			writeError(w, 400, err.Error())
-			return
-		}
-	}
-	if entryID != "" {
-		// Reject unknown entries before creating the fork directory.
-		if _, err := findEntryOnPath(r.Context(), source, entryID); err != nil {
-			writeError(w, 400, fmt.Sprintf("entry %q not found in source session", entryID))
-			return
-		}
-	}
-
-	newID, _, err := mgr.Fork(r.Context(), sourceID, entryID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	kept, keptUser, dropped, branch := forkStats(r.Context(), source, entryID, branchIndex)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(forkResponse{
-		ID:                 newID,
-		SourceID:           sourceID,
-		KeptMessages:       kept,
-		KeptUserMessages:   keptUser,
-		DroppedMessages:    dropped,
-		BranchUserMsgIndex: branch,
-	})
-}
-
-// entryIDBeforeUserMessage walks the source session's context path and returns
-// the entry id the fork leaf must point at so it contains everything BEFORE
-// the beforeIndex-th user message. beforeIndex 0 forks an empty conversation;
-// a value past the last user message forks the full transcript (entry "").
-func entryIDBeforeUserMessage(ctx context.Context, agentSession *runtime.AgentSession, beforeIndex int) (string, int, error) {
-	entries, err := agentSession.Session().Storage().GetPathToRoot(ctx, "")
-	if err != nil {
-		return "", -1, err
-	}
-	// GetPathToRoot returns leaf→root; messages arrive in that same order.
-	seen := 0
-	var cut int // entries kept = entries[:cut]
-	for i, e := range entries {
-		if e.Type == session.EntryTypeMessage && e.User != nil {
-			if seen == beforeIndex {
+		seen := 0
+		for i, message := range messages {
+			if message.Role() != ai.RoleUser {
+				continue
+			}
+			if seen == index {
 				cut = i
-				return entryIDAtCut(entries, cut), seen, nil
+				value := ""
+				if i > 0 {
+					value = ids[i-1]
+				} else if len(records) > 0 {
+					value = records[len(records)-1].ID
+				}
+				if index == 0 {
+					value = ""
+				}
+				target = &value
+				break
 			}
 			seen++
 		}
-	}
-	// Past the last user message: fork the full transcript.
-	return "", seen, nil
-}
-
-// entryIDAtCut converts a cut position into the entry id whose parent chain
-// starts after the cut. Moving the leaf to entries[cut-1].ID keeps exactly
-// entries[:cut] on the fork's path to root.
-func entryIDAtCut(entries []session.Entry, cut int) string {
-	if cut <= 0 {
-		return "" // empty fork: leaf points at the synthetic root
-	}
-	return entries[cut-1].ID
-}
-
-// findEntryOnPath verifies entryID exists on the source session's current
-// path to root, returning the entry when found.
-func findEntryOnPath(ctx context.Context, agentSession *runtime.AgentSession, entryID string) (session.Entry, error) {
-	entries, err := agentSession.Session().Storage().GetPathToRoot(ctx, "")
-	if err != nil {
-		return session.Entry{}, err
-	}
-	for _, e := range entries {
-		if e.ID == entryID {
-			return e, nil
-		}
-	}
-	return session.Entry{}, os.ErrNotExist
-}
-
-// forkStats reports how many messages/user messages the fork kept and how
-// many stayed behind, plus the resolved branch index for UI display.
-func forkStats(ctx context.Context, agentSession *runtime.AgentSession, entryID string, branchIndex int) (kept, keptUser, dropped, branch int) {
-	entries, err := agentSession.Session().Storage().GetPathToRoot(ctx, "")
-	if err != nil {
-		return 0, 0, 0, branchIndex
-	}
-	cut := len(entries)
-	if entryID != "" {
+	} else if target != nil {
 		cut = -1
-		for i, e := range entries {
-			if e.ID == entryID {
-				cut = i + 1 // entries are leaf→root; fork keeps entries[0:cut]
+		if *target == "" {
+			cut = 0
+		}
+		for i, id := range ids {
+			if id == *target {
+				cut = i + 1
 				break
 			}
 		}
 		if cut < 0 {
-			cut = len(entries)
+			writeError(w, 400, "entry not found in current context")
+			return
 		}
 	}
-	countUser := func(list []session.Entry) (total, users int) {
-		for _, e := range list {
-			if e.Type != session.EntryTypeMessage {
-				continue
-			}
-			total++
-			if e.User != nil {
-				users++
-			}
-		}
-		return total, users
+	newID, _, err := source.Fork(r.Context(), target)
+	if errors.Is(err, agent.ErrAgentBusy) {
+		writeError(w, 409, "会话正在运行，请等待完成后分叉")
+		return
 	}
-	kept, keptUser = countUser(entries[:cut])
-	dropped, _ = countUser(entries[cut:])
-	branch = branchIndex
-	if branch < 0 {
-		_, branch = countUser(entries[cut:])
-	}
-	return kept, keptUser, dropped, branch
-}
-
-// userMessageEntryIDs scans a session JSONL and returns the entry ids of
-// message entries carrying a user message, in file (append) order. Exposed
-// for tests and the messages endpoint's fork anchors.
-func userMessageEntryIDs(path string) ([]string, error) {
-	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		writeError(w, 500, err.Error())
+		return
 	}
-	defer file.Close()
-
-	var out []string
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		var entry struct {
-			ID   string `json:"id"`
-			Type string `json:"type"`
-			User *struct {
-				DisplayText string `json:"display_text"`
-			} `json:"user,omitempty"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
-			continue
-		}
-		if entry.Type == string(session.EntryTypeMessage) && entry.User != nil && entry.ID != "" {
-			out = append(out, entry.ID)
+	users := 0
+	for _, message := range messages[:cut] {
+		if message.Role() == ai.RoleUser {
+			users++
 		}
 	}
-	return out, scanner.Err()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(forkResponse{ID: newID, SourceID: sourceID, KeptMessages: cut, KeptUserMessages: users, DroppedMessages: len(messages) - cut, BranchUserMsgIndex: users})
 }

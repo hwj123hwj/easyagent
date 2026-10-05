@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,7 @@ type pendingConfirmation struct {
 
 // sessionRun is owned by the session, never by a socket or HTTP request.
 type sessionRun struct {
+	UserEntryID    string `json:"user_entry_id,omitempty"`
 	files          *runFiles
 	DisplayPrompt  string            `json:"display_prompt,omitempty"`
 	Inputs         promptInputs      `json:"inputs,omitempty"`
@@ -166,7 +168,7 @@ func (s *Server) startRun(sessionID, prompt, requestID string, values ...promptI
 	if requestID == "" {
 		requestID = newRunID("request_")
 	}
-	run := &sessionRun{Inputs: inputs, ID: newRunID("run_"), RequestID: requestID, SessionID: sess.SessionID(), Prompt: prompt, State: "running", StartedAt: time.Now(), baseline: serializeRunMessages(baseline), pending: make(map[string]*pendingConfirmation), done: make(chan struct{}), cancel: cancel}
+	run := &sessionRun{Inputs: inputs, ID: newRunID("run_"), RequestID: requestID, SessionID: sess.SessionID(), Prompt: prompt, State: "running", StartedAt: time.Now(), baseline: serializeSessionContext(sess, baseline), pending: make(map[string]*pendingConfirmation), done: make(chan struct{}), cancel: cancel}
 	if err := s.saveRunReceipt(run); err != nil {
 		cancel()
 		release()
@@ -213,7 +215,7 @@ func (s *Server) startRun(sessionID, prompt, requestID string, values ...promptI
 	g.pruneRequestsLocked()
 	// Existing subscribers need an authoritative new-run boundary before its deltas,
 	// including turns admitted by the server-owned queue.
-	g.publishLocked(state, wsServerMessage{Type: "accepted", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Prompt: displayRunPrompt(run)})
+	g.publishLocked(state, wsServerMessage{Type: "accepted", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Prompt: displayRunPrompt(run), Run: cloneRun(run)})
 	go func() { defer unsubscribeFiles(); s.consumeRun(ctx, run, stream, release) }()
 	return run, false, nil
 }
@@ -311,13 +313,25 @@ func (s *Server) consumeRun(ctx context.Context, run *sessionRun, stream <-chan 
 	} else {
 		run.State = "completed"
 	}
+	if sess, ok := s.app.SessionStore().Get(run.SessionID); ok {
+		messages, err := sess.Session().BuildContext(s.ctx)
+		ids, idErr := sess.Session().BuildContextEntryIDs(s.ctx)
+		if err == nil && idErr == nil && len(ids) == len(messages) {
+			for i := len(messages) - 1; i >= 0; i-- {
+				if user, ok := messages[i].(ai.UserMessage); ok && len(user.Content) > 0 && user.Content[0].Type == "text" && user.Content[0].Text == run.Prompt {
+					run.UserEntryID = ids[i]
+					break
+				}
+			}
+		}
+	}
 	ended := time.Now()
 	run.EndedAt = &ended
 	if err := s.saveRunReceipt(run); err != nil {
 		slog.Error("cannot save final run receipt", "request_id", run.RequestID, "error", err)
 	}
 	if state.run == run {
-		s.runs.publishLocked(state, wsServerMessage{Type: "status", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Streaming: false, Message: run.Error})
+		s.runs.publishLocked(state, wsServerMessage{Type: "status", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Streaming: false, Message: run.Error, Run: cloneRun(run)})
 	}
 	close(run.done)
 	s.runs.pruneRequestsLocked()
@@ -325,9 +339,13 @@ func (s *Server) consumeRun(ctx context.Context, run *sessionRun, stream <-chan 
 
 // 文本片段合并，工具进度只保留最后一次；恢复快照不依赖有限 replay 窗口。
 func appendRunProjection(run *sessionRun, event agent.AgentStreamEvent) {
-	if event.Type == agent.StreamEventTextDelta {
-		if len(run.projection) == 0 || run.projection[len(run.projection)-1].Type != agent.StreamEventTextDelta {
-			run.projection = append(run.projection, agent.AgentStreamEvent{Type: agent.StreamEventTextDelta})
+	if event.Type == agent.StreamEventTextDelta || event.Type == agent.StreamEventThinkingDelta {
+		if len(run.projection) == 0 || run.projection[len(run.projection)-1].Type != event.Type {
+			if run.projectionText.Len() > 0 {
+				run.projection[len(run.projection)-1].TextDelta = run.projectionText.String()
+				run.projectionText.Reset()
+			}
+			run.projection = append(run.projection, agent.AgentStreamEvent{Type: event.Type, Timestamp: event.Timestamp})
 		}
 		run.projectionText.WriteString(event.TextDelta)
 		return
@@ -477,7 +495,7 @@ func (s *Server) runSnapshot(sessionID string, afterSeq uint64, runID string, ws
 		if err != nil {
 			return wsServerMessage{}, err
 		}
-		msg.Messages = serializeRunMessages(messages)
+		msg.Messages = serializeSessionContext(sess, messages)
 		msg.Events = []agent.AgentStreamEvent{}
 	}
 	if ws != nil {
@@ -526,7 +544,7 @@ func (s *Server) invalidateRunSnapshot(sessionID string) {
 	state.replay = nil
 	state.replayBytes = 0
 	state.seq++
-	msg := wsServerMessage{Type: "snapshot", SessionID: sessionID, Seq: state.seq, Messages: serializeRunMessages(messages), Events: []agent.AgentStreamEvent{}}
+	msg := wsServerMessage{Type: "snapshot", SessionID: sessionID, Seq: state.seq, Messages: serializeSessionContext(sess, messages), Events: []agent.AgentStreamEvent{}}
 	for subscriber := range state.subscribers {
 		_ = subscriber.writeJSON(msg)
 	}
@@ -554,6 +572,10 @@ func serializeRunMessages(messages []ai.Message) []map[string]any {
 				if block.Type == "text" {
 					text += block.Text
 				}
+				if block.Type == "image" && block.Image != nil {
+					images, _ := entry["images"].([]map[string]string)
+					entry["images"] = append(images, map[string]string{"data_url": "data:" + block.Image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(block.Image.Data)})
+				}
 			}
 			entry["content"] = text
 			if msg.DisplayText != "" {
@@ -561,6 +583,7 @@ func serializeRunMessages(messages []ai.Message) []map[string]any {
 			}
 		case ai.AssistantMessage:
 			entry["content"], entry["thinking"], entry["tool_calls"] = msg.Text, msg.Thinking, msg.ToolCalls
+			entry["thinking_duration_ms"], entry["usage"] = msg.ThinkingDurationMS, msg.Usage
 		case ai.ToolResultMessage:
 			entry["duration_ms"] = msg.DurationMS
 			entry["content"], entry["tool_call_id"], entry["is_error"], entry["tool_details"] = msg.Content, msg.ToolCallID, msg.IsError, msg.Details

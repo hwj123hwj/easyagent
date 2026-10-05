@@ -12,6 +12,7 @@ export interface ConnectionProfile {
   hasToken: boolean;
 }
 export interface RunInfo {
+ user_entry_id?: string;
   run_id: string;
   request_id?: string;
   state:
@@ -43,14 +44,49 @@ export interface Confirmation {
   description: string;
   args?: unknown;
 }
+export type AccessMode = "ask" | "full";
+export interface ContextUsage {
+  estimated_tokens: number;
+  context_window: number;
+  window_known: boolean;
+  model: string;
+  messages: number;
+  system: number;
+  tools: number;
+  last_request?: { input_tokens: number; output_tokens: number; cached_input_tokens?: number };
+}
+export interface SessionInfo {
+  workspace: string;
+  model: string;
+  access_mode?: AccessMode;
+  context_usage?: ContextUsage;
+}
+export interface CompactionRecord {
+ id: string;
+ timestamp: number;
+ summary: string;
+ info?: { trigger: string; instructions?: string; messages_before: number; messages_after: number; tokens_before: number; tokens_after: number };
+}
+export interface ContextSnapshot {
+ model: { id: string; provider: string };
+ system: string;
+ messages: { role: string; message: unknown }[];
+ tools: { name: string; description: string; parameters?: unknown }[];
+ usage: ContextUsage;
+ compactions: CompactionRecord[];
+}
 export type ChatItem =
   | {
-      kind: "user" | "assistant" | "thought" | "system" | "error";
+      kind: "user" | "assistant" | "thought" | "system" | "error" | "compaction";
+      compaction?: CompactionRecord;
       id: string;
       text: string;
       entryId?: string;
       sessionId?: string;
-      images?: { id: string; name: string; url: string }[];
+      images?: { id: string; name: string; url?: string; attachmentId?: string; sessionId?: string }[];
+      startedAt?: number;
+      durationMs?: number;
+      active?: boolean;
     }
   | {
       kind: "tool";
@@ -68,6 +104,8 @@ export type ChatItem =
       details?: Record<string, unknown>;
     };
 export interface AgentEvent {
+ compaction_info?: CompactionRecord["info"];
+  context_usage?: ContextUsage;
   timestamp?: number;
   duration_ms?: number;
   type: string;
@@ -75,6 +113,7 @@ export interface AgentEvent {
   tool_call_id?: string;
   tool_name?: string;
   tool_args?: Record<string, unknown>;
+  tool_details?: Record<string, unknown>;
   tool_result?: unknown;
   partial_result?: unknown;
   is_error?: boolean;
@@ -85,16 +124,18 @@ export interface AgentEvent {
   [key: string]: unknown;
 }
 export interface StoredMessage {
+ compaction?: CompactionRecord;
   duration_ms?: number;
   role: string;
   content?: unknown;
   thinking?: string;
+  thinking_duration_ms?: number;
   tool_calls?: Array<{ id: string; name: string; args?: unknown }>;
   tool_call_id?: string;
   is_error?: boolean;
   tool_details?: Record<string, unknown>;
   entry_id?: string;
-  images?: { data_url: string }[];
+  images?: { data_url?: string; attachmentId?: string; sessionId?: string }[];
 }
 export interface Envelope {
   inputs?: PromptInputs;
@@ -157,6 +198,7 @@ export function promptInputs(draft: DraftInputs): PromptInputs {
   };
 }
 export interface RunProjection {
+  contextUsage?: ContextUsage;
   transcript: ChatItem[];
   seq: number;
   run?: RunInfo;

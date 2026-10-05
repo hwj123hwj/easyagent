@@ -7,6 +7,8 @@ import (
 	"image"
 	"image/png"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
@@ -125,4 +127,114 @@ func TestAttachmentRawEndpointServesInlineImage(t *testing.T) {
 	require.Equal(t, "image/png", rec.Header().Get("Content-Type"))
 	require.Contains(t, rec.Header().Get("Content-Disposition"), "inline")
 	require.Equal(t, imgBuf.Bytes(), rec.Body.Bytes())
+}
+
+func TestForkEmptyAndCompactedAnchors(t *testing.T) {
+	s, _, _ := newRunTestServer(t)
+	ctx := context.Background()
+	source, err := s.resolveSession(ctx, "")
+	require.NoError(t, err)
+	history := []ai.Message{ai.NewTextUserMessage("old question"), ai.AssistantMessage{Text: "old answer"}, ai.NewTextUserMessage("retained question"), ai.AssistantMessage{Text: "retained answer"}, ai.NewTextUserMessage("future question"), ai.AssistantMessage{Text: "future answer"}}
+	for _, msg := range history {
+		require.NoError(t, source.Session().AppendMessage(ctx, msg))
+	}
+	ids, err := source.Session().BuildContextEntryIDs(ctx)
+	require.NoError(t, err)
+	require.NoError(t, source.Session().AppendCompactionKeeping(ctx, "keep architecture", history[2:], nil))
+	compactIDs, err := source.Session().BuildContextEntryIDs(ctx)
+	require.NoError(t, err)
+	require.Equal(t, ids[2:], compactIDs[1:])
+	snapshot := serializeSessionContext(source, append([]ai.Message{ai.NewTextUserMessage("synthetic")}, history[2:]...))
+	require.Equal(t, "compaction", snapshot[0]["role"])
+	require.Equal(t, ids[2], snapshot[1]["entry_id"])
+	for _, tc := range []struct {
+		name, body string
+		kept       int
+		compact    bool
+	}{
+		{"empty", `{"before_message_index":0}`, 0, false},
+		{"retained user", `{"entry_id":"` + ids[2] + `"}`, 1, true},
+		{"before next user", `{"before_message_index":1}`, 2, true},
+		{"full", `{}`, 4, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/sessions/"+source.SessionID()+"/fork", bytes.NewBufferString(tc.body))
+			req.SetPathValue("id", source.SessionID())
+			rec := httptest.NewRecorder()
+			s.forkSession(rec, req)
+			require.Equal(t, 201, rec.Code, rec.Body.String())
+			var response forkResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.Equal(t, tc.kept, response.KeptMessages)
+			forked, _, err := s.app.SessionManager().Open(ctx, response.ID)
+			require.NoError(t, err)
+			defer forked.Storage().Close()
+			messages, err := forked.BuildContext(ctx)
+			require.NoError(t, err)
+			want := tc.kept
+			if tc.compact {
+				want++
+				require.Contains(t, messages[0].(ai.UserMessage).Content[0].Text, "keep architecture")
+			}
+			require.Len(t, messages, want)
+			if tc.compact {
+				require.Equal(t, history[2], messages[1])
+			}
+		})
+	}
+	// Forking must never close or reposition the registry's live source storage.
+	require.NoError(t, source.Session().AppendMessage(ctx, ai.NewTextUserMessage("source still works")))
+	messages, err := source.Session().BuildContext(ctx)
+	require.NoError(t, err)
+	require.Len(t, messages, 6)
+}
+
+func TestForkRejectsMalformedAndActiveRequests(t *testing.T) {
+	s, _, _ := newRunTestServer(t)
+	source, err := s.resolveSession(context.Background(), "")
+	require.NoError(t, err)
+	for _, body := range []string{`{"entry_id":"missing"}`, `{"before_message_index":-1}`, `{"before_message_index":0,"entry_id":""}`, `{"unknown":true}`, `{`, `{} {}`} {
+		req := httptest.NewRequest("POST", "/", bytes.NewBufferString(body))
+		req.SetPathValue("id", source.SessionID())
+		rec := httptest.NewRecorder()
+		s.forkSession(rec, req)
+		require.Equal(t, 400, rec.Code, body)
+	}
+	s.runs.sessions[source.SessionID()] = &sessionRunState{run: &sessionRun{State: "running"}}
+	req := httptest.NewRequest("POST", "/", nil)
+	req.SetPathValue("id", source.SessionID())
+	rec := httptest.NewRecorder()
+	s.forkSession(rec, req)
+	require.Equal(t, 409, rec.Code)
+	s.runs.sessions[source.SessionID()].run = nil
+	list, err := s.app.SessionManager().List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+}
+
+func TestAttachmentPreviewRequiresAuthAndRejectsWorkspaceEscape(t *testing.T) {
+	s, _, _ := newRunTestServer(t)
+	sess, err := s.resolveSession(context.Background(), "")
+	require.NoError(t, err)
+	var pngBytes bytes.Buffer
+	require.NoError(t, png.Encode(&pngBytes, image.NewRGBA(image.Rect(0, 0, 4, 4))))
+	att := uploadInput(t, s, sess.SessionID(), "preview.png", pngBytes.Bytes(), 201)
+	s.SetAPIKey("fixture-token")
+	url := "/sessions/" + sess.SessionID() + "/attachments/" + att.ID + "/raw?format=data_url"
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", url, nil))
+	require.Equal(t, 401, rec.Code)
+	req := httptest.NewRequest("GET", url, nil)
+	req.Header.Set("Authorization", "Bearer fixture-token")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	require.Equal(t, 200, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "data:image/png;base64,")
+	require.NoError(t, os.Remove(att.Path))
+	external := filepath.Join(t.TempDir(), "outside.png")
+	require.NoError(t, os.WriteFile(external, pngBytes.Bytes(), 0600))
+	require.NoError(t, os.Symlink(external, att.Path))
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	require.Equal(t, 400, rec.Code)
 }

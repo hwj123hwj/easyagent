@@ -151,3 +151,24 @@ func TestAnthropicStreamEmptyExhaustsRetries(t *testing.T) {
 	assert.Equal(t, int32(streamRetryAttempts), atomic.LoadInt32(&hits))
 	assert.Equal(t, ai.StopReasonError, msg.StopReason)
 }
+
+func TestAnthropicLiveThinkingAndCachedInputUsage(t *testing.T) {
+	srv := anthropicSSEServer(t,
+		`event: message_start`, `data: {"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":90,"cache_creation_input_tokens":20}}}`,
+		`event: content_block_delta`, `data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thought"}}`,
+		`event: message_delta`, `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+		`event: message_stop`, `data: {"type":"message_stop"}`)
+	stream, err := NewAnthropicProvider("test", srv.URL).Stream(context.Background(), ai.StreamRequest{})
+	require.NoError(t, err)
+	thought := ""
+	for event := range stream.Events() {
+		if e, ok := event.(ai.EventThinkingDelta); ok {
+			thought += e.Delta
+		}
+	}
+	msg, err := stream.Result()
+	require.NoError(t, err)
+	require.Equal(t, "thought", thought)
+	require.Equal(t, 120, msg.Usage.InputTokens)
+	require.Equal(t, 90, *msg.Usage.CachedInputTokens)
+}
