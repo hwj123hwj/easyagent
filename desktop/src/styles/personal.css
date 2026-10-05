@@ -704,6 +704,11 @@ textarea::placeholder {
   color: var(--text-dim);
   font-size: 12px;
 }
+.confirmation-list {
+  max-height: min(40vh, 360px);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
 .confirmation-prompt {
   border: 1px solid var(--amber);
   border-radius: 10px;

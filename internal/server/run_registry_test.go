@@ -358,6 +358,16 @@ func TestRunConfirmationTimeoutDeniesAndClearsWaitingState(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, snapshot.PendingConfirmations)
 	require.Equal(t, "running", snapshot.Run.State)
+	srv.runs.mu.Lock()
+	var resolved []wsServerMessage
+	for _, event := range srv.runs.sessions[run.SessionID].replay {
+		if event.Type == "confirmed" {
+			resolved = append(resolved, event)
+		}
+	}
+	srv.runs.mu.Unlock()
+	require.Len(t, resolved, 1)
+	require.NotEmpty(t, resolved[0].ConfirmationID)
 	close(gateway.finish)
 	_, err = srv.waitRun(context.Background(), run)
 	require.NoError(t, err)

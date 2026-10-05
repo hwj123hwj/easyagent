@@ -633,18 +633,27 @@ export const useStore = create<StoreState>((set, get) => ({
     const run = get().sessions[id]?.run,
       epoch = connectionEpoch;
     if (!run) throw new Error("任务已结束，请刷新会话");
-    await apiRequest(
-      "POST",
-      `/sessions/${encodeURIComponent(id)}/run/confirm`,
-      { run_id: run.run_id, confirmation_id: confirmation, approved },
-    );
+    try {
+      await apiRequest(
+        "POST",
+        `/sessions/${encodeURIComponent(id)}/run/confirm`,
+        { run_id: run.run_id, confirmation_id: confirmation, approved },
+      );
+    } catch (error) {
+      if (epoch === connectionEpoch && /HTTP 409\b/.test(String(error))) {
+        const snapshot = await apiRequest<Envelope>("GET", `/sessions/${encodeURIComponent(id)}/run`);
+        if (epoch === connectionEpoch)
+          updateView(set, id, (v) => ({ ...v, ...reduceEnvelope(v, snapshot) }));
+      }
+      throw error;
+    }
     if (epoch === connectionEpoch)
       updateView(set, id, (v) => ({
         ...v,
         confirmations: v.confirmations.filter(
           (c) => c.confirmation_id !== confirmation,
         ),
-        phase: "thinking",
+        phase: v.confirmations.some((c) => c.confirmation_id !== confirmation) ? "approval" : "thinking",
       }));
   },
   sessions: {},

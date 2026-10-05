@@ -74,6 +74,7 @@ type wsServerMessage struct {
 	Messages             []map[string]any       `json:"messages,omitempty"`
 	PendingConfirmations []*pendingConfirmation `json:"pending_confirmations,omitempty"`
 	Confirmation         *pendingConfirmation   `json:"confirmation,omitempty"`
+	ConfirmationID       string                 `json:"confirmation_id,omitempty"`
 	Streaming            bool                   `json:"streaming"`
 	Retryable            bool                   `json:"retryable,omitempty"`
 	Provider             string                 `json:"provider,omitempty"`
@@ -177,7 +178,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if err := s.confirmRun(msg.SessionID, msg.RunID, msg.ConfirmationID, msg.Approved, msg.Reason); err != nil {
 				s.writeWSError(ws, msg, err)
 			} else {
-				_ = ws.writeJSON(wsServerMessage{Type: "confirmed", SessionID: msg.SessionID, RunID: msg.RunID})
+				_ = ws.writeJSON(wsServerMessage{Type: "confirmed", SessionID: msg.SessionID, RunID: msg.RunID, ConfirmationID: msg.ConfirmationID})
 			}
 		case "switch_model":
 			s.handleWSSwitchModel(ws, msg)
