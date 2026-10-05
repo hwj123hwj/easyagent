@@ -802,3 +802,13 @@ func (s *AgentSession) ContextSnapshot(ctx context.Context) (agent.ContextSnapsh
 	}
 	return s.agent.ContextSnapshot(ctx)
 }
+
+// Fork snapshots this session while blocking concurrent prompts and mutations.
+func (s *AgentSession) Fork(ctx context.Context, entryID *string) (string, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.busyLocked() {
+		return "", "", agent.ErrAgentBusy
+	}
+	return s.sessionMgr.ForkAt(ctx, s.sessionID, entryID)
+}

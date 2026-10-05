@@ -56,6 +56,7 @@ export interface SessionMeta {
   application?: string; // e.g. "coding", "music"
   pinned?: boolean;
   archived?: boolean;
+  forked_from?: string;
   availableModels: ModelInfo[];
   createdAt: number;
   updatedAt: number;

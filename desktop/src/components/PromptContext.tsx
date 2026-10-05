@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest, useStore } from "../store";
 import { EMPTY_INPUTS, type InputAttachment } from "../client/protocol";
+import { AttachmentImage } from "./AttachmentImage";
 import { Icon } from "./Icon";
 
 export const WORKSPACE_FILE_DRAG = "application/x-easyagent-workspace-file";
@@ -260,31 +261,39 @@ export function PromptContext({
         draft.files.length > 0 ||
         uploading) && (
         <div className="composer-context" aria-label="消息上下文">
-          {draft.attachments.map((item) => (
-            <span
-              key={item.id}
-              title={`${host} · ${item.workspace}\n${item.path}`}
-            >
-              <Icon name="file" size={12} />
-              {item.name}
-              <small>{host}</small>
-              <button
-                aria-label={`移除 ${item.name}`}
-                onClick={() =>
-                  useStore
-                    .getState()
-                    .setDraftInputs(id, {
-                      ...draft,
-                      attachments: draft.attachments.filter(
-                        (attachment) => attachment.id !== item.id,
-                      ),
-                    })
-                }
+          {draft.attachments.map((item) => {
+            const isImage = item.mime_type?.startsWith("image/");
+            return (
+              <span
+                key={item.id}
+                className={isImage ? "is-image" : undefined}
+                title={`${host} · ${item.workspace}\n${item.path}`}
               >
-                ×
-              </button>
-            </span>
-          ))}
+                {isImage ? (
+                  <AttachmentImage attachmentId={item.id} sessionId={id} name={item.name} className="composer-attachment-thumb" />
+                ) : (
+                  <Icon name="file" size={12} />
+                )}
+                {item.name}
+                <small>{host}</small>
+                <button
+                  aria-label={`移除 ${item.name}`}
+                  onClick={() =>
+                    useStore
+                      .getState()
+                      .setDraftInputs(id, {
+                        ...draft,
+                        attachments: draft.attachments.filter(
+                          (attachment) => attachment.id !== item.id,
+                        ),
+                      })
+                  }
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
           {draft.files.map((item) => (
             <span key={item.path} title={`${host} · ${item.workspace}`}>
               <Icon name="folder" size={12} />@{item.path.split(/[\\/]/).pop()}
@@ -340,6 +349,7 @@ export function PromptContext({
           )}
         </div>
       )}
+
     </>
   );
 }

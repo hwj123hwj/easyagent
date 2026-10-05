@@ -12,6 +12,7 @@ export interface ConnectionProfile {
   hasToken: boolean;
 }
 export interface RunInfo {
+ user_entry_id?: string;
   run_id: string;
   request_id?: string;
   state:
@@ -24,7 +25,14 @@ export interface RunInfo {
   error?: string;
   prompt?: string;
   display_prompt?: string;
+  session_id?: string;
   inputs?: PromptInputs;
+  attachments?: Array<{
+    id: string;
+    name: string;
+    mime_type?: string;
+    size?: number;
+  }>;
 }
 export function isActiveRun(run: RunInfo | undefined): boolean {
   return run?.state === "running" || run?.state === "waiting_confirmation";
@@ -73,6 +81,9 @@ export type ChatItem =
       compaction?: CompactionRecord;
       id: string;
       text: string;
+      entryId?: string;
+      sessionId?: string;
+      images?: { id: string; name: string; url?: string; attachmentId?: string; sessionId?: string }[];
       startedAt?: number;
       durationMs?: number;
       active?: boolean;
@@ -123,6 +134,8 @@ export interface StoredMessage {
   tool_call_id?: string;
   is_error?: boolean;
   tool_details?: Record<string, unknown>;
+  entry_id?: string;
+  images?: { data_url?: string; attachmentId?: string; sessionId?: string }[];
 }
 export interface Envelope {
   inputs?: PromptInputs;

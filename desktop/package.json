@@ -1,6 +1,6 @@
 {
   "name": "easyagent-desktop",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "EasyAgent Desktop Client - AI Coding Agent GUI",
   "main": "dist/electron/main.js",
   "scripts": {

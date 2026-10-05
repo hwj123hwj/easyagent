@@ -620,3 +620,20 @@ test("compaction cards restore from history and replay without truncating Unicod
   assert.equal(s.transcript.at(-1).kind, "error");
   assert.match(s.transcript.at(-1).text, /disk unavailable/);
 });
+
+test("image history keeps distinct anchors and the reducer is independent of the store", () => {
+ const projection = historyProjection([{role:"compaction",content:"summary",compaction:{id:"comp",summary:"summary"}}, {role:"user",content:"image",entry_id:"entry",images:[{data_url:"data:image/png;base64,AA"},{data_url:"data:image/png;base64,BB"}]}]);
+ const user = projection.transcript.find(item => item.kind === "user");
+ assert.equal(user.entryId,"entry");
+ assert.equal(new Set(user.images.map(image => image.id)).size,2);
+});
+test("live image references use authenticated session API; terminal status supplies precise fork anchor", () => {
+ let projection = reduceEnvelope(emptyProjection(),{type:"accepted",session_id:"session",run_id:"run",state:"running",prompt:"look",run:{attachments:[{id:"att",name:"image.png",mime_type:"image/png"}]}});
+ assert.deepEqual(projection.transcript[0].images,[{id:"att",name:"image.png",attachmentId:"att",sessionId:"session"}]);
+ assert.equal(projection.transcript[0].entryId,undefined);
+ projection = reduceEnvelope(projection,{type:"status",session_id:"session",run_id:"run",state:"completed",run:{user_entry_id:"user-entry"}});
+ assert.equal(projection.transcript[0].entryId,"user-entry");
+ const snapshot = reduceEnvelope(emptyProjection(),{type:"snapshot",session_id:"session",run:{run_id:"run",state:"completed",prompt:"look",user_entry_id:"user-entry",attachments:[{id:"att",name:"image.png",mime_type:"image/png"}]}});
+ assert.equal(snapshot.transcript[0].entryId,"user-entry");
+ assert.equal(snapshot.transcript[0].images[0].sessionId,"session");
+});

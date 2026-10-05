@@ -233,3 +233,129 @@ func (s *Server) buildPromptMessage(sess *runtime.AgentSession, prompt string, i
 	message.DisplayText = display
 	return message, nil
 }
+
+// ─── GET /sessions/{id}/attachments/{attID}/raw ─────────────────────────────
+
+// resolvePromptAttachments loads attachment metadata for a run so the UI can
+// render image previews in the user bubble. Best-effort: unreadable entries
+// are skipped rather than failing the run.
+func (s *Server) resolvePromptAttachments(sessionID string, ids []string) []inputAttachment {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]inputAttachment, 0, len(ids))
+	for _, id := range ids {
+		metaPath, err := s.attachmentMetaPath(sessionID, id)
+		if err != nil {
+			continue
+		}
+		data, err := os.ReadFile(metaPath)
+		if err != nil {
+			continue
+		}
+		var meta inputAttachment
+		if json.Unmarshal(data, &meta) != nil || meta.ID != id {
+			continue
+		}
+		out = append(out, meta)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// getAttachmentRaw serves the raw bytes of an attachment uploaded to a session.
+// Sets inline Content-Disposition so browsers/desktop UI can display images
+// directly in <img> tags.
+func (s *Server) getAttachmentRaw(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	attID := r.PathValue("attID")
+	if sessionID == "" || strings.ContainsAny(sessionID, `/\\`) || sessionID == "." || sessionID == ".." || !s.app.SessionManager().Exists(sessionID) || attID == "" {
+		writeError(w, http.StatusBadRequest, "session id and attachment id are required")
+		return
+	}
+
+	metaPath, err := s.attachmentMetaPath(sessionID, attID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "attachment not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var meta inputAttachment
+	if err := json.Unmarshal(data, &meta); err != nil {
+		writeError(w, http.StatusInternalServerError, "invalid attachment metadata")
+		return
+	}
+
+	sess, err := s.app.LoadSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, 404, "session not found")
+		return
+	}
+	if meta.ID != attID || meta.Workspace != sess.Workspace() {
+		writeError(w, 400, "attachment workspace mismatch")
+		return
+	}
+	safe, err := securePath(sess.Workspace(), meta.Path)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	file, err := os.Open(safe)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "attachment file not found on disk")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if !stat.Mode().IsRegular() || stat.Size() > maxAttachmentBytes {
+		writeError(w, 400, "invalid attachment file")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	header := make([]byte, 512)
+	count, _ := file.ReadAt(header, 0)
+	mimeType := http.DetectContentType(header[:count])
+	if r.URL.Query().Get("format") == "data_url" {
+		if mimeType != "image/png" && mimeType != "image/jpeg" && mimeType != "image/gif" && mimeType != "image/webp" {
+			writeError(w, 400, "attachment is not a supported image")
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(file, maxAttachmentBytes+1))
+		if err != nil || len(data) > maxAttachmentBytes {
+			writeError(w, 400, "cannot read attachment")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"data_url": "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)})
+		return
+	}
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", meta.Name))
+	http.ServeContent(w, r, meta.Name, stat.ModTime(), file)
+}

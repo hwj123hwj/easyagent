@@ -312,6 +312,16 @@ interface StoreState {
     model?: string;
     application?: string;
   }) => Promise<string>;
+  forkSession: (
+    sourceId: string,
+    opts?: { entryId?: string; beforeMessageIndex?: number },
+  ) => Promise<{
+    id: string;
+    source_id: string;
+    kept_messages: number;
+    kept_user_messages: number;
+    dropped_messages: number;
+  }>;
   deleteSession: (id: string) => Promise<void>;
   sendPrompt: (
     id: string,
@@ -1082,6 +1092,7 @@ export const useStore = create<StoreState>((set, get) => ({
             application,
             pinned: !!sess.pinned,
             archived: !!sess.archived,
+            forked_from: sess.forked_from,
             availableModels: defaultModels(),
             createdAt: timestampMillis(sess.created_at),
             updatedAt: timestampMillis(sess.last_active),
@@ -1098,6 +1109,7 @@ export const useStore = create<StoreState>((set, get) => ({
                 application,
                 pinned: !!sess.pinned,
                 archived: !!sess.archived,
+                forked_from: sess.forked_from,
                 updatedAt: timestampMillis(sess.last_active),
               },
             };
@@ -1216,6 +1228,29 @@ export const useStore = create<StoreState>((set, get) => ({
       if (epoch === connectionEpoch) set({ connectionError: error.message });
     });
     return result.id;
+  },
+
+  forkSession: async (sourceId, opts) => {
+    const epoch = connectionEpoch;
+    const body: Record<string, any> = {};
+    if (opts?.entryId) body.entry_id = opts.entryId;
+    if (typeof opts?.beforeMessageIndex === "number") {
+      body.before_message_index = opts.beforeMessageIndex;
+    }
+    const result = await apiRequest<{
+      id: string;
+      source_id: string;
+      kept_messages: number;
+      kept_user_messages: number;
+      dropped_messages: number;
+    }>("POST", `/sessions/${encodeURIComponent(sourceId)}/fork`, body);
+    if (epoch !== connectionEpoch) {
+      throw new Error("运行主机已切换，原服务的分叉结果已忽略");
+    }
+    await get().refreshSessions();
+    if (epoch !== connectionEpoch) throw new Error("运行主机已切换，原服务的分叉结果已忽略");
+    await get().setActive(result.id);
+    return result;
   },
 
   deleteSession: async (id) => {

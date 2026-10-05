@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,17 +37,19 @@ type pendingConfirmation struct {
 
 // sessionRun is owned by the session, never by a socket or HTTP request.
 type sessionRun struct {
+	UserEntryID    string `json:"user_entry_id,omitempty"`
 	files          *runFiles
-	DisplayPrompt  string       `json:"display_prompt,omitempty"`
-	Inputs         promptInputs `json:"inputs,omitempty"`
-	ID             string       `json:"run_id"`
-	RequestID      string       `json:"request_id"`
-	SessionID      string       `json:"session_id"`
-	Prompt         string       `json:"prompt"`
-	State          string       `json:"state"`
-	StartedAt      time.Time    `json:"started_at"`
-	EndedAt        *time.Time   `json:"ended_at,omitempty"`
-	Error          string       `json:"error,omitempty"`
+	DisplayPrompt  string            `json:"display_prompt,omitempty"`
+	Inputs         promptInputs      `json:"inputs,omitempty"`
+	Attachments    []inputAttachment `json:"attachments,omitempty"`
+	ID             string            `json:"run_id"`
+	RequestID      string            `json:"request_id"`
+	SessionID      string            `json:"session_id"`
+	Prompt         string            `json:"prompt"`
+	State          string            `json:"state"`
+	StartedAt      time.Time         `json:"started_at"`
+	EndedAt        *time.Time        `json:"ended_at,omitempty"`
+	Error          string            `json:"error,omitempty"`
 	baseline       []map[string]any
 	projection     []agent.AgentStreamEvent
 	projectionText strings.Builder
@@ -205,13 +208,14 @@ func (s *Server) startRun(sessionID, prompt, requestID string, values ...promptI
 	state := g.sessionLocked(run.SessionID)
 	state.run = run
 	run.DisplayPrompt = message.DisplayText
+	run.Attachments = s.resolvePromptAttachments(run.SessionID, run.Inputs.Attachments)
 	state.replay, state.replayBytes = nil, 0
 	g.requests[requestID] = run
 	g.requestOrder = append(g.requestOrder, requestID)
 	g.pruneRequestsLocked()
 	// Existing subscribers need an authoritative new-run boundary before its deltas,
 	// including turns admitted by the server-owned queue.
-	g.publishLocked(state, wsServerMessage{Type: "accepted", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Prompt: displayRunPrompt(run)})
+	g.publishLocked(state, wsServerMessage{Type: "accepted", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Prompt: displayRunPrompt(run), Run: cloneRun(run)})
 	go func() { defer unsubscribeFiles(); s.consumeRun(ctx, run, stream, release) }()
 	return run, false, nil
 }
@@ -309,13 +313,25 @@ func (s *Server) consumeRun(ctx context.Context, run *sessionRun, stream <-chan 
 	} else {
 		run.State = "completed"
 	}
+	if sess, ok := s.app.SessionStore().Get(run.SessionID); ok {
+		messages, err := sess.Session().BuildContext(s.ctx)
+		ids, idErr := sess.Session().BuildContextEntryIDs(s.ctx)
+		if err == nil && idErr == nil && len(ids) == len(messages) {
+			for i := len(messages) - 1; i >= 0; i-- {
+				if user, ok := messages[i].(ai.UserMessage); ok && len(user.Content) > 0 && user.Content[0].Type == "text" && user.Content[0].Text == run.Prompt {
+					run.UserEntryID = ids[i]
+					break
+				}
+			}
+		}
+	}
 	ended := time.Now()
 	run.EndedAt = &ended
 	if err := s.saveRunReceipt(run); err != nil {
 		slog.Error("cannot save final run receipt", "request_id", run.RequestID, "error", err)
 	}
 	if state.run == run {
-		s.runs.publishLocked(state, wsServerMessage{Type: "status", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Streaming: false, Message: run.Error})
+		s.runs.publishLocked(state, wsServerMessage{Type: "status", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Streaming: false, Message: run.Error, Run: cloneRun(run)})
 	}
 	close(run.done)
 	s.runs.pruneRequestsLocked()
@@ -555,6 +571,10 @@ func serializeRunMessages(messages []ai.Message) []map[string]any {
 			for _, block := range msg.Content {
 				if block.Type == "text" {
 					text += block.Text
+				}
+				if block.Type == "image" && block.Image != nil {
+					images, _ := entry["images"].([]map[string]string)
+					entry["images"] = append(images, map[string]string{"data_url": "data:" + block.Image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(block.Image.Data)})
 				}
 			}
 			entry["content"] = text

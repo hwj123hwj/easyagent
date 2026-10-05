@@ -175,6 +175,8 @@ func (s *Server) Handler() http.Handler {
 	restMux.HandleFunc("POST /chat/stream", s.chatStream)
 	restMux.HandleFunc("GET /sessions", s.listSessions)
 	restMux.HandleFunc("POST /sessions", s.createSession)
+	restMux.HandleFunc("POST /sessions/{id}/fork", s.forkSession)
+	restMux.HandleFunc("GET /sessions/{id}/attachments/{attID}/raw", s.getAttachmentRaw)
 	restMux.HandleFunc("GET /sessions/{id}/messages", s.getSessionMessages)
 	restMux.HandleFunc("GET /sessions/{id}/info", s.getSessionInfo)
 	restMux.HandleFunc("POST /sessions/{id}/permissions", s.setSessionPermissions)
@@ -481,68 +483,8 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type toolCallEntry struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Args string `json:"args"`
-	}
-
-	type messageEntry struct {
-		ThinkingDurationMS int64           `json:"thinking_duration_ms,omitempty"`
-		Usage              ai.Usage        `json:"usage,omitempty"`
-		DurationMS         int64           `json:"duration_ms,omitempty"`
-		Role               string          `json:"role"`
-		Content            string          `json:"content"`
-		Thinking           string          `json:"thinking,omitempty"`
-		ToolCalls          []toolCallEntry `json:"tool_calls,omitempty"`
-		ToolCallID         string          `json:"tool_call_id,omitempty"`
-		ToolDetails        any             `json:"tool_details,omitempty"`
-		IsError            bool            `json:"is_error,omitempty"`
-	}
-
-	var result []messageEntry
-	for _, msg := range messages {
-		entry := messageEntry{Role: string(msg.Role())}
-		switch m := msg.(type) {
-		case ai.UserMessage:
-			var texts []string
-			for _, block := range m.Content {
-				if block.Type == "text" {
-					texts = append(texts, block.Text)
-				}
-			}
-			entry.Content = joinTexts(texts)
-			if m.DisplayText != "" {
-				entry.Content = m.DisplayText
-			}
-		case ai.AssistantMessage:
-			entry.Content = m.Text
-			entry.Thinking = m.Thinking
-			entry.ThinkingDurationMS = m.ThinkingDurationMS
-			entry.Usage = m.Usage
-			if len(m.ToolCalls) > 0 {
-				for _, tc := range m.ToolCalls {
-					entry.ToolCalls = append(entry.ToolCalls, toolCallEntry{
-						ID: tc.ID, Name: tc.Name, Args: tc.Args,
-					})
-				}
-			}
-		case ai.ToolResultMessage:
-			entry.DurationMS = m.DurationMS
-			entry.Content = m.Content
-			entry.ToolCallID = m.ToolCallID
-			entry.IsError = m.IsError
-			entry.ToolDetails = m.Details
-		}
-		result = append(result, entry)
-	}
-
-	if result == nil {
-		result = []messageEntry{}
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(serializeSessionContext(sess, messages))
 }
 
 // ─── DELETE /sessions/{id} ────────────────────────────────────────────────────

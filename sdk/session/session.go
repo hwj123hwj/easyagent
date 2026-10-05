@@ -125,6 +125,22 @@ func entryToMessages(entry Entry) []ai.Message {
 	return nil
 }
 
+// BuildContextEntryIDs is position-aligned with BuildContext, including retained
+// messages from compaction snapshots. The summary uses its compaction entry ID.
+func (s *Session) BuildContextEntryIDs(ctx context.Context) ([]string, error) {
+	entries, err := s.contextEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		for range entryToMessages(entry) {
+			ids = append(ids, entry.ID)
+		}
+	}
+	return ids, nil
+}
+
 // AppendCompaction writes a compaction entry to the session storage.
 // The summary replaces all prior messages when BuildContext is called.
 func (s *Session) AppendCompaction(ctx context.Context, summary string) error {

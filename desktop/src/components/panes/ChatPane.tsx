@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { useStore, type ChatItem, type SessionView } from "../../store";
+import { AttachmentImage } from "../AttachmentImage";
 import { Markdown } from "../Markdown";
 import { ToolCall } from "../ToolCall";
 import { RunRecovery } from "../RunRecovery";
@@ -315,6 +316,7 @@ export function ChatPane({ view }: { view: SessionView }) {
               row={row}
               measure={measure}
               cwd={view.meta.cwd}
+              sessionId={view.meta.id}
               density={view.density}
               foundItem={findOpen ? match?.itemId : undefined}
             />
@@ -401,12 +403,14 @@ function MeasuredRow({
   row,
   measure,
   cwd,
+  sessionId,
   density,
   foundItem,
 }: {
   row: Row;
   measure: (id: string, height: number) => void;
   cwd: string;
+  sessionId: string;
   density: SessionView["density"];
   foundItem?: string;
 }) {
@@ -434,6 +438,7 @@ function MeasuredRow({
         <Message
           item={row}
           cwd={cwd}
+          sessionId={sessionId}
           density={
             row.id === foundItem && density === "summary" ? "normal" : density
           }
@@ -572,14 +577,19 @@ function ToolGroup({
 const Message = memo(function Message({
   item,
   cwd,
+  sessionId,
   density,
 }: {
   item: Exclude<ChatItem, { kind: "tool" }>;
   cwd: string;
+  sessionId: string;
   density: SessionView["density"];
 }) {
   const [copied, setCopied] = useState(false),
     [error, setError] = useState("");
+  const forkSession = useStore((s) => s.forkSession);
+  const busy = useStore(s => isActiveRun(s.sessions[sessionId]?.run));
+  const [forking, setForking] = useState(false);
   if (item.kind === "thought")
     return <Thought item={item} />;
   if (item.kind === "compaction")
@@ -599,7 +609,43 @@ const Message = memo(function Message({
   if (item.kind === "user")
     return (
       <div className="personal-user">
-        <div>{item.text}</div>
+        <div className="user-message-body">
+          <div>{item.text}</div>
+          {!!item.images?.length && (
+            <div className="user-message-images">
+              {item.images.map((img) => (
+                <AttachmentImage key={img.id} url={img.url} attachmentId={img.attachmentId} sessionId={img.sessionId || sessionId} name={img.name} className="user-message-image-thumb" />
+              ))}
+            </div>
+          )}
+          <div className="user-message-actions">
+            <button
+              className="user-fork-btn"
+              title="保留至此消息，创建独立会话"
+              disabled={!item.entryId || busy || forking}
+              onClick={() => {
+                void (async () => {
+                  setForking(true); setError("");
+                  try {
+                    await forkSession(sessionId, {
+                      entryId: item.entryId,
+                    });
+                  } catch (forkError) {
+                    setError(
+                      forkError instanceof Error
+                        ? forkError.message
+                        : String(forkError),
+                    );
+                  } finally { setForking(false); }
+                })();
+              }}
+            >
+              <Icon name="git-branch" size={12} />
+              {forking ? "正在分叉…" : "从此分叉"}
+            </button>
+          </div>
+          {error && <span className="inline-error">{error}</span>}
+        </div>
       </div>
     );
   return (
