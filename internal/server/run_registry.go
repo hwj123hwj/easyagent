@@ -382,6 +382,9 @@ func (s *Server) confirmRunTool(ctx context.Context, request agent.ConfirmationR
 	}
 	s.runs.mu.Lock()
 	delete(run.pending, pending.ID)
+	if state.run == run {
+		s.runs.publishLocked(state, wsServerMessage{Type: "confirmed", SessionID: run.SessionID, RunID: run.ID, ConfirmationID: pending.ID})
+	}
 	if len(run.pending) == 0 && runActive(run) {
 		run.State = "running"
 		if state.run == run {

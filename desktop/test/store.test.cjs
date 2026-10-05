@@ -394,3 +394,22 @@ test("session activation and creation clear file tabs only when the project chan
     delete window.piAPI;
   }
 });
+
+test("stale confirmation refreshes authoritative approvals without replaying the decision", async () => {
+  const before = useStore.getState(), api = window.piAPI;
+  const pending = { confirmation_id: "new", tool_name: "edit" };
+  const initial = { ...view(), run: { run_id: "r", state: "waiting_confirmation" }, phase: "approval", confirmations: [{ confirmation_id: "old", tool_name: "edit" }] };
+  const calls = [];
+  window.piAPI = { request: async (method, path) => {
+    calls.push([method, path]);
+    if (method === "POST") throw Error("Error invoking remote method 'agent-request': Error: HTTP 409: 已过期");
+    return { type: "snapshot", reset: true, run: initial.run, pending_confirmations: [pending], messages: [] };
+  }};
+  try {
+    useStore.setState({ sessions: { s: initial } });
+    await assert.rejects(useStore.getState().confirm("s", "old", true), /HTTP 409/);
+    assert.deepEqual(useStore.getState().sessions.s.confirmations, [pending]);
+    assert.equal(useStore.getState().sessions.s.meta.cwd, "/qa");
+    assert.equal(calls.filter(c => c[0] === "POST").length, 1);
+  } finally { window.piAPI = api; useStore.setState(before); }
+});

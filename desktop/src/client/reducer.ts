@@ -385,7 +385,7 @@ export function reduceEnvelope(
           : status === "cancelled"
             ? "cancelled"
             : "idle",
-      confirmations: active ? next.confirmations : [],
+      confirmations: status === "waiting_confirmation" ? next.confirmations : [],
     };
   }
   if (message.type === "confirmed") {
@@ -402,7 +402,7 @@ export function reduceEnvelope(
               state: confirmations.length ? "waiting_confirmation" : "running",
             }
           : next.run,
-      phase: "thinking",
+      phase: confirmations.length ? "approval" : "thinking",
     };
   }
   return terminalProjection(next);
@@ -416,7 +416,7 @@ function terminalProjection(state: RunProjection): RunProjection {
       phase:
         state.confirmations.length || status === "waiting_confirmation"
           ? "approval"
-          : state.phase === "idle"
+          : state.phase === "idle" || state.phase === "approval"
             ? "thinking"
             : state.phase,
     };

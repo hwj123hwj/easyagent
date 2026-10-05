@@ -523,3 +523,19 @@ test("history pairs reused tool IDs with their own assistant invocation", () => 
     ],
   );
 });
+
+test("expired approval is cleared by running status from older servers", () => {
+  let state = accepted();
+  state = reduceEnvelope(state, { type: "confirmation", run_id: "run", seq: 1, confirmation: { confirmation_id: "expired", tool_name: "edit" } });
+  state = reduceEnvelope(state, { type: "status", run_id: "run", seq: 2, state: "running", streaming: true });
+  assert.equal(state.confirmations.length, 0);
+  assert.equal(state.phase, "thinking");
+});
+test("resolving one concurrent approval keeps the other actionable", () => {
+  let state = accepted();
+  for (const [index, id] of ["one", "two"].entries())
+    state = reduceEnvelope(state, { type: "confirmation", run_id: "run", seq: index + 1, confirmation: { confirmation_id: id, tool_name: "edit" } });
+  state = reduceEnvelope(state, { type: "confirmed", run_id: "run", seq: 3, confirmation_id: "one" });
+  assert.deepEqual(state.confirmations.map(c => c.confirmation_id), ["two"]);
+  assert.equal(state.phase, "approval");
+});
