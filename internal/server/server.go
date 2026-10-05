@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -191,6 +192,7 @@ func (s *Server) Handler() http.Handler {
 	restMux.HandleFunc("GET /commands", s.listCommands)
 	restMux.HandleFunc("GET /applications", s.listApplications)
 	restMux.HandleFunc("POST /sessions/{id}/compact", s.compactSession)
+	restMux.HandleFunc("GET /sessions/{id}/context", s.getContextSnapshot)
 	restMux.HandleFunc("POST /sessions/{id}/command", s.executeCommand)
 	restMux.HandleFunc("POST /tools/register", s.registerTool)
 	restMux.HandleFunc("GET /sessions/{id}/diff", s.getSessionDiff)
@@ -821,9 +823,9 @@ func (s *Server) compactSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req CompactRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Allow empty body
-		req = CompactRequest{}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid compaction request")
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)

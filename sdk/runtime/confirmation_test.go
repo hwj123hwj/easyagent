@@ -87,3 +87,23 @@ func TestExplicitAccessModeRetainsMCPApprovalRule(t *testing.T) {
 	require.False(t, session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{}).Approved)
 	require.Equal(t, 2, calls)
 }
+
+func TestContextSnapshotRejectsActiveMutation(t *testing.T) {
+	for _, field := range []string{"running", "mutating"} {
+		t.Run(field, func(t *testing.T) {
+			sess := &AgentSession{agent: agent.New(agent.Options{System: "rules"})}
+			if field == "running" {
+				sess.running = true
+			} else {
+				sess.mutating = true
+			}
+			_, err := sess.ContextSnapshot(context.Background())
+			require.ErrorIs(t, err, agent.ErrAgentBusy)
+			sess.running = false
+			sess.mutating = false
+			snapshot, err := sess.ContextSnapshot(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, "rules", snapshot.System)
+		})
+	}
+}

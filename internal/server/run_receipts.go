@@ -145,7 +145,7 @@ func (s *Server) hydrateRestoredRun(run *sessionRun) error {
 	if err != nil {
 		return err
 	}
-	run.baseline = serializeRunMessages(messages)
+	run.baseline = serializeSessionContext(sess, messages)
 	return nil
 }
 

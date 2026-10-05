@@ -84,7 +84,7 @@ async function requestAt(
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(resource.endsWith("/compact") ? 300000 : 20000),
     redirect: "error",
   });
   const text = await response.text();

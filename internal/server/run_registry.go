@@ -165,7 +165,7 @@ func (s *Server) startRun(sessionID, prompt, requestID string, values ...promptI
 	if requestID == "" {
 		requestID = newRunID("request_")
 	}
-	run := &sessionRun{Inputs: inputs, ID: newRunID("run_"), RequestID: requestID, SessionID: sess.SessionID(), Prompt: prompt, State: "running", StartedAt: time.Now(), baseline: serializeRunMessages(baseline), pending: make(map[string]*pendingConfirmation), done: make(chan struct{}), cancel: cancel}
+	run := &sessionRun{Inputs: inputs, ID: newRunID("run_"), RequestID: requestID, SessionID: sess.SessionID(), Prompt: prompt, State: "running", StartedAt: time.Now(), baseline: serializeSessionContext(sess, baseline), pending: make(map[string]*pendingConfirmation), done: make(chan struct{}), cancel: cancel}
 	if err := s.saveRunReceipt(run); err != nil {
 		cancel()
 		release()
@@ -479,7 +479,7 @@ func (s *Server) runSnapshot(sessionID string, afterSeq uint64, runID string, ws
 		if err != nil {
 			return wsServerMessage{}, err
 		}
-		msg.Messages = serializeRunMessages(messages)
+		msg.Messages = serializeSessionContext(sess, messages)
 		msg.Events = []agent.AgentStreamEvent{}
 	}
 	if ws != nil {
@@ -528,7 +528,7 @@ func (s *Server) invalidateRunSnapshot(sessionID string) {
 	state.replay = nil
 	state.replayBytes = 0
 	state.seq++
-	msg := wsServerMessage{Type: "snapshot", SessionID: sessionID, Seq: state.seq, Messages: serializeRunMessages(messages), Events: []agent.AgentStreamEvent{}}
+	msg := wsServerMessage{Type: "snapshot", SessionID: sessionID, Seq: state.seq, Messages: serializeSessionContext(sess, messages), Events: []agent.AgentStreamEvent{}}
 	for subscriber := range state.subscribers {
 		_ = subscriber.writeJSON(msg)
 	}

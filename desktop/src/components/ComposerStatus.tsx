@@ -29,7 +29,7 @@ function ComposerPopover({ label, trigger, children, disabled = false, tone = ""
   </>;
 }
 
-export function ComposerStatus({ view, disabled, onError, onStart }: { view: SessionView; disabled: boolean; onError: (error: string) => void; onStart?: () => Promise<string> }) {
+export function ComposerStatus({ view, disabled, onError, onStart, onInspect }: { view: SessionView; disabled: boolean; onError: (error: string) => void; onStart?: () => Promise<string>; onInspect?: () => void }) {
   const [saving, setSaving] = useState(false);
   const profile = useStore(state => state.selectedProfile);
   const active = view.run?.state === "running" || view.run?.state === "waiting_confirmation";
@@ -78,7 +78,8 @@ export function ComposerStatus({ view, disabled, onError, onStart }: { view: Ses
     </ComposerPopover>
     <ComposerPopover label="上下文用量" status={percent === undefined ? "暂不可用" : `估算 ${percent.toFixed(1)}%`} disabled={!usage} tone={percent !== undefined && percent >= 80 ? "context-high" : ""}
       trigger={<><Icon name="activity" size={14} /><span>{percent === undefined ? "上下文" : `约 ${percent.toFixed(1)}%`}</span></>}>
-      {() => usage && <>
+      {close => usage && <>
+        {onInspect && <button type="button" className="btn context-inspect-link" onClick={() => { close(); onInspect(); }}>查看上下文与压缩记录 <Icon name="chevron-right" size={12} /></button>}
         <strong>上下文用量 <span>估算</span></strong>
         <div className="context-total">{format(usage.estimated_tokens)} <span>/ {format(usage.context_window)} tokens</span></div>
         <progress max={usage.context_window} value={usage.estimated_tokens} aria-label="估算上下文占用" />

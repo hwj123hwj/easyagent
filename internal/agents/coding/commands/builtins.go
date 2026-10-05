@@ -2,11 +2,14 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
 )
 
@@ -81,12 +84,8 @@ func RegisterBuiltins(registry *slashcmd.Registry) {
 
 			var b strings.Builder
 			b.WriteString(fmt.Sprintf("Context compacted: %d → %d messages\n", from, to))
-			b.WriteString(fmt.Sprintf("Summary (%d chars):\n", len(summary)))
-			displaySummary := summary
-			if len(displaySummary) > 500 {
-				displaySummary = displaySummary[:500] + "..."
-			}
-			b.WriteString(displaySummary)
+			b.WriteString(fmt.Sprintf("Summary (%d chars):\n", utf8.RuneCountInString(summary)))
+			b.WriteString(summary)
 			b.WriteString("\n")
 
 			return slashcmd.CommandResult{Output: b.String()}, nil
@@ -363,10 +362,20 @@ func RegisterBuiltins(registry *slashcmd.Registry) {
 
 	registry.Register(slashcmd.Command{
 		Name:        "context",
-		Description: "Show full runtime context (session, model, profile, goal, tools)",
+		Description: "Inspect current logical model input, token estimates and compaction history",
 		Handler: func(ctx slashcmd.Context, args string) (slashcmd.CommandResult, error) {
 			if ctx.Session == nil {
 				return slashcmd.CommandResult{Output: "no active session"}, nil
+			}
+			if inspector, ok := ctx.Session.(interface {
+				ContextSnapshot(context.Context) (agent.ContextSnapshot, error)
+			}); ok {
+				snapshot, err := inspector.ContextSnapshot(ctx.Ctx)
+				if err != nil {
+					return slashcmd.CommandResult{}, err
+				}
+				data, err := json.MarshalIndent(snapshot, "", "  ")
+				return slashcmd.CommandResult{Output: "Current logical model input (before provider serialization; excludes drafts/queued messages). Token counts are estimates.\n" + string(data)}, err
 			}
 			provider, modelID := ctx.Session.ModelInfo()
 			tools := ctx.Session.ToolNames()

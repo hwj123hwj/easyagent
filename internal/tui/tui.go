@@ -383,9 +383,13 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case CompactionMsg:
+		content := msg.Summary
+		if msg.Kind == "" {
+			content = fmt.Sprintf("📦 Context compacted: %s", msg.Summary)
+		}
 		m.messages = append(m.messages, ChatMessage{
 			Role:      "system",
-			Content:   fmt.Sprintf("📦 Context compacted: %s", msg.Summary),
+			Content:   content,
 			Timestamp: time.Now(),
 		})
 		m.viewport.SetMessages(m.messages)

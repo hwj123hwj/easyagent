@@ -602,3 +602,21 @@ test("resolving one concurrent approval keeps the other actionable", () => {
   assert.deepEqual(state.confirmations.map(c => c.confirmation_id), ["two"]);
   assert.equal(state.phase, "approval");
 });
+
+test("compaction cards restore from history and replay without truncating Unicode", () => {
+  const summary = "保留接口设计与未完成测试。".repeat(100);
+  const compaction = { id: "record", timestamp: Date.now(), summary, info: { trigger: "manual", messages_before: 20, messages_after: 3 } };
+  let s = reduceEnvelope(emptyProjection(), { type: "snapshot", seq: 10, messages: [{ role: "compaction", content: summary, compaction }, { role: "user", content: "recent task" }] });
+  assert.equal(s.transcript[0].kind, "compaction");
+  assert.equal(s.transcript[0].text, summary);
+  assert.equal(s.transcript[0].compaction.info.trigger, "manual");
+  s = accepted(s);
+  s = reduceEnvelope(s, { type: "event", run_id: "run", seq: 11, event: { type: "compacted", summary } });
+  s = reduceEnvelope(s, { type: "event", run_id: "run", seq: 11, event: { type: "compacted", summary } });
+  assert.equal(s.transcript.filter(item => item.kind === "compaction").length, 2);
+  s = reduceEnvelope(s, { type: "event", run_id: "run", seq: 12, event: { type: "micro_compacted", cleared_count: 12, tokens_before: 20000, tokens_after: 6000 } });
+  assert.match(s.transcript.at(-1).text, /12.*20000 → 6000.*仅本轮请求/);
+  s = reduceEnvelope(s, { type: "event", run_id: "run", seq: 13, event: { type: "compaction_failed", error: "disk unavailable" } });
+  assert.equal(s.transcript.at(-1).kind, "error");
+  assert.match(s.transcript.at(-1).text, /disk unavailable/);
+});

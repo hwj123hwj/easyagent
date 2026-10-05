@@ -322,7 +322,7 @@ func (a *Agent) maybeCompact(ctx context.Context, history []ai.Message) []ai.Mes
 	if compaction.ShouldMicroCompact(contextTokens, contextWindow, a.compactionSettings) {
 		newHistory, cleared := compaction.MicroCompact(history, a.compactionSettings.MicroKeepRecent)
 		if cleared > 0 {
-			a.emit(ctx, EventMicroCompacted{ClearedResults: cleared, TokensBefore: contextTokens})
+			a.emit(ctx, EventMicroCompacted{ClearedResults: cleared, TokensBefore: contextTokens, TokensAfter: compaction.EstimateTokens(newHistory)})
 			history = newHistory
 			contextTokens = compaction.EstimateTokens(history) // 重算：Micro 后可能降到全量阈值以下
 		}
@@ -356,16 +356,19 @@ func (a *Agent) maybeCompact(ctx context.Context, history []ai.Message) []ai.Mes
 		return history
 	}
 
+	info := compactionInfo("automatic", "", history, summary, recentPart)
 	// Persist compaction entry to session storage so it survives across prompts.
 	if a.session != nil {
-		if pErr := a.session.AppendCompaction(ctx, summary); pErr != nil {
-			slog.Warn("failed to persist compaction entry", "error", pErr)
+		if pErr := a.session.AppendCompactionKeeping(ctx, summary, recentPart, info); pErr != nil {
+			a.emit(ctx, EventCompactionFailed{Error: "persist compaction: " + pErr.Error()})
+			return history
 		}
 	}
 
 	a.emit(ctx, EventCompacted{
+		Info:        info,
 		Summary:     summary,
-		TrimmedFrom: len(historyPart),
+		TrimmedFrom: len(history),
 		TrimmedTo:   len(recentPart) + 1,
 	})
 

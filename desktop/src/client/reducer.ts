@@ -68,6 +68,8 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
   });
   messages.forEach((message, index) => {
     const prefix = `history-${index}`;
+    if (message.role === "compaction" && message.compaction)
+      result.transcript.push({ kind: "compaction", id: "compaction-" + message.compaction.id, text: message.compaction.summary, compaction: message.compaction });
     if (message.role === "user" && message.content)
       result.transcript.push({
         kind: "user",
@@ -125,6 +127,19 @@ function eventProjection(
     return { ...state, contextUsage: event.context_usage };
   const transcript = state.transcript.map(item => item.kind === "thought" && item.active && event.type !== "thinking_delta" && event.type !== "thinking_end" ? { ...item, active: false } : item);
   const runKey = state.run?.run_id || "stream";
+  if (event.type === "compacted") {
+    transcript.push({ kind: "compaction", id: `${runKey}-${key}-compaction`, text: String(event.summary || ""), compaction: event.compaction_info ? { id: `${runKey}-${key}`, timestamp: event.timestamp || Date.now(), summary: String(event.summary || ""), info: event.compaction_info } : undefined });
+    return { ...state, transcript };
+  }
+  if (event.type === "micro_compacted") {
+    transcript.push({ kind: "system", id: `${runKey}-${key}-micro`, text: `微压缩：清理 ${event.cleared_count || 0} 个旧工具输出，消息估算 ${event.tokens_before || 0} → ${event.tokens_after || 0} tokens（仅本轮请求）` });
+    return { ...state, transcript };
+  }
+  if (event.type === "compaction_failed") {
+    transcript.push({ kind: "error", id: `${runKey}-${key}-compaction-failed`, text: `上下文压缩失败，继续使用原上下文：${event.error || "未知错误"}` });
+    return { ...state, transcript };
+  }
+
   if (event.type === "text_delta" && event.text_delta) {
     const last = transcript.at(-1);
     if (last?.kind === "assistant")

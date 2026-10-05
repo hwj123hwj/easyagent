@@ -3,6 +3,7 @@ package compaction
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
 )
@@ -65,6 +66,9 @@ func Compact(ctx context.Context, history []ai.Message, recent []ai.Message, cus
 	summary, err := summarize(ctx, history, recent, customInstructions)
 	if err != nil {
 		return "", fmt.Errorf("compaction summarize failed: %w", err)
+	}
+	if strings.TrimSpace(summary) == "" {
+		return "", fmt.Errorf("compaction summarizer returned an empty summary")
 	}
 	return summary, nil
 }
