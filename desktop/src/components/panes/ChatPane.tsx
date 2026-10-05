@@ -609,42 +609,43 @@ const Message = memo(function Message({
   if (item.kind === "user")
     return (
       <div className="personal-user">
-        <div>{item.text}</div>
-        {!!item.images?.length && (
-          <div className="user-message-images">
-            {item.images.map((img) => (
-              <AttachmentImage key={img.id} url={img.url} attachmentId={img.attachmentId} sessionId={img.sessionId || sessionId} name={img.name} className="user-message-image-thumb" />
-            ))}
+        <div className="user-message-body">
+          <div>{item.text}</div>
+          {!!item.images?.length && (
+            <div className="user-message-images">
+              {item.images.map((img) => (
+                <AttachmentImage key={img.id} url={img.url} attachmentId={img.attachmentId} sessionId={img.sessionId || sessionId} name={img.name} className="user-message-image-thumb" />
+              ))}
+            </div>
+          )}
+          <div className="user-message-actions">
+            <button
+              className="user-fork-btn"
+              title="保留至此消息，创建独立会话"
+              disabled={!item.entryId || busy || forking}
+              onClick={() => {
+                void (async () => {
+                  setForking(true); setError("");
+                  try {
+                    await forkSession(sessionId, {
+                      entryId: item.entryId,
+                    });
+                  } catch (forkError) {
+                    setError(
+                      forkError instanceof Error
+                        ? forkError.message
+                        : String(forkError),
+                    );
+                  } finally { setForking(false); }
+                })();
+              }}
+            >
+              <Icon name="git-branch" size={12} />
+              {forking ? "正在分叉…" : "从此分叉"}
+            </button>
           </div>
-        )}
-        <div className="user-message-actions">
-          <button
-            className="user-fork-btn"
-            title="保留至此消息，创建独立会话"
-            disabled={!item.entryId || busy || forking}
-            onClick={() => {
-              void (async () => {
-                setForking(true); setError("");
-                try {
-                  await forkSession(sessionId, {
-                    entryId: item.entryId,
-                  });
-                } catch (forkError) {
-                  setError(
-                    forkError instanceof Error
-                      ? forkError.message
-                      : String(forkError),
-                  );
-                } finally { setForking(false); }
-              })();
-            }}
-          >
-            <Icon name="git-branch" size={12} />
-            {forking ? "正在分叉…" : "从此分叉"}
-          </button>
+          {error && <span className="inline-error">{error}</span>}
         </div>
-        {error && <span className="inline-error">{error}</span>}
-
       </div>
     );
   return (
