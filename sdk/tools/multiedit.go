@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/operations"
@@ -14,10 +15,11 @@ import (
 // MultiEditTool performs multiple edits sequentially on the same file or across multiple files.
 // It is transactional per file: if any edit fails, all edits to that file are rolled back.
 type MultiEditTool struct {
-	pathPolicy PathPolicy
-	workspace  string
-	ops        operations.FileOperations
-	backupMgr  *BackupManager
+	pathPolicy  PathPolicy
+	workspace   string
+	ops         operations.FileOperations
+	backupMgr   *BackupManager
+	readTracker *ReadTracker
 }
 
 // MultiEditSingleEntry represents one edit operation within a multi-edit call.
@@ -34,6 +36,11 @@ type MultiEditParams struct {
 }
 
 type MultiEditOption func(*MultiEditTool)
+
+// WithMultiEditReadTracker sets the ReadTracker for stale-read detection.
+func WithMultiEditReadTracker(tracker *ReadTracker) MultiEditOption {
+	return func(t *MultiEditTool) { t.readTracker = tracker }
+}
 
 // WithMultiEditPathPolicy explicitly controls access outside the workspace.
 func WithMultiEditPathPolicy(policy PathPolicy) MultiEditOption {
@@ -195,6 +202,18 @@ func (t *MultiEditTool) applyEditsToFile(ctx context.Context, filePath string, e
 	}
 	originalContent := string(data)
 
+	// Check stale read if file was previously read
+	if t.readTracker != nil {
+		var modTime time.Time
+		if stat, statErr := t.ops.Stat(ctx, filePath); statErr == nil {
+			modTime = stat.ModTime
+		}
+		if isStale, recordedHash, currentHash := t.readTracker.CheckStale(filePath, data, modTime); isStale {
+			return "", 0, fmt.Errorf("file %s was modified externally since last read (recorded hash: %.8s..., current hash: %.8s...); re-read the file before editing",
+				filePath, recordedHash, currentHash)
+		}
+	}
+
 	// Take snapshot for backup
 	if t.backupMgr != nil {
 		if _, err := t.backupMgr.Snapshot(filePath); err != nil {
@@ -239,6 +258,10 @@ func (t *MultiEditTool) applyEditsToFile(ctx context.Context, filePath string, e
 			slog.Error("multiedit: rollback failed", "path", filePath, "error", rbErr)
 		}
 		return "", 0, fmt.Errorf("write file: %w", err)
+	}
+
+	if t.readTracker != nil {
+		t.readTracker.Invalidate(filePath)
 	}
 
 	return fmt.Sprintf("edited %s (%d edits applied)", filePath, applied), applied, nil

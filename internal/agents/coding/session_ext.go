@@ -8,23 +8,34 @@ import (
 
 	"github.com/hwj123hwj/easyagent/internal/agents/coding/profile"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
+	basetools "github.com/hwj123hwj/easyagent/sdk/tools"
 )
 
 // CodingSessionExt implements runtime.SessionExt for the coding-agent.
-// It holds per-session application state (profile, goal).
+// It holds per-session application state (profile, goal, readTracker).
 type CodingSessionExt struct {
-	mu      sync.RWMutex
-	profile string
-	goal    string
-	rebuild func() error
+	mu          sync.RWMutex
+	profile     string
+	goal        string
+	rebuild     func() error
+	readTracker *basetools.ReadTracker
 }
 
 // NewCodingSessionExt creates a new CodingSessionExt with default profile "coding".
 func NewCodingSessionExt(rebuild func() error) *CodingSessionExt {
 	return &CodingSessionExt{
-		profile: string(profile.ProfileCoding),
-		rebuild: rebuild,
+		profile:     string(profile.ProfileCoding),
+		rebuild:     rebuild,
+		readTracker: basetools.NewReadTracker(),
 	}
+}
+
+// ReadTracker returns the per-session ReadTracker.
+func (e *CodingSessionExt) ReadTracker() *basetools.ReadTracker {
+	if e == nil {
+		return nil
+	}
+	return e.readTracker
 }
 
 // SetRebuild sets the rebuild callback. Called by AgentSession after creation

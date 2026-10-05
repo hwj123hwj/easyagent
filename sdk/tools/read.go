@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/operations"
@@ -16,6 +17,7 @@ type ReadTool struct {
 	workspace    string // 工作目录，用于解析相对路径
 	maxOutputLen int    // 最大输出长度，0 表示使用 DefaultMaxOutputLen
 	ops          operations.FileOperations
+	readTracker  *ReadTracker
 }
 
 type ReadParams struct {
@@ -26,6 +28,11 @@ type ReadParams struct {
 
 // ReadToolOption configures a ReadTool during construction.
 type ReadToolOption func(*ReadTool)
+
+// WithReadTracker sets the ReadTracker to record read files.
+func WithReadTracker(tracker *ReadTracker) ReadToolOption {
+	return func(t *ReadTool) { t.readTracker = tracker }
+}
 
 // WithReadPathPolicy explicitly controls access outside the workspace.
 func WithReadPathPolicy(policy PathPolicy) ReadToolOption {
@@ -103,6 +110,14 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, onUpdate fu
 	data, err := t.ops.ReadFile(ctx, cleanPath)
 	if err != nil {
 		return agent.ToolResult{IsError: true}, err
+	}
+
+	if t.readTracker != nil {
+		var modTime time.Time
+		if stat, statErr := t.ops.Stat(ctx, cleanPath); statErr == nil {
+			modTime = stat.ModTime
+		}
+		t.readTracker.Record(cleanPath, data, modTime)
 	}
 
 	lines := strings.Split(string(data), "\n")

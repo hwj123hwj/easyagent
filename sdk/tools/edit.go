@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/operations"
@@ -27,6 +29,7 @@ type EditTool struct {
 	ops           operations.FileOperations
 	mutationQueue MutationQueue  // 可选：per-file 串行化
 	backupMgr     *BackupManager // 可选：操作前自动快照
+	readTracker   *ReadTracker   // 可选：检测读后外部修改保护
 }
 
 type EditParams struct {
@@ -45,6 +48,11 @@ type EditEntry struct {
 
 // EditToolOption configures an EditTool during construction.
 type EditToolOption func(*EditTool)
+
+// WithEditReadTracker sets the ReadTracker for stale-read detection.
+func WithEditReadTracker(tracker *ReadTracker) EditToolOption {
+	return func(t *EditTool) { t.readTracker = tracker }
+}
 
 // WithEditPathPolicy explicitly controls access outside the workspace.
 func WithEditPathPolicy(policy PathPolicy) EditToolOption {
@@ -211,6 +219,22 @@ func (t *EditTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate 
 
 	content := string(data)
 
+	// Check stale read if readTracker is set
+	if t.readTracker != nil {
+		var modTime time.Time
+		if stat, statErr := t.ops.Stat(ctx, cleanPath); statErr == nil {
+			modTime = stat.ModTime
+		}
+		if isStale, recordedHash, currentHash := t.readTracker.CheckStale(cleanPath, data, modTime); isStale {
+			errMsg := fmt.Sprintf("file %s was modified externally since last read (recorded hash: %.8s..., current hash: %.8s...); re-read the file before editing",
+				cleanPath, recordedHash, currentHash)
+			return agent.ToolResult{
+				IsError: true,
+				Content: errMsg,
+			}, fmt.Errorf("%s", errMsg)
+		}
+	}
+
 	// 批量编辑模式
 	if len(params.Edits) > 0 {
 		newContent, err := applyEdits(content, params.Edits)
@@ -220,26 +244,44 @@ func (t *EditTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate 
 		if err := t.ops.WriteFile(ctx, cleanPath, []byte(newContent), 0o644); err != nil {
 			return agent.ToolResult{IsError: true}, err
 		}
+		if t.readTracker != nil {
+			t.readTracker.Invalidate(cleanPath)
+		}
 		return agent.ToolResult{
 			Content: fmt.Sprintf("edited %s (%d edits applied)", cleanPath, len(params.Edits)),
 		}, nil
 	}
 
-	// Check old_string exists
-	if !strings.Contains(content, params.OldString) {
+	matchIdx, count := resolveOldStringMatch(content, params.OldString)
+	if matchIdx < 0 {
+		diagnostic := buildNotFoundDiagnostic(content, params.OldString)
 		return agent.ToolResult{
 			IsError: true,
-			Content: fmt.Sprintf("old_string not found in %s", cleanPath),
-		}, fmt.Errorf("old_string not found in %s", cleanPath)
+			Content: fmt.Sprintf("%s in %s", diagnostic, cleanPath),
+		}, fmt.Errorf("%s in %s", diagnostic, cleanPath)
 	}
 
-	count := strings.Count(content, params.OldString)
+	matchedOldString := params.OldString
+	if !strings.Contains(content, params.OldString) {
+		// Use the matched substring (e.g. trimmed or stripped line numbers)
+		if strings.Contains(content, strings.Trim(params.OldString, "\r\n")) {
+			matchedOldString = strings.Trim(params.OldString, "\r\n")
+		} else if strings.Contains(content, stripLineNumbers(params.OldString)) {
+			matchedOldString = stripLineNumbers(params.OldString)
+		} else {
+			// normalized line endings
+			matchedOldString = strings.ReplaceAll(params.OldString, "\r\n", "\n")
+		}
+	}
 
 	if params.ReplaceAll {
 		// Replace all occurrences
-		newContent := strings.ReplaceAll(content, params.OldString, params.NewString)
+		newContent := strings.ReplaceAll(content, matchedOldString, params.NewString)
 		if err := t.ops.WriteFile(ctx, cleanPath, []byte(newContent), 0o644); err != nil {
 			return agent.ToolResult{IsError: true}, err
+		}
+		if t.readTracker != nil {
+			t.readTracker.Invalidate(cleanPath)
 		}
 
 		return agent.ToolResult{
@@ -255,15 +297,18 @@ func (t *EditTool) doExecute(ctx context.Context, raw json.RawMessage, onUpdate 
 		}, fmt.Errorf("old_string is not unique (found %d occurrences) in %s", count, cleanPath)
 	}
 
-	newContent := strings.Replace(content, params.OldString, params.NewString, 1)
+	newContent := strings.Replace(content, matchedOldString, params.NewString, 1)
 	if err := t.ops.WriteFile(ctx, cleanPath, []byte(newContent), 0o644); err != nil {
 		return agent.ToolResult{IsError: true}, err
 	}
+	if t.readTracker != nil {
+		t.readTracker.Invalidate(cleanPath)
+	}
 
 	// Show diff context
-	oldLines := strings.Count(params.OldString, "\n") + 1
+	oldLines := strings.Count(matchedOldString, "\n") + 1
 	newLines := strings.Count(params.NewString, "\n") + 1
-	before := content[:strings.Index(content, params.OldString)]
+	before := content[:strings.Index(content, matchedOldString)]
 	startLine := strings.Count(before, "\n") + 1
 	endLine := startLine + oldLines - 1
 
@@ -327,11 +372,10 @@ func applyEdits(content string, edits []EditEntry) (string, error) {
 
 	// 1. 校验所有 old_string 存在且唯一
 	for i, e := range edits {
-		idx := strings.Index(content, e.OldString)
+		idx, count := resolveOldStringMatch(content, e.OldString)
 		if idx < 0 {
-			return "", fmt.Errorf("edits[%d]: old_string not found in file", i)
+			return "", fmt.Errorf("edits[%d]: %s", i, buildNotFoundDiagnostic(content, e.OldString))
 		}
-		count := strings.Count(content, e.OldString)
 		if count > 1 {
 			return "", fmt.Errorf("edits[%d]: old_string appears %d times (must be unique)", i, count)
 		}
@@ -354,4 +398,114 @@ func applyEdits(content string, edits []EditEntry) (string, error) {
 		result = result[:m.start] + edits[m.index].NewString + result[m.end:]
 	}
 	return result, nil
+}
+
+var lineNumPrefixRe = regexp.MustCompile(`(?m)^\s*\d+[\t:|\s]\s*`)
+
+// stripLineNumbers removes leading line numbers like "  12 | " or "12\t" that LLMs sometimes copy from tool output.
+func stripLineNumbers(s string) string {
+	if !lineNumPrefixRe.MatchString(s) {
+		return s
+	}
+	return lineNumPrefixRe.ReplaceAllString(s, "")
+}
+
+// resolveOldStringMatch performs exact matching first, followed by safe fallbacks
+// (trimming extra newline/spaces, stripping accidental line numbers, CRLF/LF normalization).
+// It returns the match index and count in content.
+// Crucially, it adheres to the safety invariant: ambiguous matches (count > 1) are never guessed.
+func resolveOldStringMatch(content, target string) (matchIndex int, matchCount int) {
+	if target == "" {
+		return -1, 0
+	}
+
+	// 1. Exact match
+	if strings.Contains(content, target) {
+		return strings.Index(content, target), strings.Count(content, target)
+	}
+
+	// 2. Normalizing CRLF vs LF
+	normalizedContent := strings.ReplaceAll(content, "\r\n", "\n")
+	normalizedTarget := strings.ReplaceAll(target, "\r\n", "\n")
+	if normalizedContent != content || normalizedTarget != target {
+		if strings.Contains(content, normalizedTarget) {
+			return strings.Index(content, normalizedTarget), strings.Count(content, normalizedTarget)
+		}
+	}
+
+	// 3. Trim leading/trailing newlines
+	trimmedTarget := strings.Trim(target, "\r\n")
+	if trimmedTarget != "" && trimmedTarget != target {
+		if strings.Contains(content, trimmedTarget) {
+			count := strings.Count(content, trimmedTarget)
+			return strings.Index(content, trimmedTarget), count
+		}
+	}
+
+	// 4. Strip line numbers accidentally copied from read tool
+	strippedTarget := stripLineNumbers(target)
+	if strippedTarget != "" && strippedTarget != target {
+		if strings.Contains(content, strippedTarget) {
+			count := strings.Count(content, strippedTarget)
+			return strings.Index(content, strippedTarget), count
+		}
+	}
+
+	return -1, 0
+}
+
+// buildNotFoundDiagnostic generates an informative diagnostic message when old_string is not found.
+func buildNotFoundDiagnostic(content, oldString string) string {
+	var b strings.Builder
+	b.WriteString("old_string not found in file")
+
+	// Check if stripping line numbers or trimming would match
+	stripped := stripLineNumbers(oldString)
+	trimmed := strings.Trim(oldString, "\r\n")
+	if (stripped != oldString && strings.Contains(content, stripped)) ||
+		(trimmed != oldString && strings.Contains(content, trimmed)) {
+		b.WriteString(" (hint: old_string may contain extraneous line numbers or leading/trailing newlines)")
+		return b.String()
+	}
+
+	// Find the closest line in content to oldString's first non-empty line
+	lines := strings.Split(content, "\n")
+	oldLines := strings.Split(strings.TrimSpace(oldString), "\n")
+	if len(oldLines) > 0 && len(lines) > 0 {
+		firstOldLine := strings.TrimSpace(oldLines[0])
+		if len(firstOldLine) > 0 {
+			firstWords := strings.Fields(firstOldLine)
+			var candidateLines []string
+			for idx, line := range lines {
+				trimmedLine := strings.TrimSpace(line)
+				if trimmedLine == "" {
+					continue
+				}
+				matched := false
+				if trimmedLine == firstOldLine || strings.Contains(trimmedLine, firstOldLine) || strings.Contains(firstOldLine, trimmedLine) {
+					matched = true
+				} else if len(firstWords) > 0 {
+					// Check if any significant word/prefix matches
+					for _, w := range firstWords {
+						if len(w) >= 3 && strings.Contains(trimmedLine, w) {
+							matched = true
+							break
+						}
+					}
+				}
+
+				if matched {
+					candidateLines = append(candidateLines, fmt.Sprintf("line %d: %s", idx+1, strings.TrimSpace(line)))
+					if len(candidateLines) >= 3 {
+						break
+					}
+				}
+			}
+			if len(candidateLines) > 0 {
+				b.WriteString(fmt.Sprintf(". Nearest line match:\n  %s", strings.Join(candidateLines, "\n  ")))
+			}
+		}
+	}
+
+	return b.String()
 }
