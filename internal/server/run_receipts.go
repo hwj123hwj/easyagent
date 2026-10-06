@@ -143,7 +143,7 @@ func (s *Server) hydrateRestoredRun(run *sessionRun) error {
 	if err != nil {
 		return err
 	}
-	messages, err := sess.Session().BuildContext(s.ctx)
+	messages, err := sess.Session().BuildDisplayContext(s.ctx)
 	if err != nil {
 		return err
 	}

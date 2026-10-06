@@ -145,7 +145,7 @@ func (s *Server) startRun(sessionID, prompt, requestID string, values ...promptI
 		release()
 		return nil, false, &runAdmissionError{"busy", "此会话正在处理另一入口的请求"}
 	}
-	baseline, err := sess.Session().BuildContext(ctx)
+	baseline, err := sess.Session().BuildDisplayContext(ctx)
 	message, inputErr := s.buildPromptMessage(sess, prompt, inputs)
 	if inputErr != nil {
 		cancel()
@@ -505,7 +505,7 @@ func (s *Server) runSnapshot(sessionID string, afterSeq uint64, runID string, ws
 		if err != nil {
 			return wsServerMessage{}, err
 		}
-		messages, err := sess.Session().BuildContext(s.ctx)
+		messages, err := sess.Session().BuildDisplayContext(s.ctx)
 		if err != nil {
 			return wsServerMessage{}, err
 		}
@@ -550,7 +550,7 @@ func (s *Server) invalidateRunSnapshot(sessionID string) {
 	if err != nil {
 		return
 	}
-	messages, err := sess.Session().BuildContext(s.ctx)
+	messages, err := sess.Session().BuildDisplayContext(s.ctx)
 	if err != nil {
 		return
 	}
