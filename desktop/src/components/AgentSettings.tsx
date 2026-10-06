@@ -1,3 +1,4 @@
+import { UsageSettings } from "./UsageSettings";
 import { useEffect, useRef, useState } from "react";
 import { apiRequest, useStore, type SettingsTab } from "../store";
 import { Icon } from "./Icon";
@@ -36,6 +37,12 @@ const settingGroups: Array<{
         label: "模型连接",
         icon: "cpu",
         description: "连接模型服务，选择默认模型。",
+      },
+      {
+        id: "usage",
+        label: "用量统计",
+        icon: "sparkle",
+        description: "查看近 30 天 Token 消耗与各会话用量排行。",
       },
     ],
   },
@@ -398,6 +405,8 @@ export function AgentSettings() {
                 ))}
               </div>
             </section>
+          ) : tab === "usage" ? (
+            <UsageSettings />
           ) : tab === "capabilities" ? (
             <CapabilitySettings />
           ) : tab === "feishu" ? (

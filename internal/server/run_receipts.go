@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +22,7 @@ import (
 type runReceipt struct {
 	UserEntryID      string              `json:"user_entry_id,omitempty"`
 	AssistantEntryID string              `json:"assistant_entry_id,omitempty"`
+	Usage            ai.Usage            `json:"usage,omitempty"` // cumulative tokens across all turns
 	Inputs           promptInputs        `json:"inputs,omitempty"`
 	RunID            string              `json:"run_id"`
 	RequestID        string              `json:"request_id"`
@@ -38,7 +41,7 @@ func (s *Server) receiptPath(requestID string) string {
 }
 
 func (s *Server) saveRunReceipt(run *sessionRun) error {
-	data, err := json.Marshal(runReceipt{UserEntryID: run.UserEntryID, AssistantEntryID: run.AssistantEntryID, Inputs: run.Inputs, RunID: run.ID, RequestID: run.RequestID, SessionID: run.SessionID, Prompt: run.Prompt, State: run.State, StartedAt: run.StartedAt, EndedAt: run.EndedAt, Error: run.Error, Result: run.last})
+	data, err := json.Marshal(runReceipt{UserEntryID: run.UserEntryID, AssistantEntryID: run.AssistantEntryID, Usage: run.Usage, Inputs: run.Inputs, RunID: run.ID, RequestID: run.RequestID, SessionID: run.SessionID, Prompt: run.Prompt, State: run.State, StartedAt: run.StartedAt, EndedAt: run.EndedAt, Error: run.Error, Result: run.last})
 	if err != nil {
 		return err
 	}
@@ -124,7 +127,7 @@ func validRunReceipt(receipt runReceipt) bool {
 }
 
 func restoreReceipt(receipt runReceipt) *sessionRun {
-	run := &sessionRun{UserEntryID: receipt.UserEntryID, AssistantEntryID: receipt.AssistantEntryID, Inputs: receipt.Inputs, ID: receipt.RunID, RequestID: receipt.RequestID, SessionID: receipt.SessionID, Prompt: receipt.Prompt, State: receipt.State, StartedAt: receipt.StartedAt, EndedAt: receipt.EndedAt, Error: receipt.Error, last: receipt.Result, restored: true, done: make(chan struct{}), pending: map[string]*pendingConfirmation{}}
+	run := &sessionRun{UserEntryID: receipt.UserEntryID, AssistantEntryID: receipt.AssistantEntryID, Usage: receipt.Usage, Inputs: receipt.Inputs, ID: receipt.RunID, RequestID: receipt.RequestID, SessionID: receipt.SessionID, Prompt: receipt.Prompt, State: receipt.State, StartedAt: receipt.StartedAt, EndedAt: receipt.EndedAt, Error: receipt.Error, last: receipt.Result, restored: true, done: make(chan struct{}), pending: map[string]*pendingConfirmation{}}
 	if runActive(run) {
 		run.State, run.Error = "interrupted", "服务重启导致任务中断；已接受的消息不会自动重复执行，请检查历史后决定是否重新发送"
 		ended := time.Now()
@@ -180,4 +183,117 @@ func (s *Server) loadRunReceiptLocked(requestID string) (*sessionRun, error) {
 		state.run = run
 	}
 	return run, nil
+}
+
+// ─── GET /usage/summary ─────────────────────────────────────────────────
+
+// usageBucket aggregates token usage for one session (or the grand total).
+type usageBucket struct {
+	SessionID         string     `json:"session_id,omitempty"` // "" in the totals bucket
+	RunCount          int        `json:"run_count"`
+	InputTokens       int        `json:"input_tokens"`
+	OutputTokens      int        `json:"output_tokens"`
+	CachedInputTokens *int       `json:"cached_input_tokens,omitempty"`
+	LastUsedAt        *time.Time `json:"last_used_at,omitempty"`
+}
+
+// usageSummaryResponse is the payload of GET /usage/summary.
+type usageSummaryResponse struct {
+	Since    time.Time     `json:"since"`
+	Until    time.Time     `json:"until"`
+	Total    usageBucket   `json:"total"`
+	Sessions []usageBucket `json:"sessions"`
+}
+
+// usageSummary aggregates token usage from run receipts in [since, until).
+// Receipts are the source of truth: they persist across restarts and cover
+// every accepted prompt, unlike in-memory runs which vanish on shutdown.
+func (s *Server) usageSummary(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	since := now.AddDate(0, 0, -30)
+	until := now
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			since = parsed
+		}
+	}
+	if raw := r.URL.Query().Get("until"); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			until = parsed
+		}
+	}
+
+	total := usageBucket{}
+	perSession := map[string]*usageBucket{}
+
+	forEachRunReceipt(r.Context(), s.app.Config().DataDir, func(receipt runReceipt) bool {
+		started := receipt.StartedAt
+		if started.Before(since) || !started.Before(until) {
+			return true // keep scanning
+		}
+		bucket := perSession[receipt.SessionID]
+		if bucket == nil {
+			bucket = &usageBucket{SessionID: receipt.SessionID}
+			perSession[receipt.SessionID] = bucket
+		}
+		for _, bucket := range []*usageBucket{bucket, &total} {
+			bucket.RunCount++
+			bucket.InputTokens += receipt.Usage.InputTokens
+			bucket.OutputTokens += receipt.Usage.OutputTokens
+			if receipt.Usage.CachedInputTokens != nil {
+				if bucket.CachedInputTokens == nil {
+					cached := *receipt.Usage.CachedInputTokens
+					bucket.CachedInputTokens = &cached
+				} else {
+					*bucket.CachedInputTokens += *receipt.Usage.CachedInputTokens
+				}
+			}
+			if bucket.LastUsedAt == nil || started.After(*bucket.LastUsedAt) {
+				stamp := started
+				bucket.LastUsedAt = &stamp
+			}
+		}
+		return true
+	})
+
+	sessions := make([]usageBucket, 0, len(perSession))
+	for _, bucket := range perSession {
+		sessions = append(sessions, *bucket)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].InputTokens+sessions[i].OutputTokens > sessions[j].InputTokens+sessions[j].OutputTokens
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(usageSummaryResponse{Since: since, Until: until, Total: total, Sessions: sessions})
+}
+
+// forEachRunReceipt streams every persisted run receipt, skipping unreadable
+// files. cancel-return stops the scan early.
+func forEachRunReceipt(ctx context.Context, dataDir string, visit func(runReceipt) bool) {
+	entries, err := os.ReadDir(filepath.Join(dataDir, "requests"))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dataDir, "requests", entry.Name()))
+		if err != nil {
+			continue
+		}
+		var receipt runReceipt
+		if json.Unmarshal(data, &receipt) != nil || !validRunReceipt(receipt) {
+			continue
+		}
+		if !visit(receipt) {
+			return
+		}
+	}
 }

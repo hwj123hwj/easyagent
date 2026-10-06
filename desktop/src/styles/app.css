@@ -6143,3 +6143,21 @@ body.resizing .resizer {
     --sidebar-w: 220px !important;
   }
 }
+
+.unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  margin-left: auto;
+  margin-right: 4px;
+  flex-shrink: 0;
+}

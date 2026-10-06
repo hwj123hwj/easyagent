@@ -41,6 +41,9 @@ contextBridge.exposeInMainWorld("piAPI", {
   uploadAudio: (data: string, mimeType: string, filename: string) =>
     call("upload-audio", data, mimeType, filename),
   copyText: (text: string) => call("copy-text", text),
+  notifyRunDone: (payload: { sessionTitle?: string; ok: boolean }) =>
+    call("notify-run-done", payload),
+  setBadge: (count: number) => call("set-badge", count),
   loginMCP: (name: string, workspace: string) =>
     call("mcp-login", name, workspace),
 });
