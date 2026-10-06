@@ -156,6 +156,9 @@ func TestFeishuSettingsLingerUsesServiceUser(t *testing.T) {
 }
 
 func TestFeishuSettingsLocalAndQR(t *testing.T) {
+	t.Setenv("EA_HOME", t.TempDir())
+	t.Setenv("EA_FEISHU_ENV_FILE", "")
+	t.Setenv("FEISHU_OWNER_STATE_FILE", "")
 	s := &Server{apiKey: "test-key"}
 	mux := http.NewServeMux()
 	s.registerFeishuSettings(mux)

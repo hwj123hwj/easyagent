@@ -169,7 +169,11 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 		if f.envFile == "" || f.ownerFile == "" {
 			if r.Method == "GET" && r.URL.Path == "/settings/feishu" {
 				// Even if systemd is not managing the bridge, expose saved local credentials if present
-				creds, _ := feishu.LoadCredentials()
+				creds, err := feishu.LoadCredentials()
+				if err != nil {
+					http.Error(w, `{"error":"无法读取飞书凭据"}`, 500)
+					return
+				}
 				appID := ""
 				secretConfigured := false
 				if creds != nil {
@@ -239,80 +243,5 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /settings/feishu", handler)
 	mux.HandleFunc("GET /settings/feishu/pairing", handler)
 
-	// QR login routes
-	mux.HandleFunc("POST /settings/feishu/qr/begin", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Type", "application/json")
-		if s.apiKey != "" && bearerToken(r) != s.apiKey {
-			http.Error(w, `{"error":"未授权"}`, http.StatusUnauthorized)
-			return
-		}
-		if err := feishu.InitRegistration("feishu"); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": "初始化飞书二维码服务失败: " + err.Error()})
-			return
-		}
-		begin, err := feishu.BeginRegistration("feishu")
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": "生成飞书二维码失败: " + err.Error()})
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"device_code": begin.DeviceCode,
-			"qr_url":      begin.QRURL,
-			"user_code":   begin.UserCode,
-			"interval":    begin.Interval,
-			"expire_in":   begin.ExpireIn,
-		})
-	})
-
-	mux.HandleFunc("POST /settings/feishu/qr/poll", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Type", "application/json")
-		if s.apiKey != "" && bearerToken(r) != s.apiKey {
-			http.Error(w, `{"error":"未授权"}`, http.StatusUnauthorized)
-			return
-		}
-		var req struct {
-			DeviceCode string `json:"device_code"`
-			Interval   int    `json:"interval"`
-			ExpireIn   int    `json:"expire_in"`
-		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil {
-			http.Error(w, `{"error":"请求格式无效"}`, http.StatusBadRequest)
-			return
-		}
-		if req.Interval <= 0 {
-			req.Interval = 3
-		}
-		if req.ExpireIn <= 0 {
-			req.ExpireIn = 120
-		}
-		poll, err := feishu.PollRegistration(req.DeviceCode, req.Interval, req.ExpireIn, "feishu", nil)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-			return
-		}
-		botName, botOpenID, _ := feishu.ProbeCredentials(poll.AppID, poll.AppSecret, poll.Domain)
-		creds := feishu.Credentials{
-			AppID:      poll.AppID,
-			AppSecret:  poll.AppSecret,
-			UserOpenID: poll.OpenID,
-			BotName:    botName,
-			BotOpenID:  botOpenID,
-			Platform:   poll.Domain,
-		}
-		if err := feishu.SaveCredentials(creds); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]any{"error": "保存飞书凭据失败: " + err.Error()})
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"success":  true,
-			"app_id":   poll.AppID,
-			"bot_name": botName,
-		})
-	})
+	registerFeishuQR(mux, s.apiKey, f.envFile != "" || f.ownerFile != "")
 }

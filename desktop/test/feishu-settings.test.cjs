@@ -295,3 +295,54 @@ test("service labels describe process and autostart state without claiming WebSo
   assert.equal(autostartLabel("enabled-runtime"), "仅本次运行启用");
   assert.equal(autostartLabel(undefined), "状态未知");
 });
+
+const qr = { device_code: "issued", qr_url: "https://open.feishu.cn/page/launcher?user_code=qa", interval: 3, expire_in: 60 };
+test("cancelled or disconnected QR polls cannot save credentials or publish late results", async () => {
+  for (const cancel of ["hideQR", "dispose", "activate"]) {
+    const pending = deferred(), calls = [];
+    const controller = new FeishuSettingsController(async (_, path) => {
+      calls.push(path);
+      if (path.endsWith("/begin")) return qr;
+      if (path.endsWith("/poll")) return pending.promise;
+      return { managed: false, local_mode: true };
+    }, async () => {});
+    controller.activate(true); await controller.refresh(); await controller.startQR();
+    controller[cancel](true);
+    pending.resolve({ authorized: true });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(controller.getSnapshot().qr, null);
+    assert.equal(controller.getSnapshot().qrAuthorized, false);
+    assert.equal(calls.some(path => path.endsWith("/confirm")), false);
+  }
+});
+
+test("QR authorization requires explicit confirmation and never claims the bridge is running", async () => {
+  const calls = [];
+  const controller = new FeishuSettingsController(async (_, path) => {
+    calls.push(path);
+    if (path.endsWith("/begin")) return qr;
+    if (path.endsWith("/poll")) return { authorized: true };
+    if (path.endsWith("/confirm")) return { success: true };
+    return { managed: false, local_mode: true };
+  }, async () => {});
+  controller.activate(true); await controller.refresh(); await controller.startQR();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(controller.getSnapshot().qrAuthorized, true);
+  assert.equal(calls.some(path => path.endsWith("/confirm")), false);
+  await controller.confirmQR();
+  assert.equal(calls.filter(path => path.endsWith("/confirm")).length, 1);
+  assert.equal(controller.getSnapshot().qr, null);
+  assert.match(controller.getSnapshot().notice, /另行启动或重启/);
+});
+
+test("superseded begin response and malicious authorization URLs are rejected", async () => {
+  const pending = deferred();
+  const controller = new FeishuSettingsController(async () => pending.promise, async () => {});
+  controller.activate(true);
+  const begin = controller.startQR(); controller.hideQR(); pending.resolve(qr); await begin;
+  assert.equal(controller.getSnapshot().qr, null);
+  const invalid = new FeishuSettingsController(async () => ({ ...qr, qr_url: "https://attacker.test" }), async () => {});
+  invalid.activate(true); await invalid.startQR();
+  assert.equal(invalid.getSnapshot().qr, null);
+  assert.match(invalid.getSnapshot().error, /无效/);
+});

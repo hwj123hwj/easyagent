@@ -4,6 +4,7 @@ import { copyText } from "../client/clipboard";
 import {
   autostartLabel, FeishuSettingsController, pairingIsValid, serviceStateLabel,
 } from "../client/feishu-settings";
+import { QRCodeSVG } from "qrcode.react";
 import { Icon } from "./Icon";
 
 export function FeishuSettings() {
@@ -64,9 +65,9 @@ export function FeishuSettings() {
       ) : (
         <>
           {/* 扫码绑定区域：快捷零门槛 */}
-          <section className="feishu-section" aria-labelledby="feishu-qr-title">
+          {!status.managed && <section className="feishu-section" aria-labelledby="feishu-qr-title">
             <h2 id="feishu-qr-title">快速绑定（扫码登录）</h2>
-            <p className="feishu-hint">使用移动端飞书 App 扫描二维码，即可自动创建并绑定机器人，免手动申请 App ID 与事件回调。</p>
+            <p className="feishu-hint">使用移动端飞书 App 扫描二维码，即可自动创建并绑定机器人，获取应用凭据。保存后需另行启动或重启飞书桥接。</p>
             {status.app_id && (
               <p style={{ color: "var(--color-text-secondary, #888)", fontSize: "13px" }}>
                 当前已配置机器人 App ID: <code>{status.app_id}</code>
@@ -85,7 +86,7 @@ export function FeishuSettings() {
                 </button>
               )}
               {state.qr && (
-                <button type="button" className="btn" onClick={() => controller.hideQR()}>
+                <button type="button" className="btn" disabled={state.saving} onClick={() => controller.hideQR()}>
                   取消扫码
                 </button>
               )}
@@ -93,7 +94,8 @@ export function FeishuSettings() {
 
             {state.qr && (
               <div className="feishu-pairing" style={{ marginTop: "16px" }}>
-                <p><strong>请使用飞书手机客户端扫描下方链接完成授权：</strong></p>
+                <p><strong>请使用飞书手机客户端扫描二维码完成授权：</strong></p>
+                <QRCodeSVG value={state.qr.qr_url} size={192} marginSize={4} aria-label="飞书授权二维码" />
                 <div style={{ margin: "12px 0" }}>
                   <a
                     href={state.qr.qr_url}
@@ -110,19 +112,18 @@ export function FeishuSettings() {
                   <button
                     type="button"
                     className="btn"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(state.qr!.qr_url);
-                    }}
+                    onClick={() => void controller.copyQR()}
                   >
                     复制链接
                   </button>
                 </div>
                 <p className="feishu-hint" style={{ marginTop: "8px" }}>
-                  {state.qrPolling ? "⏳ 等待扫码确认中（授权完成后将自动生效）…" : "授权就绪"}
+                  {state.qrPolling ? "等待扫码确认中…" : "授权已完成，请确认保存凭据"}
                 </p>
               </div>
             )}
-          </section>
+            {state.qrAuthorized && <button className="btn primary" disabled={state.saving} onClick={() => void controller.confirmQR()}>{state.saving ? "正在保存…" : "确认保存授权凭据"}</button>}
+          </section>}
 
           {/* 远程 / Systemd 托管状态 */}
           {status.managed && (

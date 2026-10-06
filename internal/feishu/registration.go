@@ -1,6 +1,7 @@
 package feishu
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -60,12 +61,16 @@ func (e *RegistrationError) Error() string {
 
 // postRegistration sends a POST to the registration endpoint.
 func postRegistration(baseURL string, body map[string]string) (map[string]interface{}, error) {
+	return postRegistrationContext(context.Background(), baseURL, body)
+}
+
+func postRegistrationContext(ctx context.Context, baseURL string, body map[string]string) (map[string]interface{}, error) {
 	formData := url.Values{}
 	for k, v := range body {
 		formData.Set(k, v)
 	}
 
-	req, err := http.NewRequest("POST", baseURL+registrationPath, strings.NewReader(formData.Encode()))
+	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+registrationPath, strings.NewReader(formData.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -93,8 +98,12 @@ func postRegistration(baseURL string, body map[string]string) (map[string]interf
 
 // InitRegistration checks if the registration environment supports client_secret auth.
 func InitRegistration(domain string) error {
+	return InitRegistrationContext(context.Background(), domain)
+}
+
+func InitRegistrationContext(ctx context.Context, domain string) error {
 	baseURL := getAccountsURL(domain)
-	res, err := postRegistration(baseURL, map[string]string{"action": "init"})
+	res, err := postRegistrationContext(ctx, baseURL, map[string]string{"action": "init"})
 	if err != nil {
 		return fmt.Errorf("init registration: %w", err)
 	}
@@ -120,8 +129,12 @@ func InitRegistration(domain string) error {
 
 // BeginRegistration starts the device-code flow and returns a QR URL for the user to scan.
 func BeginRegistration(domain string) (*BeginResult, error) {
+	return BeginRegistrationContext(context.Background(), domain)
+}
+
+func BeginRegistrationContext(ctx context.Context, domain string) (*BeginResult, error) {
 	baseURL := getAccountsURL(domain)
-	res, err := postRegistration(baseURL, map[string]string{
+	res, err := postRegistrationContext(ctx, baseURL, map[string]string{
 		"action":            "begin",
 		"archetype":         "PersonalAgent",
 		"auth_method":       "client_secret",
@@ -344,4 +357,31 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// PollRegistrationOnce makes one bounded, cancellable request. A nil result
+// means authorization is pending; callers schedule subsequent polls themselves.
+func PollRegistrationOnce(ctx context.Context, deviceCode, domain string) (*PollResult, string, error) {
+	res, err := postRegistrationContext(ctx, getAccountsURL(domain), map[string]string{"action": "poll", "device_code": deviceCode})
+	if err != nil {
+		return nil, domain, err
+	}
+	info, _ := res["user_info"].(map[string]interface{})
+	if info["tenant_brand"] == "lark" {
+		domain = "lark"
+	}
+	id, _ := res["client_id"].(string)
+	secret, _ := res["client_secret"].(string)
+	owner, _ := info["open_id"].(string)
+	if id != "" && secret != "" {
+		if owner == "" {
+			return nil, domain, fmt.Errorf("registration returned no owner")
+		}
+		return &PollResult{AppID: id, AppSecret: secret, OpenID: owner, Domain: domain}, domain, nil
+	}
+	code, _ := res["error"].(string)
+	if code != "" && code != "authorization_pending" && code != "slow_down" {
+		return nil, domain, fmt.Errorf("registration %s", code)
+	}
+	return nil, domain, nil
 }
