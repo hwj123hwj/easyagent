@@ -1,5 +1,6 @@
 export interface FeishuStatus {
   managed: boolean;
+  local_mode?: boolean;
   app_id?: string;
   secret_configured?: boolean;
   paired?: boolean;
@@ -14,11 +15,22 @@ export interface FeishuPairing {
   expires: string;
 }
 
+export interface FeishuQR {
+  device_code: string;
+  qr_url: string;
+  user_code: string;
+  interval: number;
+  expire_in: number;
+}
+
 interface SettingsState {
   status: FeishuStatus | null;
   appId: string;
   secret: string;
   pairing: FeishuPairing | null;
+  qr: FeishuQR | null;
+  qrLoading: boolean;
+  qrPolling: boolean;
   loading: boolean;
   saving: boolean;
   pairingLoading: boolean;
@@ -31,6 +43,7 @@ interface SettingsState {
 type Request = <T>(method: string, path: string, body?: unknown) => Promise<T>;
 const emptyState = (): SettingsState => ({
   status: null, appId: "", secret: "", pairing: null,
+  qr: null, qrLoading: false, qrPolling: false,
   loading: false, saving: false, pairingLoading: false, copying: false,
   error: "", errorSource: null, notice: "",
 });
@@ -175,6 +188,58 @@ export class FeishuSettingsController {
         this.set({ error: (error as Error).message || "复制失败，请选中指令后按 Ctrl/Cmd+C", errorSource: "action" });
     } finally {
       if (this.current(epoch)) this.set({ copying: false });
+    }
+  }
+
+  hideQR() {
+    this.set({ qr: null, qrLoading: false, qrPolling: false });
+  }
+
+  async startQR() {
+    if (!this.alive || !this.connected || this.state.qrLoading || this.state.qrPolling) return;
+    const epoch = this.epoch;
+    this.set({ qr: null, qrLoading: true, error: "", errorSource: null, notice: "" });
+    try {
+      const qr = await this.request<FeishuQR>("POST", "/settings/feishu/qr/begin");
+      if (!this.current(epoch)) return;
+      this.set({ qr, qrLoading: false, qrPolling: true });
+      this.pollQR(qr, epoch);
+    } catch (error) {
+      if (this.current(epoch)) {
+        this.set({ error: (error as Error).message || "获取飞书二维码失败", errorSource: "action", qrLoading: false });
+      }
+    }
+  }
+
+  private async pollQR(qr: FeishuQR, epoch: number) {
+    try {
+      const res = await this.request<{ success: boolean; app_id: string; bot_name?: string }>(
+        "POST",
+        "/settings/feishu/qr/poll",
+        {
+          device_code: qr.device_code,
+          interval: qr.interval || 3,
+          expire_in: qr.expire_in || 120,
+        }
+      );
+      if (!this.current(epoch)) return;
+      if (res.success) {
+        this.set({
+          qr: null,
+          qrPolling: false,
+          notice: `飞书机器人授权成功！App ID: ${res.app_id}${res.bot_name ? ` (${res.bot_name})` : ""}`,
+        });
+        await this.refresh();
+      }
+    } catch (error) {
+      if (this.current(epoch)) {
+        this.set({
+          qr: null,
+          qrPolling: false,
+          error: (error as Error).message || "扫码授权超时或失败",
+          errorSource: "action",
+        });
+      }
     }
   }
 }

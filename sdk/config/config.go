@@ -293,11 +293,13 @@ func (c *Config) LoadFromEnv() {
 		c.KBEmbeddingBaseURL = v
 	}
 
-	// ASR (speech-to-text) — reuse SiliconFlow API key by default
+	// ASR (speech-to-text) — reuse SiliconFlow API key or gateway API key by default
 	if v := os.Getenv("ASR_API_KEY"); v != "" {
 		c.ASRAPIKey = v
 	} else if v := os.Getenv("SILICONFLOW_API_KEY"); v != "" {
 		c.ASRAPIKey = v // reuse SiliconFlow key
+	} else if c.OpenAIAPIKey != "" {
+		c.ASRAPIKey = c.OpenAIAPIKey // reuse gateway/OpenAI API key
 	}
 	if v := os.Getenv("ASR_MODEL"); v != "" {
 		c.ASRModel = v
@@ -306,6 +308,9 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("ASR_BASE_URL"); v != "" {
 		c.ASRBaseURL = v
+	} else if c.OpenAIBaseURL != "" && os.Getenv("ASR_API_KEY") == "" && os.Getenv("SILICONFLOW_API_KEY") == "" {
+		// When no SiliconFlow key is given and a gateway base URL is configured, route ASR to the gateway
+		c.ASRBaseURL = c.OpenAIBaseURL
 	} else {
 		c.ASRBaseURL = "https://api.siliconflow.cn"
 	}
