@@ -223,7 +223,8 @@ export type SettingsTab =
   | "models"
   | "mcp"
   | "feishu"
-  | "capabilities";
+  | "capabilities"
+  | "usage";
 
 interface StoreState {
   ready: boolean;
@@ -257,6 +258,7 @@ interface StoreState {
   sessions: Record<string, SessionView>;
   order: string[];
   activeSessionId?: string;
+  unreadSessions: Record<string, number>;
   forkNotice?: { sessionId: string; message: string };
   lang: Lang;
   setLang: (lang: Lang) => void;
@@ -486,6 +488,7 @@ export const useStore = create<StoreState>((set, get) => ({
   selectedProfile: "",
   settingsOpen: false,
   settingsTab: "general",
+  unreadSessions: {},
   drafts: {},
   draftInputs: {},
   setDraftInputs: (id, value, profileId = get().selectedProfile) => {
@@ -594,6 +597,7 @@ export const useStore = create<StoreState>((set, get) => ({
         sessions: {},
         order: [],
         activeSessionId: undefined,
+        unreadSessions: {},
         workspace: {
           ...get().workspace,
           fileTabs: [],
@@ -942,14 +946,25 @@ export const useStore = create<StoreState>((set, get) => ({
       scheduled = 0;
       const batch = queue;
       queue = [];
+      const activeId = get().activeSessionId;
+      const unreadDelta: Record<string, number> = {};
+      const finished: { id: string; ok: boolean }[] = [];
       set((s) => {
         const sessions = { ...s.sessions };
         for (const message of batch) {
           const id = message.session_id;
           if (!id || !sessions[id]) continue;
           const v = sessions[id];
+          const wasActive = isActiveRun(v.run);
           const projection = reduceEnvelope(v, message);
-          const status: SessionRunStatus = isActiveRun(projection.run)
+          const nowActive = isActiveRun(projection.run);
+          // A run reached a terminal state in this batch: count it as unread
+          // for background sessions and queue a system notification.
+          if (wasActive && !nowActive && projection.run) {
+            if (id !== activeId) unreadDelta[id] = (unreadDelta[id] || 0) + 1;
+            finished.push({ id, ok: projection.run.state === "completed" });
+          }
+          const status: SessionRunStatus = nowActive
             ? "thinking"
             : projection.phase === "error"
               ? "error"
@@ -967,6 +982,22 @@ export const useStore = create<StoreState>((set, get) => ({
         }
         return { sessions };
       });
+      // Post-settle side effects (outside the set() updater, which must stay
+      // pure): unread counters, Dock badge, and native notifications.
+      if (Object.keys(unreadDelta).length) {
+        set((s) => {
+          const unreadSessions = { ...s.unreadSessions };
+          for (const [id, count] of Object.entries(unreadDelta))
+            unreadSessions[id] = (unreadSessions[id] || 0) + count;
+          const total = Object.keys(unreadSessions).length;
+          void window.piAPI?.setBadge?.(total);
+          return { unreadSessions };
+        });
+      }
+      for (const { id, ok } of finished) {
+        const title = get().sessions[id]?.meta?.title;
+        void window.piAPI?.notifyRunDone?.({ sessionTitle: title, ok });
+      }
     };
     wsService.on("status", (value) =>
       set({
@@ -1137,12 +1168,20 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setActive: async (id) => {
     const epoch = connectionEpoch;
-    set((s) => ({
-      activeSessionId: id,
-      settingsOpen: false,
-      loadingSession: id,
-      workspace: workspaceForSession(s, s.sessions[id]?.meta.cwd),
-    }));
+    set((s) => {
+      const unreadSessions = { ...s.unreadSessions };
+      if (unreadSessions[id]) {
+        delete unreadSessions[id];
+        void window.piAPI?.setBadge?.(Object.keys(unreadSessions).length);
+      }
+      return {
+        activeSessionId: id,
+        unreadSessions,
+        settingsOpen: false,
+        loadingSession: id,
+        workspace: workspaceForSession(s, s.sessions[id]?.meta.cwd),
+      };
+    });
     try {
       const [snapshot, info] = await Promise.all([
         apiRequest<Envelope>("GET", `/sessions/${encodeURIComponent(id)}/run`),

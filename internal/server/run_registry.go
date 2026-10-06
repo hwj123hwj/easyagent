@@ -37,8 +37,9 @@ type pendingConfirmation struct {
 
 // sessionRun is owned by the session, never by a socket or HTTP request.
 type sessionRun struct {
-	UserEntryID      string `json:"user_entry_id,omitempty"`
-	AssistantEntryID string `json:"assistant_entry_id,omitempty"`
+	UserEntryID      string   `json:"user_entry_id,omitempty"`
+	AssistantEntryID string   `json:"assistant_entry_id,omitempty"`
+	Usage            ai.Usage `json:"usage,omitempty"` // cumulative tokens across all turns
 	files            *runFiles
 	DisplayPrompt    string            `json:"display_prompt,omitempty"`
 	Inputs           promptInputs      `json:"inputs,omitempty"`
@@ -293,6 +294,20 @@ func (s *Server) consumeRun(ctx context.Context, run *sessionRun, stream <-chan 
 		if state.run == run {
 			if event.Type == agent.StreamEventDone {
 				run.last = event.FinalMessage
+			}
+			if event.Type == agent.StreamEventTurnEnd {
+				// Every turn reports its own request usage; the run total is the
+				// sum across turns (tool loops issue one LLM call per turn).
+				if assistant, ok := event.Message.(ai.AssistantMessage); ok {
+					run.Usage.InputTokens += assistant.Usage.InputTokens
+					run.Usage.OutputTokens += assistant.Usage.OutputTokens
+					if assistant.Usage.CachedInputTokens != nil {
+						if run.Usage.CachedInputTokens == nil {
+							run.Usage.CachedInputTokens = new(int)
+						}
+						*run.Usage.CachedInputTokens += *assistant.Usage.CachedInputTokens
+					}
+				}
 			}
 			if event.Type == agent.StreamEventError {
 				run.Error = event.Error

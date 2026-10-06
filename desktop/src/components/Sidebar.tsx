@@ -20,6 +20,7 @@ export function Sidebar() {
   const order = useStore((s) => s.order);
   const sessions = useStore((s) => s.sessions);
   const active = useStore((s) => s.activeSessionId);
+  const unreadSessions = useStore((s) => s.unreadSessions);
   const setActive = useStore((s) => s.setActive);
   const createSession = useStore((s) => s.createSession);
   const forkSession = useStore((s) => s.forkSession);
@@ -190,6 +191,11 @@ export function Sidebar() {
               )}
               {v.meta.title}
             </span>
+            {!!unreadSessions[v.meta.id] && (
+              <span className="unread-badge" title={`${unreadSessions[v.meta.id]} 条新结果`}>
+                {unreadSessions[v.meta.id]}
+              </span>
+            )}
             {v.meta.application && (
               <span className={`session-badge ${v.meta.application}`}>
                 {v.meta.application}
