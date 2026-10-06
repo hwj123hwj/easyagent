@@ -41,6 +41,8 @@ export function ChatPane({ view }: { view: SessionView }) {
     heights = useRef(new Map<string, number>()),
     follow = useRef(true),
     jumpingToLatest = useRef(false),
+    lastScrollTop = useRef(0),
+    pendingHeightAdjustment = useRef(0),
     previous = useRef("");
   const [viewport, setViewport] = useState({ top: 0, height: 600 }),
     [version, setVersion] = useState(0),
@@ -130,7 +132,11 @@ export function ChatPane({ view }: { view: SessionView }) {
     follow.current =
       follow.current ||
       jumpingToLatest.current ||
-      el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      // Resume only after scrolling down to the actual bottom. A small first
+      // upward gesture must not re-enable following inside a proximity zone.
+      (el.scrollTop > lastScrollTop.current &&
+        el.scrollHeight - el.scrollTop - el.clientHeight <= 2);
+    lastScrollTop.current = el.scrollTop;
     setJump(!follow.current);
     setViewport({ top: el.scrollTop, height: el.clientHeight });
     positions.set(positionKey, { top: el.scrollTop, follow: follow.current });
@@ -140,12 +146,17 @@ export function ChatPane({ view }: { view: SessionView }) {
     if (!el) return;
     if (previous.current !== positionKey) {
       jumpingToLatest.current = false;
+      pendingHeightAdjustment.current = 0;
       const saved = positions.get(positionKey);
       follow.current = saved?.follow ?? true;
       el.scrollTop = saved?.top ?? el.scrollHeight;
       previous.current = positionKey;
     }
     if (follow.current) el.scrollTop = el.scrollHeight;
+    else if (pendingHeightAdjustment.current)
+      el.scrollTop += pendingHeightAdjustment.current;
+    pendingHeightAdjustment.current = 0;
+    lastScrollTop.current = el.scrollTop;
     setViewport({ top: el.scrollTop, height: el.clientHeight });
     setJump(!follow.current);
   }, [positionKey, view.transcript, offsets]);
@@ -171,12 +182,15 @@ export function ChatPane({ view }: { view: SessionView }) {
   }, []);
   const measure = useCallback(
     (id: string, height: number) => {
-      const old = heights.current.get(id);
-      if (old && Math.abs(old - height) < 1) return;
       const el = container.current;
       const i = rows.findIndex((r) => r.id === id);
-      if (el && !follow.current && i >= 0 && offsets[i] < el.scrollTop && old)
-        el.scrollTop += height - old;
+      const old = heights.current.get(id) ?? offsets[i + 1] - offsets[i];
+      if (Math.abs(old - height) < 1) return;
+      // First-mounted rows also replace estimates. Apply their correction
+      // after the new spacers commit, so scrollTop is not clamped against the
+      // previous scrollHeight and the current reading position stays put.
+      if (el && !follow.current && i >= 0 && offsets[i + 1] <= el.scrollTop)
+        pendingHeightAdjustment.current += height - old;
       heights.current.set(id, height);
       setVersion((v) => v + 1);
     },
@@ -256,20 +270,28 @@ export function ChatPane({ view }: { view: SessionView }) {
         ref={container}
         onScroll={onScroll}
         onWheel={(event) => {
-          if (event.deltaY < 0) follow.current = false;
+          if (event.deltaY < 0) {
+            follow.current = false;
+            jumpingToLatest.current = false;
+          }
         }}
         onTouchMove={() => {
           follow.current = false;
+          jumpingToLatest.current = false;
         }}
         onPointerDown={(event) => {
           const el = event.currentTarget;
           // A scrollbar drag expresses reading intent; content clicks do not.
-          if (event.clientX >= el.getBoundingClientRect().right - 18)
+          if (event.clientX >= el.getBoundingClientRect().right - 18) {
             follow.current = false;
+            jumpingToLatest.current = false;
+          }
         }}
         onKeyDown={(event) => {
-          if (["ArrowUp", "PageUp", "Home", "PageDown", "End"].includes(event.key))
+          if (["ArrowUp", "ArrowDown", "PageUp", "Home", "PageDown", "End"].includes(event.key)) {
             follow.current = false;
+            jumpingToLatest.current = false;
+          }
         }}
         tabIndex={0}
         aria-label="会话消息"
@@ -380,11 +402,11 @@ export function ChatPane({ view }: { view: SessionView }) {
               // Final virtual rows mount after the first scroll. Settle their
               // measured heights before releasing the explicit follow intent.
               requestAnimationFrame(() => {
-                if (container.current !== el || previous.current !== positionKey) return;
+                if (!jumpingToLatest.current || container.current !== el || previous.current !== positionKey) return;
                 el.scrollTop = el.scrollHeight;
                 onScroll();
                 requestAnimationFrame(() => {
-                  if (container.current !== el || previous.current !== positionKey) return;
+                  if (!jumpingToLatest.current || container.current !== el || previous.current !== positionKey) return;
                   el.scrollTop = el.scrollHeight;
                   onScroll();
                   jumpingToLatest.current = false;
@@ -419,6 +441,9 @@ function MeasuredRow({
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // Measure newly mounted history before paint instead of showing one frame
+    // with the estimated spacer replaced by an unaccounted real row height.
+    measure(row.id, el.getBoundingClientRect().height);
     const observer = new ResizeObserver(() =>
       measure(row.id, el.getBoundingClientRect().height),
     );
