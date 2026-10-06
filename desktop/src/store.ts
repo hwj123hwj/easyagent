@@ -604,6 +604,7 @@ export const useStore = create<StoreState>((set, get) => ({
           activeFileTab: undefined,
         },
       });
+      void window.piAPI?.setBadge?.(0);
       await wsService.connect(baseUrl, browserToken);
       await get().refreshModels();
       if (epoch !== connectionEpoch) return;
@@ -962,7 +963,10 @@ export const useStore = create<StoreState>((set, get) => ({
           // for background sessions and queue a system notification.
           if (wasActive && !nowActive && projection.run) {
             if (id !== activeId) unreadDelta[id] = (unreadDelta[id] || 0) + 1;
-            finished.push({ id, ok: projection.run.state === "completed" });
+            const state = projection.run.state;
+            // interrupted/cancelled are not failures: no scary notification.
+            if (state === "completed" || state === "failed")
+              finished.push({ id, ok: state === "completed" });
           }
           const status: SessionRunStatus = nowActive
             ? "thinking"
@@ -985,14 +989,15 @@ export const useStore = create<StoreState>((set, get) => ({
       // Post-settle side effects (outside the set() updater, which must stay
       // pure): unread counters, Dock badge, and native notifications.
       if (Object.keys(unreadDelta).length) {
+        let total = 0;
         set((s) => {
           const unreadSessions = { ...s.unreadSessions };
           for (const [id, count] of Object.entries(unreadDelta))
             unreadSessions[id] = (unreadSessions[id] || 0) + count;
-          const total = Object.keys(unreadSessions).length;
-          void window.piAPI?.setBadge?.(total);
+          total = Object.keys(unreadSessions).length;
           return { unreadSessions };
         });
+        void window.piAPI?.setBadge?.(total);
       }
       for (const { id, ok } of finished) {
         const title = get().sessions[id]?.meta?.title;
@@ -1168,11 +1173,12 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setActive: async (id) => {
     const epoch = connectionEpoch;
+    let badge = -1;
     set((s) => {
       const unreadSessions = { ...s.unreadSessions };
       if (unreadSessions[id]) {
         delete unreadSessions[id];
-        void window.piAPI?.setBadge?.(Object.keys(unreadSessions).length);
+        badge = Object.keys(unreadSessions).length;
       }
       return {
         activeSessionId: id,
@@ -1182,6 +1188,7 @@ export const useStore = create<StoreState>((set, get) => ({
         workspace: workspaceForSession(s, s.sessions[id]?.meta.cwd),
       };
     });
+    if (badge >= 0) void window.piAPI?.setBadge?.(badge);
     try {
       const [snapshot, info] = await Promise.all([
         apiRequest<Envelope>("GET", `/sessions/${encodeURIComponent(id)}/run`),

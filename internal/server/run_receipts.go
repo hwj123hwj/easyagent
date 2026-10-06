@@ -127,7 +127,7 @@ func validRunReceipt(receipt runReceipt) bool {
 }
 
 func restoreReceipt(receipt runReceipt) *sessionRun {
-	run := &sessionRun{UserEntryID: receipt.UserEntryID, AssistantEntryID: receipt.AssistantEntryID, Inputs: receipt.Inputs, ID: receipt.RunID, RequestID: receipt.RequestID, SessionID: receipt.SessionID, Prompt: receipt.Prompt, State: receipt.State, StartedAt: receipt.StartedAt, EndedAt: receipt.EndedAt, Error: receipt.Error, last: receipt.Result, restored: true, done: make(chan struct{}), pending: map[string]*pendingConfirmation{}}
+	run := &sessionRun{UserEntryID: receipt.UserEntryID, AssistantEntryID: receipt.AssistantEntryID, Usage: receipt.Usage, Inputs: receipt.Inputs, ID: receipt.RunID, RequestID: receipt.RequestID, SessionID: receipt.SessionID, Prompt: receipt.Prompt, State: receipt.State, StartedAt: receipt.StartedAt, EndedAt: receipt.EndedAt, Error: receipt.Error, last: receipt.Result, restored: true, done: make(chan struct{}), pending: map[string]*pendingConfirmation{}}
 	if runActive(run) {
 		run.State, run.Error = "interrupted", "服务重启导致任务中断；已接受的消息不会自动重复执行，请检查历史后决定是否重新发送"
 		ended := time.Now()
@@ -225,7 +225,6 @@ func (s *Server) usageSummary(w http.ResponseWriter, r *http.Request) {
 
 	total := usageBucket{}
 	perSession := map[string]*usageBucket{}
-	var lastUsed *time.Time
 
 	forEachRunReceipt(r.Context(), s.app.Config().DataDir, func(receipt runReceipt) bool {
 		started := receipt.StartedAt
@@ -254,13 +253,8 @@ func (s *Server) usageSummary(w http.ResponseWriter, r *http.Request) {
 				bucket.LastUsedAt = &stamp
 			}
 		}
-		if lastUsed == nil || started.After(*lastUsed) {
-			stamp := started
-			lastUsed = &stamp
-		}
 		return true
 	})
-	_ = lastUsed
 
 	sessions := make([]usageBucket, 0, len(perSession))
 	for _, bucket := range perSession {

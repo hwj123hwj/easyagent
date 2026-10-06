@@ -288,25 +288,27 @@ func (s *Server) consumeRun(ctx context.Context, run *sessionRun, stream <-chan 
 	}()
 	defer release()
 	defer run.cancel()
+	var lastTurnEnd ai.Usage
 	for event := range stream {
 		s.runs.mu.Lock()
 		state := s.runs.sessionLocked(run.SessionID)
 		if state.run == run {
 			if event.Type == agent.StreamEventDone {
 				run.last = event.FinalMessage
+				// 最后一轮以 error/aborted 结束时不发 turn_end（loop.go 提前
+				// 返回），其用量只能在这里补记；成功路径的最后一轮已计入，
+				// 用量相同则跳过。极小概率两轮用量完全一致导致漏记一轮，
+				// 优于整体漏记失败 run 的收尾轮。
+				if event.FinalMessage.Usage != lastTurnEnd {
+					addTurnUsage(&run.Usage, event.FinalMessage.Usage)
+				}
 			}
 			if event.Type == agent.StreamEventTurnEnd {
 				// Every turn reports its own request usage; the run total is the
 				// sum across turns (tool loops issue one LLM call per turn).
 				if assistant, ok := event.Message.(ai.AssistantMessage); ok {
-					run.Usage.InputTokens += assistant.Usage.InputTokens
-					run.Usage.OutputTokens += assistant.Usage.OutputTokens
-					if assistant.Usage.CachedInputTokens != nil {
-						if run.Usage.CachedInputTokens == nil {
-							run.Usage.CachedInputTokens = new(int)
-						}
-						*run.Usage.CachedInputTokens += *assistant.Usage.CachedInputTokens
-					}
+					addTurnUsage(&run.Usage, assistant.Usage)
+					lastTurnEnd = assistant.Usage
 				}
 			}
 			if event.Type == agent.StreamEventError {
@@ -364,6 +366,19 @@ func (s *Server) consumeRun(ctx context.Context, run *sessionRun, stream <-chan 
 	}
 	close(run.done)
 	s.runs.pruneRequestsLocked()
+}
+
+// addTurnUsage 把单轮请求的用量累加进 run 的累计值；CachedInputTokens 首次
+// 出现时才分配指针，nil 表示该轮未上报缓存命中。
+func addTurnUsage(total *ai.Usage, turn ai.Usage) {
+	total.InputTokens += turn.InputTokens
+	total.OutputTokens += turn.OutputTokens
+	if turn.CachedInputTokens != nil {
+		if total.CachedInputTokens == nil {
+			total.CachedInputTokens = new(int)
+		}
+		*total.CachedInputTokens += *turn.CachedInputTokens
+	}
 }
 
 // 文本片段合并，工具进度只保留最后一次；恢复快照不依赖有限 replay 窗口。
