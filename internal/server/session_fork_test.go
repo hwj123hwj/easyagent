@@ -258,6 +258,22 @@ func TestForkFinalAnswerRetainsToolsAndExcludesNextTurn(t *testing.T) {
 	}
 	ids, err := source.Session().BuildContextEntryIDs(ctx)
 	require.NoError(t, err)
+	cleaned := append([]ai.Message(nil), history...)
+	cleaned[2] = ai.ToolResultMessage{ToolCallID: "read", Content: "cleared model input"}
+	require.NoError(t, source.Session().AppendMicroCompaction(ctx, cleaned))
+	// Cleanup markers must not shift the displayed answer's fork anchor or
+	// replace the original output in the history used by the desktop.
+	historyReq := httptest.NewRequest("GET", "/", nil)
+	historyReq.SetPathValue("id", source.SessionID())
+	historyRec := httptest.NewRecorder()
+	s.getSessionMessages(historyRec, historyReq)
+	require.Equal(t, 200, historyRec.Code)
+	var displayed []map[string]any
+	require.NoError(t, json.Unmarshal(historyRec.Body.Bytes(), &displayed))
+	require.Len(t, displayed, len(history))
+	require.Equal(t, ids[3], displayed[3]["entry_id"])
+	require.Contains(t, historyRec.Body.String(), "file contents")
+	require.NotContains(t, historyRec.Body.String(), "cleared model input")
 	req := httptest.NewRequest("POST", "/", bytes.NewBufferString(`{"entry_id":"`+ids[3]+`"}`))
 	req.SetPathValue("id", source.SessionID())
 	rec := httptest.NewRecorder()
