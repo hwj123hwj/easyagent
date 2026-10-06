@@ -81,6 +81,8 @@ GET /ws
 {"type":"confirm","session_id":"sess_123","run_id":"run_123","confirmation_id":"confirmation_123","approved":true}
 ```
 
+完成的 run 在 `status.run` 与恢复快照的 `run` 中携带 `user_entry_id` 和 `assistant_entry_id`（若有已落盘的最终文字回答）；后者可用于从回答分叉，包含该回答及此前工具结果。历史 assistant 消息包含 `entry_id` 与 `stop_reason`，带工具调用或错误/取消的中间输出不作为桌面回答分叉入口。分叉只复制会话记录，不回退工作目录文件。
+
 `event` 包含递增 `seq`、`run_id` 和 Agent `event`。重连发送 `subscribe`：可重放时返回 `replay`，否则返回 `snapshot`（历史 `messages`、当前 run、已投影事件及 `pending_confirmations`）。客户端按 seq 去重，不将恢复内容当成新请求。序号缺口应重新订阅；`reset:true` 表示历史完整重建，允许序号重新开始。`confirmation` 表示任务等待批准，超时拒绝。旧 run 的取消与批准请求会被拒绝，避免影响后续任务。
 
 任务由会话持有，WS / SSE 连接关闭不会取消任务。服务重启后已接受而未完成的 run 标为 `interrupted`，相同 request ID 不重新执行。凭据保存于 `EA_DATA_DIR/requests`，完整聊天历史仍来自会话 JSONL；硬断电下的外部副作用不保证恰好一次。

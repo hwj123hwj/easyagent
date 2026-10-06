@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hwj123hwj/easyagent/internal/app"
 	"github.com/hwj123hwj/easyagent/sdk/agent"
+	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/hwj123hwj/easyagent/sdk/config"
 	"github.com/stretchr/testify/require"
 )
@@ -516,4 +517,87 @@ func TestSessionPermissionModesControlRealWritesAndRejectBusySwitch(t *testing.T
 	require.Equal(t, "full", sess.AccessMode(), "installing the run callback must retain explicit mode")
 	setMode("ask", http.StatusOK)
 	require.Equal(t, "ask", sess.AccessMode())
+}
+
+func TestRunReplyAnchorSurvivesSnapshotsReceiptsAndRepeatedTurns(t *testing.T) {
+	srv, server, gateway := newFileRunTestServer(t, "result.txt")
+	conn := dialRunWS(t, server)
+	require.NoError(t, conn.WriteJSON(wsClientMessage{Type: "prompt", Prompt: "repeat", RequestID: "reply-anchor"}))
+	ack := readRunMessage(t, conn, "accepted")
+	id := ack["session_id"].(string)
+	srv.runs.mu.Lock()
+	run := srv.runs.requests["reply-anchor"]
+	srv.runs.mu.Unlock()
+	waitRunText(t, srv, run)
+	close(gateway.finish)
+	_, err := srv.waitRun(context.Background(), run)
+	require.NoError(t, err)
+	final := readRunMessage(t, conn, "status")
+	for final["state"] == "running" {
+		final = readRunMessage(t, conn, "status")
+	}
+	require.Equal(t, "completed", final["state"])
+	require.NotEmpty(t, run.UserEntryID)
+	require.NotEmpty(t, run.AssistantEntryID)
+	require.NotEqual(t, run.UserEntryID, run.AssistantEntryID)
+	require.Equal(t, run.AssistantEntryID, final["run"].(map[string]any)["assistant_entry_id"])
+	snapshot, err := srv.runSnapshot(id, 0, run.ID, nil)
+	require.NoError(t, err)
+	require.Equal(t, run.AssistantEntryID, snapshot.Run.AssistantEntryID)
+	data, err := os.ReadFile(srv.receiptPath(run.RequestID))
+	require.NoError(t, err)
+	var receipt runReceipt
+	require.NoError(t, json.Unmarshal(data, &receipt))
+	restored := restoreReceipt(receipt)
+	require.Equal(t, run.AssistantEntryID, restored.AssistantEntryID)
+	require.NoError(t, srv.hydrateRestoredRun(restored))
+	require.Equal(t, run.AssistantEntryID, restored.baseline[len(restored.baseline)-1]["entry_id"])
+	require.Equal(t, "stop", string(restored.baseline[len(restored.baseline)-1]["stop_reason"].(ai.StopReason)))
+	next, _, err := srv.startRun(id, "repeat", "next-reply")
+	require.NoError(t, err)
+	_, err = srv.waitRun(context.Background(), next)
+	require.NoError(t, err)
+	require.NotEmpty(t, next.AssistantEntryID)
+	require.NotEqual(t, run.AssistantEntryID, next.AssistantEntryID)
+	// The first anchor still cuts at its answer after a later identical turn.
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"entry_id":"`+run.AssistantEntryID+`"}`))
+	req.SetPathValue("id", id)
+	rec := httptest.NewRecorder()
+	srv.forkSession(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var response forkResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	require.Equal(t, 4, response.KeptMessages)
+	require.Equal(t, 1, response.KeptUserMessages)
+}
+
+func TestCancelledRunHasNoReplyForkAnchor(t *testing.T) {
+	srv, _, _ := newRunTestServer(t)
+	run, _, err := srv.startRun("", "cancel me", "partial-reply")
+	require.NoError(t, err)
+	waitRunText(t, srv, run)
+	require.NoError(t, srv.cancelRun(run.SessionID, run.ID))
+	_, err = srv.waitRun(context.Background(), run)
+	require.Error(t, err)
+	require.Equal(t, "cancelled", run.State)
+	require.Empty(t, run.AssistantEntryID)
+}
+
+func TestRunWithoutNewMessagesCannotReusePreviousReplyAnchor(t *testing.T) {
+	srv, _, _ := newRunTestServer(t)
+	ctx := context.Background()
+	source, err := srv.resolveSession(ctx, "")
+	require.NoError(t, err)
+	require.NoError(t, source.Session().AppendMessage(ctx, ai.NewTextUserMessage("repeat")))
+	require.NoError(t, source.Session().AppendMessage(ctx, ai.AssistantMessage{Text: "old answer", StopReason: ai.StopReasonStop}))
+	history, err := source.Session().BuildContext(ctx)
+	require.NoError(t, err)
+	run := &sessionRun{ID: "empty-run", RequestID: "empty-request", SessionID: source.SessionID(), Prompt: "repeat", State: "running", baseline: serializeSessionContext(source, history), done: make(chan struct{}), cancel: func() {}}
+	srv.runs.sessionLocked(run.SessionID).run = run
+	stream := make(chan agent.AgentStreamEvent)
+	close(stream)
+	srv.consumeRun(ctx, run, stream, func() {})
+	require.Equal(t, "completed", run.State)
+	require.Empty(t, run.UserEntryID)
+	require.Empty(t, run.AssistantEntryID)
 }

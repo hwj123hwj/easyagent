@@ -12,7 +12,8 @@ export interface ConnectionProfile {
   hasToken: boolean;
 }
 export interface RunInfo {
- user_entry_id?: string;
+  user_entry_id?: string;
+  assistant_entry_id?: string;
   run_id: string;
   request_id?: string;
   state:
@@ -124,6 +125,7 @@ export interface AgentEvent {
   [key: string]: unknown;
 }
 export interface StoredMessage {
+  stop_reason?: string;
  compaction?: CompactionRecord;
   duration_ms?: number;
   role: string;

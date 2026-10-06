@@ -37,27 +37,28 @@ type pendingConfirmation struct {
 
 // sessionRun is owned by the session, never by a socket or HTTP request.
 type sessionRun struct {
-	UserEntryID    string `json:"user_entry_id,omitempty"`
-	files          *runFiles
-	DisplayPrompt  string            `json:"display_prompt,omitempty"`
-	Inputs         promptInputs      `json:"inputs,omitempty"`
-	Attachments    []inputAttachment `json:"attachments,omitempty"`
-	ID             string            `json:"run_id"`
-	RequestID      string            `json:"request_id"`
-	SessionID      string            `json:"session_id"`
-	Prompt         string            `json:"prompt"`
-	State          string            `json:"state"`
-	StartedAt      time.Time         `json:"started_at"`
-	EndedAt        *time.Time        `json:"ended_at,omitempty"`
-	Error          string            `json:"error,omitempty"`
-	baseline       []map[string]any
-	projection     []agent.AgentStreamEvent
-	projectionText strings.Builder
-	pending        map[string]*pendingConfirmation
-	last           ai.AssistantMessage
-	restored       bool
-	done           chan struct{}
-	cancel         context.CancelFunc
+	UserEntryID      string `json:"user_entry_id,omitempty"`
+	AssistantEntryID string `json:"assistant_entry_id,omitempty"`
+	files            *runFiles
+	DisplayPrompt    string            `json:"display_prompt,omitempty"`
+	Inputs           promptInputs      `json:"inputs,omitempty"`
+	Attachments      []inputAttachment `json:"attachments,omitempty"`
+	ID               string            `json:"run_id"`
+	RequestID        string            `json:"request_id"`
+	SessionID        string            `json:"session_id"`
+	Prompt           string            `json:"prompt"`
+	State            string            `json:"state"`
+	StartedAt        time.Time         `json:"started_at"`
+	EndedAt          *time.Time        `json:"ended_at,omitempty"`
+	Error            string            `json:"error,omitempty"`
+	baseline         []map[string]any
+	projection       []agent.AgentStreamEvent
+	projectionText   strings.Builder
+	pending          map[string]*pendingConfirmation
+	last             ai.AssistantMessage
+	restored         bool
+	done             chan struct{}
+	cancel           context.CancelFunc
 }
 
 type sessionRunState struct {
@@ -317,9 +318,22 @@ func (s *Server) consumeRun(ctx context.Context, run *sessionRun, stream <-chan 
 		messages, err := sess.Session().BuildContext(s.ctx)
 		ids, idErr := sess.Session().BuildContextEntryIDs(s.ctx)
 		if err == nil && idErr == nil && len(ids) == len(messages) {
+			baselineIDs := make(map[string]bool, len(run.baseline))
+			for _, entry := range run.baseline {
+				id, _ := entry["entry_id"].(string)
+				baselineIDs[id] = true
+			}
 			for i := len(messages) - 1; i >= 0; i-- {
-				if user, ok := messages[i].(ai.UserMessage); ok && len(user.Content) > 0 && user.Content[0].Type == "text" && user.Content[0].Text == run.Prompt {
+				if user, ok := messages[i].(ai.UserMessage); ok && !baselineIDs[ids[i]] && len(user.Content) > 0 && user.Content[0].Type == "text" && user.Content[0].Text == run.Prompt {
 					run.UserEntryID = ids[i]
+					// Only the terminal answer after this run's user is a reply fork
+					// anchor. Never attach an earlier answer to an empty/failed run.
+					if run.State == "completed" && i < len(messages)-1 {
+						last := len(messages) - 1
+						if answer, ok := messages[last].(ai.AssistantMessage); ok && answer.Text != "" && len(answer.ToolCalls) == 0 && answer.StopReason != ai.StopReasonError && answer.StopReason != ai.StopReasonAborted && answer.StopReason != ai.StopReasonToolUse {
+							run.AssistantEntryID = ids[last]
+						}
+					}
 					break
 				}
 			}
@@ -583,6 +597,7 @@ func serializeRunMessages(messages []ai.Message) []map[string]any {
 			}
 		case ai.AssistantMessage:
 			entry["content"], entry["thinking"], entry["tool_calls"] = msg.Text, msg.Thinking, msg.ToolCalls
+			entry["stop_reason"] = msg.StopReason
 			entry["thinking_duration_ms"], entry["usage"] = msg.ThinkingDurationMS, msg.Usage
 		case ai.ToolResultMessage:
 			entry["duration_ms"] = msg.DurationMS

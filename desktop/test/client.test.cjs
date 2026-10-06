@@ -621,6 +621,56 @@ test("compaction cards restore from history and replay without truncating Unicod
   assert.match(s.transcript.at(-1).text, /disk unavailable/);
 });
 
+test("historical fork anchors belong to final answers, including identical text across turns", () => {
+  const projection = historyProjection([
+    {role: "user", content: "repeat", entry_id: "u1"},
+    {role: "assistant", content: "same", entry_id: "tool-owner", tool_calls: [{id: "call", name: "read"}]},
+    {role: "tool", tool_call_id: "call", content: "file"},
+    {role: "assistant", content: "same", entry_id: "a1", stop_reason: "stop"},
+    {role: "user", content: "repeat", entry_id: "u2"},
+    {role: "assistant", content: "same", entry_id: "a2", stop_reason: "stop"},
+    {role: "assistant", content: "partial", entry_id: "aborted", stop_reason: "aborted"},
+  ]);
+  assert.deepEqual(projection.transcript.filter(i => i.kind === "assistant").map(i => i.entryId), [undefined, "a1", "a2", undefined]);
+});
+
+test("completed status, snapshot and replay anchor only the final answer of their run", () => {
+  const events = [
+    {type: "text_delta", text_delta: "same"},
+    {type: "tool_start", tool_call_id: "call", tool_name: "read"},
+    {type: "tool_end", tool_call_id: "call", result: "file"},
+    {type: "text_delta", text_delta: "same"},
+    {type: "done", final_message: {text: "same"}},
+  ];
+  const run = {run_id: "run", state: "completed", prompt: "repeat", user_entry_id: "u", assistant_entry_id: "a"};
+  let live = accepted(historyProjection([{role: "assistant", content: "same", entry_id: "old"}]));
+  events.forEach((event, i) => { live = reduceEnvelope(live, {type: "event", run_id: "run", seq: i + 1, event}); });
+  assert.equal(live.transcript.at(-1).entryId, undefined);
+  const status = {type: "status", run_id: "run", seq: 6, state: "completed", run};
+  const completed = reduceEnvelope(live, status);
+  const snapshot = reduceEnvelope(emptyProjection(), {type: "snapshot", seq: 6, run, events});
+  const replay = reduceEnvelope(live, {type: "replay", run, seq: 6, events: [status]});
+  const fullReplay = reduceEnvelope(accepted(), {type: "replay", run, seq: 6, events: [...events.map((event, i) => ({type: "event", run_id: "run", seq: i + 1, event})), status]});
+  for (const state of [completed, snapshot, replay, fullReplay]) {
+    assert.equal(state.transcript.at(-1).entryId, "a");
+    assert.equal(state.transcript.find(i => i.id.startsWith("run-") && i.kind === "assistant").entryId, undefined);
+  }
+  assert.equal(completed.transcript[0].entryId, "old");
+  for (const state of ["failed", "cancelled", "interrupted"]) {
+    const partial = reduceEnvelope(live, {...status, state, run: {...run, state}});
+    assert.equal(partial.transcript.filter(i => i.kind === "assistant").at(-1).entryId, undefined);
+  }
+});
+
+test("restored completed history does not duplicate its user", () => {
+  const snapshot = reduceEnvelope(emptyProjection(), {
+    type: "snapshot", reset: true, run: {run_id: "run", state: "completed", prompt: "repeat", user_entry_id: "u", assistant_entry_id: "a"},
+    messages: [{role: "user", content: "repeat", entry_id: "u"}, {role: "assistant", content: "answer", entry_id: "a", stop_reason: "stop"}], events: [],
+  });
+  assert.equal(snapshot.transcript.length, 2);
+  assert.equal(snapshot.transcript[1].entryId, "a");
+});
+
 test("image history keeps distinct anchors and the reducer is independent of the store", () => {
  const projection = historyProjection([{role:"compaction",content:"summary",compaction:{id:"comp",summary:"summary"}}, {role:"user",content:"image",entry_id:"entry",images:[{data_url:"data:image/png;base64,AA"},{data_url:"data:image/png;base64,BB"}]}]);
  const user = projection.transcript.find(item => item.kind === "user");

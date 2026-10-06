@@ -1196,3 +1196,22 @@ textarea::placeholder {
 .compaction-card summary small { margin-left: auto; color: var(--text-dim); }
 .compaction-card .md-rendered { margin-top: 14px; }
 .compaction-instructions { margin-top: 12px; color: var(--text-dim); }
+
+.reply-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.reply-fork:disabled { cursor: default; opacity: .5; }
+.reply-fork:disabled:hover { color: var(--text-faint); }
+.fork-notice {
+  position: absolute;
+  inset: auto 16px 16px auto;
+  z-index: var(--z-notice, 30);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 12px;
+}

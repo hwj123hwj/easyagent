@@ -185,6 +185,7 @@ export function ChatPane({ view }: { view: SessionView }) {
   const loading = useStore((s) => s.loadingSession === view.meta.id);
   return (
     <div className="chat-viewport">
+      <ForkNotice sessionId={view.meta.id} />
       {findOpen && (
         <section className="conversation-find" aria-label="查找当前会话">
           <div>
@@ -618,33 +619,6 @@ const Message = memo(function Message({
               ))}
             </div>
           )}
-          <div className="user-message-actions">
-            <button
-              className="user-fork-btn"
-              title="保留至此消息，创建独立会话"
-              disabled={!item.entryId || busy || forking}
-              onClick={() => {
-                void (async () => {
-                  setForking(true); setError("");
-                  try {
-                    await forkSession(sessionId, {
-                      entryId: item.entryId,
-                    });
-                  } catch (forkError) {
-                    setError(
-                      forkError instanceof Error
-                        ? forkError.message
-                        : String(forkError),
-                    );
-                  } finally { setForking(false); }
-                })();
-              }}
-            >
-              <Icon name="git-branch" size={12} />
-              {forking ? "正在分叉…" : "从此分叉"}
-            </button>
-          </div>
-          {error && <span className="inline-error">{error}</span>}
         </div>
       </div>
     );
@@ -654,21 +628,39 @@ const Message = memo(function Message({
         ea· <span>EasyAgent</span>
       </span>
       <Markdown text={item.text} basePath={cwd ? cwd + "/" : undefined} />
-      <button
-        className="reply-copy"
-        onClick={() =>
-          void copyText(item.text)
-            .then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            })
-            .catch((error) => setError(error.message))
-        }
-      >
-        <Icon name={copied ? "check" : "copy"} size={13} />
-        {copied ? "已复制" : "复制回复"}
-      </button>
-      {error && <span className="inline-error">{error}</span>}
+      <div className="reply-actions">
+        <button
+          className="reply-copy"
+          onClick={() =>
+            void copyText(item.text)
+              .then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              })
+              .catch((error) => setError(error.message))
+          }
+        >
+          <Icon name={copied ? "check" : "copy"} size={13} />
+          {copied ? "已复制" : "复制回复"}
+        </button>
+        {item.entryId && <button
+          className="reply-copy reply-fork"
+          title={busy ? "等待当前任务结束后分叉" : "保留至此回答的对话记录；不会回退工作目录中的文件"}
+          disabled={busy || forking}
+          onClick={() => {
+            void (async () => {
+              setForking(true); setError("");
+              try { await forkSession(sessionId, { entryId: item.entryId }); }
+              catch (forkError) { setError(forkError instanceof Error ? forkError.message : String(forkError)); }
+              finally { setForking(false); }
+            })();
+          }}
+        >
+          <Icon name="git-branch" size={13} />
+          {forking ? "正在分叉…" : "从此回答分叉"}
+        </button>}
+      </div>
+      {error && <span className="inline-error" role="alert">{error}</span>}
     </article>
   );
 });
@@ -690,4 +682,20 @@ function Thought({ item }: { item: Exclude<ChatItem, { kind: "tool" }> }) {
     </summary>
     <div className="thought-content">{item.text}</div>
   </details>;
+}
+
+function ForkNotice({ sessionId }: { sessionId: string }) {
+  const notice = useStore(s => s.forkNotice);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => {
+      if (useStore.getState().forkNotice === notice) useStore.setState({ forkNotice: undefined });
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+  if (notice?.sessionId !== sessionId) return null;
+  return <div className="fork-notice" role="status">
+    <Icon name="check" size={14} /><span>{notice.message}</span>
+    <button className="icon-btn" aria-label="关闭分叉提示" onClick={() => useStore.setState({ forkNotice: undefined })}><Icon name="x" size={14} /></button>
+  </div>;
 }

@@ -18,17 +18,18 @@ import (
 // Receipts persist admission and the final result, not the live event stream.
 // An interrupted process must never replay a prompt that may have side effects.
 type runReceipt struct {
-	UserEntryID string              `json:"user_entry_id,omitempty"`
-	Inputs      promptInputs        `json:"inputs,omitempty"`
-	RunID       string              `json:"run_id"`
-	RequestID   string              `json:"request_id"`
-	SessionID   string              `json:"session_id"`
-	Prompt      string              `json:"prompt"`
-	State       string              `json:"state"`
-	StartedAt   time.Time           `json:"started_at"`
-	EndedAt     *time.Time          `json:"ended_at,omitempty"`
-	Error       string              `json:"error,omitempty"`
-	Result      ai.AssistantMessage `json:"result"`
+	UserEntryID      string              `json:"user_entry_id,omitempty"`
+	AssistantEntryID string              `json:"assistant_entry_id,omitempty"`
+	Inputs           promptInputs        `json:"inputs,omitempty"`
+	RunID            string              `json:"run_id"`
+	RequestID        string              `json:"request_id"`
+	SessionID        string              `json:"session_id"`
+	Prompt           string              `json:"prompt"`
+	State            string              `json:"state"`
+	StartedAt        time.Time           `json:"started_at"`
+	EndedAt          *time.Time          `json:"ended_at,omitempty"`
+	Error            string              `json:"error,omitempty"`
+	Result           ai.AssistantMessage `json:"result"`
 }
 
 func (s *Server) receiptPath(requestID string) string {
@@ -37,7 +38,7 @@ func (s *Server) receiptPath(requestID string) string {
 }
 
 func (s *Server) saveRunReceipt(run *sessionRun) error {
-	data, err := json.Marshal(runReceipt{UserEntryID: run.UserEntryID, Inputs: run.Inputs, RunID: run.ID, RequestID: run.RequestID, SessionID: run.SessionID, Prompt: run.Prompt, State: run.State, StartedAt: run.StartedAt, EndedAt: run.EndedAt, Error: run.Error, Result: run.last})
+	data, err := json.Marshal(runReceipt{UserEntryID: run.UserEntryID, AssistantEntryID: run.AssistantEntryID, Inputs: run.Inputs, RunID: run.ID, RequestID: run.RequestID, SessionID: run.SessionID, Prompt: run.Prompt, State: run.State, StartedAt: run.StartedAt, EndedAt: run.EndedAt, Error: run.Error, Result: run.last})
 	if err != nil {
 		return err
 	}
@@ -123,7 +124,7 @@ func validRunReceipt(receipt runReceipt) bool {
 }
 
 func restoreReceipt(receipt runReceipt) *sessionRun {
-	run := &sessionRun{UserEntryID: receipt.UserEntryID, Inputs: receipt.Inputs, ID: receipt.RunID, RequestID: receipt.RequestID, SessionID: receipt.SessionID, Prompt: receipt.Prompt, State: receipt.State, StartedAt: receipt.StartedAt, EndedAt: receipt.EndedAt, Error: receipt.Error, last: receipt.Result, restored: true, done: make(chan struct{}), pending: map[string]*pendingConfirmation{}}
+	run := &sessionRun{UserEntryID: receipt.UserEntryID, AssistantEntryID: receipt.AssistantEntryID, Inputs: receipt.Inputs, ID: receipt.RunID, RequestID: receipt.RequestID, SessionID: receipt.SessionID, Prompt: receipt.Prompt, State: receipt.State, StartedAt: receipt.StartedAt, EndedAt: receipt.EndedAt, Error: receipt.Error, last: receipt.Result, restored: true, done: make(chan struct{}), pending: map[string]*pendingConfirmation{}}
 	if runActive(run) {
 		run.State, run.Error = "interrupted", "服务重启导致任务中断；已接受的消息不会自动重复执行，请检查历史后决定是否重新发送"
 		ended := time.Now()

@@ -257,6 +257,7 @@ interface StoreState {
   sessions: Record<string, SessionView>;
   order: string[];
   activeSessionId?: string;
+  forkNotice?: { sessionId: string; message: string };
   lang: Lang;
   setLang: (lang: Lang) => void;
   theme: ThemeMode;
@@ -560,6 +561,7 @@ export const useStore = create<StoreState>((set, get) => ({
       connected: false,
       connectionState: "connecting",
       connectionError: undefined,
+      forkNotice: undefined,
       selectedProfile: id,
     });
     await wsService.disconnect();
@@ -1250,6 +1252,8 @@ export const useStore = create<StoreState>((set, get) => ({
     await get().refreshSessions();
     if (epoch !== connectionEpoch) throw new Error("运行主机已切换，原服务的分叉结果已忽略");
     await get().setActive(result.id);
+    if (epoch !== connectionEpoch) throw new Error("运行主机已切换，原服务的分叉结果已忽略");
+    set({ forkNotice: { sessionId: result.id, message: `已创建分叉会话，保留 ${result.kept_messages} 条对话与工具记录` } });
     return result;
   },
 
