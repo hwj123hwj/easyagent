@@ -154,3 +154,37 @@ func TestFeishuSettingsLingerUsesServiceUser(t *testing.T) {
 		t.Fatal(state, err)
 	}
 }
+
+func TestFeishuSettingsLocalAndQR(t *testing.T) {
+	t.Setenv("EA_HOME", t.TempDir())
+	t.Setenv("EA_FEISHU_ENV_FILE", "")
+	t.Setenv("FEISHU_OWNER_STATE_FILE", "")
+	s := &Server{apiKey: "test-key"}
+	mux := http.NewServeMux()
+	s.registerFeishuSettings(mux)
+	handler := s.authMiddleware(mux)
+
+	// GET /settings/feishu when unmanaged returns local_mode
+	r := httptest.NewRequest("GET", "/settings/feishu", nil)
+	r.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var res map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res["managed"] != false || res["local_mode"] != true {
+		t.Fatalf("unexpected response: %v", res)
+	}
+
+	// QR begin unauthorized returns 401
+	rQR := httptest.NewRequest("POST", "/settings/feishu/qr/begin", nil)
+	wQR := httptest.NewRecorder()
+	handler.ServeHTTP(wQR, rQR)
+	if wQR.Code != 401 {
+		t.Fatalf("expected 401, got %d", wQR.Code)
+	}
+}

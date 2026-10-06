@@ -293,21 +293,32 @@ func (c *Config) LoadFromEnv() {
 		c.KBEmbeddingBaseURL = v
 	}
 
-	// ASR (speech-to-text) — reuse SiliconFlow API key by default
-	if v := os.Getenv("ASR_API_KEY"); v != "" {
-		c.ASRAPIKey = v
-	} else if v := os.Getenv("SILICONFLOW_API_KEY"); v != "" {
-		c.ASRAPIKey = v // reuse SiliconFlow key
+	// ASR: credentials and endpoint must come from the same provider. Never
+	// forward a gateway key to the default SiliconFlow endpoint (or vice versa).
+	asrKey, siliconKey, asrURL := os.Getenv("ASR_API_KEY"), os.Getenv("SILICONFLOW_API_KEY"), os.Getenv("ASR_BASE_URL")
+	savedASRKey, savedASRURL := c.ASRAPIKey, c.ASRBaseURL
+	c.ASRBaseURL = "https://api.siliconflow.cn"
+	if asrURL != "" {
+		c.ASRBaseURL = asrURL
+	}
+	if asrKey != "" {
+		c.ASRAPIKey = asrKey
+	} else if savedASRKey != "" && asrURL == "" {
+		c.ASRAPIKey = savedASRKey
+		if savedASRURL != "" {
+			c.ASRBaseURL = savedASRURL
+		}
+	} else if siliconKey != "" && asrURL == "" {
+		c.ASRAPIKey = siliconKey
+	} else if asrURL == "" && c.OpenAIAPIKey != "" && c.OpenAIBaseURL != "" {
+		c.ASRAPIKey, c.ASRBaseURL = c.OpenAIAPIKey, c.OpenAIBaseURL
+	} else {
+		c.ASRAPIKey = ""
 	}
 	if v := os.Getenv("ASR_MODEL"); v != "" {
 		c.ASRModel = v
-	} else {
-		c.ASRModel = "TeleAI/TeleSpeechASR" // default
-	}
-	if v := os.Getenv("ASR_BASE_URL"); v != "" {
-		c.ASRBaseURL = v
-	} else {
-		c.ASRBaseURL = "https://api.siliconflow.cn"
+	} else if c.ASRModel == "" {
+		c.ASRModel = "TeleAI/TeleSpeechASR"
 	}
 
 	// Server security

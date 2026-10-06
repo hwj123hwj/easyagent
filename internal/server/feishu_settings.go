@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+
+	"github.com/hwj123hwj/easyagent/internal/feishu"
 )
 
 // The operator explicitly opts in with a fixed environment file used by the
@@ -166,7 +168,24 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 		}
 		if f.envFile == "" || f.ownerFile == "" {
 			if r.Method == "GET" && r.URL.Path == "/settings/feishu" {
-				json.NewEncoder(w).Encode(map[string]any{"managed": false})
+				// Even if systemd is not managing the bridge, expose saved local credentials if present
+				creds, err := feishu.LoadCredentials()
+				if err != nil {
+					http.Error(w, `{"error":"无法读取飞书凭据"}`, 500)
+					return
+				}
+				appID := ""
+				secretConfigured := false
+				if creds != nil {
+					appID = creds.AppID
+					secretConfigured = creds.AppSecret != ""
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"managed":           false,
+					"app_id":            appID,
+					"secret_configured": secretConfigured,
+					"local_mode":        true,
+				})
 				return
 			}
 			http.Error(w, `{"error":"此服务器未启用飞书配置管理"}`, http.StatusServiceUnavailable)
@@ -223,4 +242,6 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 	mux.HandleFunc("GET /settings/feishu", handler)
 	mux.HandleFunc("PUT /settings/feishu", handler)
 	mux.HandleFunc("GET /settings/feishu/pairing", handler)
+
+	registerFeishuQR(mux, s.apiKey, f.envFile != "" || f.ownerFile != "")
 }

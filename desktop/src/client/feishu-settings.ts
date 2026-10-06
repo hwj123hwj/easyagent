@@ -1,5 +1,6 @@
 export interface FeishuStatus {
   managed: boolean;
+  local_mode?: boolean;
   app_id?: string;
   secret_configured?: boolean;
   paired?: boolean;
@@ -14,11 +15,23 @@ export interface FeishuPairing {
   expires: string;
 }
 
+export interface FeishuQR {
+  device_code: string;
+  qr_url: string;
+  user_code: string;
+  interval: number;
+  expire_in: number;
+}
+
 interface SettingsState {
   status: FeishuStatus | null;
   appId: string;
   secret: string;
   pairing: FeishuPairing | null;
+  qr: FeishuQR | null;
+  qrLoading: boolean;
+  qrPolling: boolean;
+  qrAuthorized: boolean;
   loading: boolean;
   saving: boolean;
   pairingLoading: boolean;
@@ -31,6 +44,7 @@ interface SettingsState {
 type Request = <T>(method: string, path: string, body?: unknown) => Promise<T>;
 const emptyState = (): SettingsState => ({
   status: null, appId: "", secret: "", pairing: null,
+  qr: null, qrLoading: false, qrPolling: false, qrAuthorized: false,
   loading: false, saving: false, pairingLoading: false, copying: false,
   error: "", errorSource: null, notice: "",
 });
@@ -59,6 +73,9 @@ export class FeishuSettingsController {
   private alive = false;
   private connected = false;
   private statusRevision = 0;
+  private qrRevision = 0;
+  private qrTimer: ReturnType<typeof setTimeout> | undefined;
+  private qrExpires = 0;
 
   constructor(private request: Request, private copy: (text: string) => Promise<void>) {}
 
@@ -70,6 +87,7 @@ export class FeishuSettingsController {
 
   // Called when the selected profile or its connection changes, and on mount.
   activate(connected: boolean) {
+    this.cancelQRTimer();
     this.epoch++;
     this.statusRevision++;
     this.alive = true;
@@ -78,6 +96,7 @@ export class FeishuSettingsController {
   }
 
   dispose() {
+    this.cancelQRTimer();
     this.epoch++;
     this.alive = false;
     this.connected = false;
@@ -175,6 +194,83 @@ export class FeishuSettingsController {
         this.set({ error: (error as Error).message || "复制失败，请选中指令后按 Ctrl/Cmd+C", errorSource: "action" });
     } finally {
       if (this.current(epoch)) this.set({ copying: false });
+    }
+  }
+
+  private cancelQRTimer() {
+    this.qrRevision++;
+    clearTimeout(this.qrTimer);
+  }
+
+  hideQR() {
+    this.cancelQRTimer();
+    this.set({ qr: null, qrLoading: false, qrPolling: false, qrAuthorized: false });
+  }
+
+  async startQR() {
+    if (!this.alive || !this.connected || this.state.status?.managed || this.state.qrLoading || this.state.qrPolling) return;
+    this.cancelQRTimer();
+    const epoch = this.epoch, revision = this.qrRevision;
+    this.set({ qr: null, qrLoading: true, qrAuthorized: false, error: "", errorSource: null, notice: "" });
+    try {
+      const qr = await this.request<FeishuQR>("POST", "/settings/feishu/qr/begin");
+      if (!this.current(epoch) || revision !== this.qrRevision) return;
+      const url = new URL(qr.qr_url);
+      if (url.protocol !== "https:" || !["open.feishu.cn", "accounts.feishu.cn", "open.larksuite.com", "accounts.larksuite.com"].includes(url.host)) throw new Error("无效的飞书授权链接");
+      this.qrExpires = Date.now() + Math.min(600, Math.max(1, qr.expire_in)) * 1000;
+      this.set({ qr, qrLoading: false, qrPolling: true });
+      void this.pollQR(qr, epoch, revision);
+    } catch (error) {
+      if (this.current(epoch) && revision === this.qrRevision)
+        this.set({ error: (error as Error).message || "获取飞书二维码失败", errorSource: "action", qrLoading: false });
+    }
+  }
+
+  private async pollQR(qr: FeishuQR, epoch: number, revision: number) {
+    if (!this.current(epoch) || revision !== this.qrRevision) return;
+    try {
+      if (Date.now() >= this.qrExpires) throw new Error("授权已过期，请重新扫码");
+      const res = await this.request<{ authorized: boolean }>("POST", "/settings/feishu/qr/poll", { device_code: qr.device_code });
+      if (!this.current(epoch) || revision !== this.qrRevision) return;
+      if (res.authorized) {
+        this.set({ qrPolling: false, qrAuthorized: true });
+      } else {
+        this.qrTimer = setTimeout(() => void this.pollQR(qr, epoch, revision), Math.max(3, Math.min(30, qr.interval)) * 1000);
+      }
+    } catch (error) {
+      if (this.current(epoch) && revision === this.qrRevision) {
+        this.hideQR();
+        this.set({ error: (error as Error).message || "扫码授权失败", errorSource: "action" });
+      }
+    }
+  }
+
+  async confirmQR() {
+    if (!this.current(this.epoch) || !this.state.qrAuthorized || !this.state.qr || this.state.saving) return;
+    const epoch = this.epoch, revision = this.qrRevision, qr = this.state.qr;
+    this.set({ saving: true, error: "", errorSource: null });
+    try {
+      await this.request("POST", "/settings/feishu/qr/confirm", { device_code: qr.device_code });
+      if (!this.current(epoch) || revision !== this.qrRevision) return;
+      this.hideQR();
+      this.set({ saving: false, notice: "已保存授权凭据。需另行启动或重启飞书桥接后才能收发消息。" });
+      await this.refresh();
+    } catch (error) {
+      if (this.current(epoch) && revision === this.qrRevision)
+        this.set({ error: (error as Error).message || "保存授权失败", errorSource: "action" });
+    } finally {
+      if (this.current(epoch)) this.set({ saving: false });
+    }
+  }
+
+  async copyQR() {
+    if (!this.state.qr) return;
+    const qr = this.state.qr, epoch = this.epoch;
+    try {
+      await this.copy(qr.qr_url);
+      if (this.current(epoch) && this.state.qr === qr) this.set({ notice: "已复制飞书授权链接" });
+    } catch {
+      if (this.current(epoch) && this.state.qr === qr) this.set({ error: "复制失败，请选中链接后按 Ctrl/Cmd+C", errorSource: "action" });
     }
   }
 }

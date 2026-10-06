@@ -81,12 +81,13 @@ func (h *ASRHandler) transcribe(w http.ResponseWriter, r *http.Request) {
 	mw.Close()
 
 	// Build upstream request
-	baseURL := h.cfg.ASRBaseURL
-	if !strings.HasSuffix(baseURL, "/") {
-		baseURL += "/"
+	baseURL := strings.TrimRight(h.cfg.ASRBaseURL, "/")
+	if !strings.HasSuffix(baseURL, "/v1") {
+		baseURL += "/v1"
 	}
+
 	sfReq, err := http.NewRequestWithContext(r.Context(), "POST",
-		baseURL+"v1/audio/transcriptions",
+		baseURL+"/audio/transcriptions",
 		&buf)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create upstream request")

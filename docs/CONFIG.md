@@ -74,3 +74,9 @@ Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。ser
 | `EA_FEISHU_ENV_FILE`、`FEISHU_OWNER_STATE_FILE` | 托管飞书配置与配对状态，见 [飞书](FEISHU.md) |
 
 不要将运行 `.env`、访问令牌或配对状态提交到 Git。部署更新保留这些独立文件。
+
+### 语音识别的网关回退
+
+`ASR_API_KEY` 与 `ASR_BASE_URL` 可显式配置专用语音服务；文件中的专用 ASR 凭据、地址与模型会保留。没有专用配置时，`SILICONFLOW_API_KEY` 使用默认 SiliconFlow 地址；否则复用 OpenAI 兼容网关的密钥和地址。显式设置其他 `ASR_BASE_URL` 时必须同时提供语音密钥，不会将网关或 SiliconFlow 凭据转发到该地址。地址可包含 `/v1`，网关需支持 `audio/transcriptions` 与 `ASR_MODEL`（默认 `TeleAI/TeleSpeechASR`）。
+
+本机飞书设置支持扫码授权并确认保存应用凭据；授权凭据存于该主机的 EasyAgent 配置目录，不回显密钥。保存不会自动启动桥接，需另行启动或重启 `easyagent-bridge`。托管 systemd 桥接继续使用已有自建应用和使用者配对设置。扫码使用飞书注册接口，服务不可用时可使用自建应用。
