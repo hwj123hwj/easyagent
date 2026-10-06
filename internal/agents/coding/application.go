@@ -32,20 +32,23 @@ func NewCodingApplication(cfg config.Config) CodingApplication {
 	// 拉取失败保留本地清单，并明确提示，避免把回退误认为同步成功。
 	if cfg.OpenAIBaseURL != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if ids, err := modelsreg.FetchGatewayModels(ctx, cfg.OpenAIBaseURL, cfg.OpenAIAPIKey); err == nil {
+		if gwModels, err := modelsreg.FetchGatewayModelDefs(ctx, cfg.OpenAIBaseURL, cfg.OpenAIAPIKey); err == nil {
 			if cfg.Provider == "openai" {
 				gatewayReg := modelsreg.NewRegistry()
-				for _, id := range ids {
-					def, ok := reg.Get(id)
-					if !ok {
-						def = modelsreg.ModelDef{ID: id, Name: id}
+				gatewayReg.MergeGatewayModels("openai", gwModels)
+				// 本地已有的已知元数据优先覆盖最小推断
+				for _, m := range gwModels {
+					if localDef, ok := reg.Get(m.ID); ok {
+						if localDef.ContextWindow > 0 {
+							mDef, _ := gatewayReg.Get(m.ID)
+							mDef.ContextWindow = localDef.ContextWindow
+							gatewayReg.Register(mDef)
+						}
 					}
-					def.Provider = "openai"
-					gatewayReg.Register(def)
 				}
 				reg = gatewayReg
 			} else {
-				reg.MergeGateway("openai", ids)
+				reg.MergeGatewayModels("openai", gwModels)
 			}
 		} else {
 			slog.Warn("gateway model discovery failed; using local model catalog", "error", err)

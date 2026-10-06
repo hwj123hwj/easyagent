@@ -322,15 +322,25 @@ func (a *Agent) maybeCompact(ctx context.Context, history []ai.Message) []ai.Mes
 	if compaction.ShouldMicroCompact(contextTokens, contextWindow, a.compactionSettings) {
 		newHistory, cleared := compaction.MicroCompact(append([]ai.Message(nil), history...), a.compactionSettings.MicroKeepRecent)
 		if cleared > 0 {
-			if a.session != nil {
-				if err := a.session.AppendMicroCompaction(ctx, newHistory); err != nil {
-					a.emit(ctx, EventCompactionFailed{Error: "persist micro-compaction: " + err.Error()})
-					return history
-				}
+			tokensAfter := compaction.EstimateTokens(newHistory)
+			savings := contextTokens - tokensAfter
+			minSavings := a.compactionSettings.MinSavingsTokens
+			if minSavings <= 0 {
+				minSavings = 500
 			}
-			a.emit(ctx, EventMicroCompacted{ClearedResults: cleared, TokensBefore: contextTokens, TokensAfter: compaction.EstimateTokens(newHistory)})
-			history = newHistory
-			contextTokens = compaction.EstimateTokens(history) // 重算：Micro 后可能降到全量阈值以下
+			// 只有节省达到阈值才进行持久化和通知；极小的几十 token 局部清理不值得反复落盘和刷屏，
+			// 避免每次工具调用都产生挤牙膏式的微压缩干扰。
+			if savings >= minSavings {
+				if a.session != nil {
+					if err := a.session.AppendMicroCompaction(ctx, newHistory); err != nil {
+						a.emit(ctx, EventCompactionFailed{Error: "persist micro-compaction: " + err.Error()})
+						return history
+					}
+				}
+				a.emit(ctx, EventMicroCompacted{ClearedResults: cleared, TokensBefore: contextTokens, TokensAfter: tokensAfter})
+				history = newHistory
+				contextTokens = tokensAfter // 重算：Micro 后可能降到全量阈值以下
+			}
 		}
 	}
 

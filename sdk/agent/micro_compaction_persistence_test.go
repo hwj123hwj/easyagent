@@ -124,3 +124,30 @@ func TestFailedMicroCompactionKeepsOriginalContextAndWarns(t *testing.T) {
 	require.IsType(t, EventCompactionFailed{}, events[0])
 	require.Contains(t, events[0].(EventCompactionFailed).Error, "disk unavailable")
 }
+
+func TestMicroCompactionIgnoresTinySavings(t *testing.T) {
+	ctx := context.Background()
+	storage := session.NewJSONLStorage(filepath.Join(t.TempDir(), "session.jsonl"))
+	require.NoError(t, storage.Init())
+	defer storage.Close()
+	sess := session.New(storage)
+	// 写入几个极其微小的 tool results（比 clearedPlaceholder 只多几个字符）
+	for i := 0; i < 7; i++ {
+		id := fmt.Sprintf("ls-%d", i)
+		require.NoError(t, sess.AppendMessage(ctx, ai.AssistantMessage{ToolCalls: []ai.ToolCall{{ID: id, Name: "ls"}}}))
+		require.NoError(t, sess.AppendMessage(ctx, ai.ToolResultMessage{ToolCallID: id, Content: "file1.txt file2.txt file3.txt"}))
+	}
+	history, err := sess.BuildContext(ctx)
+	require.NoError(t, err)
+
+	// Settings 中 MinSavingsTokens 为 500
+	settings := compaction.Settings{Enabled: true, MicroCompactRatio: 0.1, MicroKeepRecent: 2, MinSavingsTokens: 500}
+	ag := New(Options{Session: sess, Model: ai.Model{ContextWindow: 1000}, CompactionSettings: settings})
+	var events []AgentEvent
+	ag.Subscribe(func(_ context.Context, event AgentEvent) { events = append(events, event) })
+
+	result := ag.maybeCompact(ctx, history)
+	// 因为每次只能省几个 token（远小于 500），不应触发持久化或事件通知
+	require.Equal(t, history, result)
+	require.Empty(t, events)
+}
