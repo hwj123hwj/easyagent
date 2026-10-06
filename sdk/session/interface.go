@@ -9,11 +9,12 @@ import (
 type EntryType string
 
 const (
-	EntryTypeMessage       EntryType = "message"
-	EntryTypeModelChange   EntryType = "model_change"
-	EntryTypeCompaction    EntryType = "compaction"
-	EntryTypeBranchSummary EntryType = "branch_summary"
-	EntryTypeLeaf          EntryType = "leaf"
+	EntryTypeMessage         EntryType = "message"
+	EntryTypeModelChange     EntryType = "model_change"
+	EntryTypeCompaction      EntryType = "compaction"
+	EntryTypeMicroCompaction EntryType = "micro_compaction"
+	EntryTypeBranchSummary   EntryType = "branch_summary"
+	EntryTypeLeaf            EntryType = "leaf"
 )
 
 // CompactionInfo describes a persisted full compaction. Token counts are estimates.
@@ -33,20 +34,27 @@ type CompactionRecord struct {
 	Info      *CompactionInfo `json:"info,omitempty"`
 }
 
+// ToolResultReplacement changes model context without rewriting the source message.
+type ToolResultReplacement struct {
+	EntryID string `json:"entry_id"`
+	Content string `json:"content"`
+}
+
 type Entry struct {
-	ID               string                `json:"id"`
-	Type             EntryType             `json:"type"`
-	ParentID         string                `json:"parent_id,omitempty"`
-	Timestamp        int64                 `json:"timestamp"`
-	User             *ai.UserMessage       `json:"user,omitempty"`
-	Assistant        *ai.AssistantMessage  `json:"assistant,omitempty"`
-	Tool             *ai.ToolResultMessage `json:"tool,omitempty"`
-	Model            string                `json:"model,omitempty"`
-	Summary          string                `json:"summary,omitempty"`
-	TargetID         string                `json:"target_id,omitempty"`
-	Retained         []Entry               `json:"retained,omitempty"`
-	Compaction       *CompactionInfo       `json:"compaction,omitempty"`
-	FirstKeptEntryID string                `json:"first_kept_entry_id,omitempty"`
+	ID               string                  `json:"id"`
+	Type             EntryType               `json:"type"`
+	ParentID         string                  `json:"parent_id,omitempty"`
+	Timestamp        int64                   `json:"timestamp"`
+	User             *ai.UserMessage         `json:"user,omitempty"`
+	Assistant        *ai.AssistantMessage    `json:"assistant,omitempty"`
+	Tool             *ai.ToolResultMessage   `json:"tool,omitempty"`
+	Model            string                  `json:"model,omitempty"`
+	Summary          string                  `json:"summary,omitempty"`
+	TargetID         string                  `json:"target_id,omitempty"`
+	Retained         []Entry                 `json:"retained,omitempty"`
+	Compaction       *CompactionInfo         `json:"compaction,omitempty"`
+	ToolReplacements []ToolResultReplacement `json:"tool_replacements,omitempty"`
+	FirstKeptEntryID string                  `json:"first_kept_entry_id,omitempty"`
 }
 
 type SessionStorage interface {

@@ -615,7 +615,7 @@ test("compaction cards restore from history and replay without truncating Unicod
   s = reduceEnvelope(s, { type: "event", run_id: "run", seq: 11, event: { type: "compacted", summary } });
   assert.equal(s.transcript.filter(item => item.kind === "compaction").length, 2);
   s = reduceEnvelope(s, { type: "event", run_id: "run", seq: 12, event: { type: "micro_compacted", cleared_count: 12, tokens_before: 20000, tokens_after: 6000 } });
-  assert.match(s.transcript.at(-1).text, /12.*20000 → 6000.*仅本轮请求/);
+  assert.match(s.transcript.at(-1).text, /12.*20000 → 6000.*后续请求沿用清理结果/);
   s = reduceEnvelope(s, { type: "event", run_id: "run", seq: 13, event: { type: "compaction_failed", error: "disk unavailable" } });
   assert.equal(s.transcript.at(-1).kind, "error");
   assert.match(s.transcript.at(-1).text, /disk unavailable/);

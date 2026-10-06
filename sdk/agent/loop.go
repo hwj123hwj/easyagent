@@ -320,8 +320,14 @@ func (a *Agent) maybeCompact(ctx context.Context, history []ai.Message) []ai.Mes
 
 	// 第一级：MicroCompact（清旧 tool result，不依赖 summarizeFunc）
 	if compaction.ShouldMicroCompact(contextTokens, contextWindow, a.compactionSettings) {
-		newHistory, cleared := compaction.MicroCompact(history, a.compactionSettings.MicroKeepRecent)
+		newHistory, cleared := compaction.MicroCompact(append([]ai.Message(nil), history...), a.compactionSettings.MicroKeepRecent)
 		if cleared > 0 {
+			if a.session != nil {
+				if err := a.session.AppendMicroCompaction(ctx, newHistory); err != nil {
+					a.emit(ctx, EventCompactionFailed{Error: "persist micro-compaction: " + err.Error()})
+					return history
+				}
+			}
 			a.emit(ctx, EventMicroCompacted{ClearedResults: cleared, TokensBefore: contextTokens, TokensAfter: compaction.EstimateTokens(newHistory)})
 			history = newHistory
 			contextTokens = compaction.EstimateTokens(history) // 重算：Micro 后可能降到全量阈值以下

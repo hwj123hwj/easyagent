@@ -282,6 +282,6 @@ GET /health
 
 `GET /sessions/{id}/context` 遵循现有 Bearer 认证。响应包含 `model`、`system`、`messages`（每项为 `{role, message}`）、`tools`、`usage` 和 `compactions`。这是当前分支的逻辑模型输入，尚未执行供应商格式转换，也不包含未发送草稿与待发消息；并非上一轮实际 HTTP 请求。`usage` 计入消息、系统和工具定义的文本估算，不计图片等多模态成本。
 
-`compactions` 按时间顺序包含 `id`、毫秒 `timestamp`、完整 `summary` 和可选 `info`。新记录的 `info` 包含 `trigger`（`manual` / `automatic`）、可选 `instructions`、`messages_before/after` 与 `tokens_before/after`（仅消息估算）。历史记录可能没有 `info`。微压缩仅影响当前请求，其数量和估算变化通过 `micro_compacted` 事件传递，不作为全量摘要记录。
+`compactions` 按时间顺序包含 `id`、毫秒 `timestamp`、完整 `summary` 和可选 `info`。新记录的 `info` 包含 `trigger`（`manual` / `automatic`）、可选 `instructions`、`messages_before/after` 与 `tokens_before/after`（仅消息估算）。历史记录可能没有 `info`。微压缩将旧工具输出的清理结果持久化为当前分支上的独立记录，后续请求及重启恢复会沿用；原始工具输出保持不变，聊天历史仍可查看。其数量和估算变化通过 `micro_compacted` 事件传递，不作为全量摘要记录。
 
 运行中或有其他会话修改操作时返回 `409`，避免展示不一致的快照。响应禁止缓存。`POST /sessions/{id}/compact` 接收 `{ "custom_instructions": "保留接口约定与未完成测试" }`，空要求使用默认摘要策略。压缩生成或持久化失败不替换原上下文；成功后重连和重启保留摘要及近期完整消息。

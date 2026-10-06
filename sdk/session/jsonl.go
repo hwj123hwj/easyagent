@@ -121,7 +121,7 @@ func (s *JSONLStorage) load() error {
 		switch entry.Type {
 		case EntryTypeLeaf:
 			s.leafID = entry.TargetID
-		case EntryTypeMessage, EntryTypeCompaction:
+		case EntryTypeMessage, EntryTypeCompaction, EntryTypeMicroCompaction:
 			s.leafID = entry.ID
 		}
 	}
@@ -167,7 +167,7 @@ func (s *JSONLStorage) Append(ctx context.Context, entry Entry) error {
 	switch entry.Type {
 	case EntryTypeLeaf:
 		s.leafID = entry.TargetID
-	case EntryTypeMessage, EntryTypeCompaction:
+	case EntryTypeMessage, EntryTypeCompaction, EntryTypeMicroCompaction:
 		s.leafID = entry.ID
 	}
 	// Enforce maxEntries cap.

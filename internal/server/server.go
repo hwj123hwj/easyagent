@@ -477,7 +477,7 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages, err := sess.Session().BuildContext(r.Context())
+	messages, err := sess.Session().BuildDisplayContext(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

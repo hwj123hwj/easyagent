@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
+	"github.com/hwj123hwj/easyagent/sdk/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,6 +15,52 @@ import (
 func tempDir(t *testing.T) string {
 	dir := t.TempDir()
 	return dir
+}
+
+func TestForkInheritsMicroCompactionWithoutChangingSourceOrOriginalOutput(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewManager(t.TempDir())
+	id, _, err := mgr.Create(ctx)
+	require.NoError(t, err)
+	source, _, err := mgr.Open(ctx, id)
+	require.NoError(t, err)
+	defer source.Storage().Close()
+	history := []ai.Message{ai.NewTextUserMessage("read file"), ai.AssistantMessage{ToolCalls: []ai.ToolCall{{ID: "read", Name: "read"}}}, ai.ToolResultMessage{ToolCallID: "read", Content: "original output"}, ai.AssistantMessage{Text: "done"}}
+	for _, msg := range history {
+		require.NoError(t, source.AppendMessage(ctx, msg))
+	}
+	ids, err := source.BuildContextEntryIDs(ctx)
+	require.NoError(t, err)
+	cleaned := append([]ai.Message(nil), history...)
+	cleaned[2] = ai.ToolResultMessage{ToolCallID: "read", Content: "cleared output"}
+	require.NoError(t, source.AppendMicroCompaction(ctx, cleaned))
+	fullID, _, err := mgr.ForkAt(ctx, id, nil)
+	require.NoError(t, err)
+	full, _, err := mgr.Open(ctx, fullID)
+	require.NoError(t, err)
+	defer full.Storage().Close()
+	actual, err := full.BuildContext(ctx)
+	require.NoError(t, err)
+	require.Equal(t, cleaned, actual)
+	display, err := full.BuildDisplayContext(ctx)
+	require.NoError(t, err)
+	require.Equal(t, history, display)
+	fullIDs, err := full.BuildContextEntryIDs(ctx)
+	require.NoError(t, err)
+	require.Equal(t, ids, fullIDs)
+	// An earlier cut must not import a later branch's cleanup marker.
+	cutID, _, err := mgr.ForkAt(ctx, id, &ids[3])
+	require.NoError(t, err)
+	cut, _, err := mgr.Open(ctx, cutID)
+	require.NoError(t, err)
+	defer cut.Storage().Close()
+	actual, err = cut.BuildContext(ctx)
+	require.NoError(t, err)
+	require.Equal(t, history, actual)
+	require.NoError(t, full.AppendCompactionKeeping(ctx, "fork summary", nil, &session.CompactionInfo{Trigger: "manual"}))
+	actual, err = source.BuildContext(ctx)
+	require.NoError(t, err)
+	require.Equal(t, cleaned, actual, "fork writes must not affect source context")
 }
 
 func TestManager_Create(t *testing.T) {
