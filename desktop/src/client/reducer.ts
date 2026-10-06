@@ -93,6 +93,7 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
         kind: "assistant",
         id: prefix + "-text",
         text: displayText(message.content),
+        entryId: !message.tool_calls?.length && !["tool_use", "error", "aborted"].includes(message.stop_reason || "") ? message.entry_id : undefined,
       });
     for (const call of message.tool_calls || []) {
       const outcome = outcomes.get(`${index}:${call.id}`);
@@ -304,7 +305,9 @@ export function reduceEnvelope(
     if (!message.reset && (message.seq || 0) < state.seq) return state;
     let next = historyProjection(message.messages || []);
     next.run = message.run;
-    if (message.run?.prompt)
+    // Restored receipts carry the full persisted context, including this user.
+    const includesRunUser = !!message.run?.user_entry_id && (message.messages || []).some(item => item.entry_id === message.run!.user_entry_id);
+    if (message.run?.prompt && !includesRunUser)
       next.transcript.push({
         kind: "user",
         id: `${message.run.run_id}-user`,
@@ -340,11 +343,17 @@ export function reduceEnvelope(
     });
   }
   if (message.type === "replay") {
-    let next: RunProjection = { ...state, run: message.run || state.run };
+    // Replay terminal metadata only after its preceding deltas/tools. Applying
+    // "completed" early would bind the final entry ID to intermediate output.
+    let next: RunProjection = {
+      ...state,
+      run: state.run || (message.run && { ...message.run, state: "running" }),
+    };
     for (const event of message.events || [])
       next = reduceEnvelope(next, event as Envelope);
     return terminalProjection({
       ...next,
+      run: message.run || next.run,
       seq: Math.max(next.seq, message.seq || 0),
       confirmations: message.pending_confirmations || [],
     });
@@ -430,6 +439,7 @@ export function reduceEnvelope(
       run: next.run
         ? {
             ...next.run,
+            ...message.run,
             state: status,
             error: message.message || message.error || next.run.error,
           }
@@ -489,6 +499,17 @@ function terminalProjection(state: RunProjection): RunProjection {
         }
       : item,
   );
+  if (status === "completed" && state.run?.assistant_entry_id) {
+    // Live/snapshot event rows are scoped by run ID. Do not match by text:
+    // intermediate output and different turns may have identical answers.
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      const item = transcript[i];
+      if (item.kind === "assistant" && item.id.startsWith(state.run.run_id + "-")) {
+        transcript[i] = { ...item, entryId: state.run.assistant_entry_id };
+        break;
+      }
+    }
+  }
   if (
     status === "interrupted" &&
     !transcript.some((item) => item.id === state.run?.run_id + "-interrupted")

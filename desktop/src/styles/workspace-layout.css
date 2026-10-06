@@ -912,32 +912,6 @@
   cursor: zoom-in;
   display: block;
 }
-.user-message-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-.personal-user:hover .user-message-actions {
-  opacity: 1;
-}
-.user-fork-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 0;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
-}
-.user-fork-btn:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
 .file-mention-menu {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -1199,4 +1173,3 @@
 }
 .attachment-image-status { color: var(--text-muted); font-size: 12px; }
 .personal-user:focus-within .user-message-actions { opacity: 1; }
-.user-fork-btn:disabled { cursor: default; opacity: .45; }

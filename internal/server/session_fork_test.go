@@ -154,6 +154,7 @@ func TestForkEmptyAndCompactedAnchors(t *testing.T) {
 	}{
 		{"empty", `{"before_message_index":0}`, 0, false},
 		{"retained user", `{"entry_id":"` + ids[2] + `"}`, 1, true},
+		{"retained answer", `{"entry_id":"` + ids[3] + `"}`, 2, true},
 		{"before next user", `{"before_message_index":1}`, 2, true},
 		{"full", `{}`, 4, true},
 	} {
@@ -237,4 +238,38 @@ func TestAttachmentPreviewRequiresAuthAndRejectsWorkspaceEscape(t *testing.T) {
 	rec = httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	require.Equal(t, 400, rec.Code)
+}
+
+func TestForkFinalAnswerRetainsToolsAndExcludesNextTurn(t *testing.T) {
+	s, _, _ := newRunTestServer(t)
+	ctx := context.Background()
+	source, err := s.resolveSession(ctx, "")
+	require.NoError(t, err)
+	history := []ai.Message{
+		ai.NewTextUserMessage("repeat"),
+		ai.AssistantMessage{Text: "same", ToolCalls: []ai.ToolCall{{ID: "read", Name: "read"}}},
+		ai.ToolResultMessage{ToolCallID: "read", Content: "file contents"},
+		ai.AssistantMessage{Text: "same", StopReason: ai.StopReasonStop},
+		ai.NewTextUserMessage("repeat"),
+		ai.AssistantMessage{Text: "same", StopReason: ai.StopReasonStop},
+	}
+	for _, msg := range history {
+		require.NoError(t, source.Session().AppendMessage(ctx, msg))
+	}
+	ids, err := source.Session().BuildContextEntryIDs(ctx)
+	require.NoError(t, err)
+	req := httptest.NewRequest("POST", "/", bytes.NewBufferString(`{"entry_id":"`+ids[3]+`"}`))
+	req.SetPathValue("id", source.SessionID())
+	rec := httptest.NewRecorder()
+	s.forkSession(rec, req)
+	require.Equal(t, 201, rec.Code, rec.Body.String())
+	var response forkResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	require.Equal(t, 4, response.KeptMessages)
+	forked, _, err := s.app.SessionManager().Open(ctx, response.ID)
+	require.NoError(t, err)
+	defer forked.Storage().Close()
+	retained, err := forked.BuildContext(ctx)
+	require.NoError(t, err)
+	require.Equal(t, history[:4], retained)
 }
