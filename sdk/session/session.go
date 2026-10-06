@@ -62,6 +62,10 @@ func (s *Session) AppendMessage(ctx context.Context, msg ai.Message) error {
 
 // contextEntries reconstructs the logical context and preserves source IDs.
 func (s *Session) contextEntries(ctx context.Context) ([]Entry, error) {
+	return s.buildContextEntries(ctx, true)
+}
+
+func (s *Session) buildContextEntries(ctx context.Context, applyMicro bool) ([]Entry, error) {
 	entries, err := s.storage.GetPathToRoot(ctx, "")
 	if err != nil {
 		return nil, err
@@ -77,9 +81,31 @@ func (s *Session) contextEntries(ctx context.Context) ([]Entry, error) {
 			break
 		}
 	}
+	replacements := make(map[string]string)
 	for _, entry := range entries[start:] {
+		if applyMicro && entry.Type == EntryTypeMicroCompaction {
+			for _, replacement := range entry.ToolReplacements {
+				replacements[replacement.EntryID] = replacement.Content
+			}
+		}
 		if len(entryToMessages(entry)) > 0 {
 			result = append(result, entry)
+		}
+	}
+	if !applyMicro {
+		// A full-compaction tail may already contain cleaned tool contents.
+		// Restore their original contents for display, keeping the logical tail.
+		for _, entry := range entries {
+			if entry.Type == EntryTypeMessage && entry.Tool != nil {
+				replacements[entry.ID] = entry.Tool.Content
+			}
+		}
+	}
+	for i, entry := range result {
+		if content, ok := replacements[entry.ID]; ok && entry.Tool != nil {
+			tool := *entry.Tool
+			tool.Content = content
+			result[i].Tool = &tool
 		}
 	}
 	return result, nil

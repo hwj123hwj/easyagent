@@ -136,7 +136,7 @@ function eventProjection(
     return { ...state, transcript };
   }
   if (event.type === "micro_compacted") {
-    transcript.push({ kind: "system", id: `${runKey}-${key}-micro`, text: `微压缩：清理 ${event.cleared_count || 0} 个旧工具输出，消息估算 ${event.tokens_before || 0} → ${event.tokens_after || 0} tokens（仅本轮请求）` });
+    transcript.push({ kind: "system", id: `${runKey}-${key}-micro`, text: `微压缩：清理 ${event.cleared_count || 0} 个旧工具输出，消息估算 ${event.tokens_before || 0} → ${event.tokens_after || 0} tokens（后续请求沿用清理结果）` });
     return { ...state, transcript };
   }
   if (event.type === "compaction_failed") {

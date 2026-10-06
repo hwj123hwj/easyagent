@@ -58,6 +58,47 @@ func TestContextEndpointPreservesLogicalMessagesAndCompactionRecords(t *testing.
 	require.Equal(t, http.StatusBadRequest, bad.Code)
 }
 
+func TestMicroCompactionShowsOriginalOutputInHistoryButCleanedModelContext(t *testing.T) {
+	ctx := context.Background()
+	application := newTestApp(t)
+	srv := New(application, nil)
+	defer srv.cancel()
+	sess, err := application.NewSession(ctx)
+	require.NoError(t, err)
+	history := []ai.Message{ai.NewTextUserMessage("inspect file"), ai.AssistantMessage{ToolCalls: []ai.ToolCall{{ID: "read", Name: "read"}}}, ai.ToolResultMessage{ToolCallID: "read", Content: "original readable file output"}}
+	for _, msg := range history {
+		require.NoError(t, sess.Session().AppendMessage(ctx, msg))
+	}
+	cleaned := append([]ai.Message(nil), history...)
+	cleaned[2] = ai.ToolResultMessage{ToolCallID: "read", Content: "cleared model input"}
+	require.NoError(t, sess.Session().AppendMicroCompaction(ctx, cleaned))
+	for _, endpoint := range []string{"messages", "context"} {
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, localReq(http.MethodGet, "/sessions/"+sess.SessionID()+"/"+endpoint, nil))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		if endpoint == "messages" {
+			require.Contains(t, w.Body.String(), "original readable file output")
+			require.NotContains(t, w.Body.String(), "cleared model input")
+		} else {
+			require.Contains(t, w.Body.String(), "cleared model input")
+			require.NotContains(t, w.Body.String(), "original readable file output")
+		}
+	}
+	// The WebSocket/reconnect projection must use the same original outputs.
+	snapshot, err := srv.runSnapshot(sess.SessionID(), 0, "", nil)
+	require.NoError(t, err)
+	data, err := json.Marshal(snapshot.Messages)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "original readable file output")
+	require.NotContains(t, string(data), "cleared model input")
+	srv.invalidateRunSnapshot(sess.SessionID())
+	snapshot, err = srv.runSnapshot(sess.SessionID(), 0, "", nil)
+	require.NoError(t, err)
+	data, err = json.Marshal(snapshot.Messages)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "original readable file output")
+}
+
 func TestContextEndpointRejectsRunningSession(t *testing.T) {
 	srv, _, gateway := newRunTestServer(t)
 	run, _, err := srv.startRun("", "test", "inspect-busy")

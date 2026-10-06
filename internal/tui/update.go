@@ -507,7 +507,7 @@ func (m *TuiModel) startAgentStream(input string) tea.Cmd {
 			case agent.StreamEventCompactionFailed:
 				msg = CompactionMsg{Kind: "failed", Summary: "上下文压缩失败，继续使用原上下文：" + event.Error}
 			case agent.StreamEventMicroCompacted:
-				msg = CompactionMsg{Kind: "micro", Summary: fmt.Sprintf("微压缩：清理 %d 个旧工具输出；消息估算 %d → %d tokens（仅本轮请求）", event.ClearedCount, event.TokensBefore, event.TokensAfter)}
+				msg = CompactionMsg{Kind: "micro", Summary: fmt.Sprintf("微压缩：清理 %d 个旧工具输出；消息估算 %d → %d tokens（后续请求沿用清理结果）", event.ClearedCount, event.TokensBefore, event.TokensAfter)}
 
 			case agent.StreamEventLoopDetected:
 				msg = LoopDetectedMsg{Tool: event.ToolName, Count: event.RepeatCount}
