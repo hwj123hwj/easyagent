@@ -177,6 +177,7 @@ func (s *Server) Handler() http.Handler {
 	restMux.HandleFunc("POST /sessions", s.createSession)
 	restMux.HandleFunc("POST /sessions/{id}/fork", s.forkSession)
 	restMux.HandleFunc("GET /sessions/{id}/attachments/{attID}/raw", s.getAttachmentRaw)
+	restMux.HandleFunc("GET /usage/summary", s.usageSummary)
 	restMux.HandleFunc("GET /sessions/{id}/messages", s.getSessionMessages)
 	restMux.HandleFunc("GET /sessions/{id}/info", s.getSessionInfo)
 	restMux.HandleFunc("POST /sessions/{id}/permissions", s.setSessionPermissions)

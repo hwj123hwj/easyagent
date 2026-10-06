@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  Notification,
   ipcMain,
   shell,
   dialog,
@@ -343,6 +344,38 @@ handle("start-server", async () => {
 handle("check-for-update", checkForUpdate);
 handle("open-download-page", openExternal);
 handle("open-external", openExternal);
+
+// ─── Run completion notifications & unread badge ────────────────────────────
+
+// notify-run-done: renderer reports a finished run; the main process shows a
+// native notification only when the window is not focused (in-focus runs are
+// visible on screen already). Clicking the notification focuses the window.
+handle("notify-run-done", (payload: { sessionTitle?: string; ok: boolean }) => {
+  if (!mainWindow || mainWindow.isFocused()) return;
+  const title = payload?.sessionTitle?.trim() || "EasyAgent 会话";
+  const body = payload?.ok === false ? "任务失败，点击查看原因" : "任务已完成，点击查看结果";
+  const notification = new Notification({
+    title,
+    body,
+    silent: false,
+  });
+  notification.on("click", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+  notification.show();
+});
+
+// set-badge: unread session count on the macOS Dock icon (no-op elsewhere).
+handle("set-badge", (count: number) => {
+  if (process.platform === "darwin" && app.dock) {
+    app.dock.setBadge(count > 0 ? String(count) : "");
+  }
+});
+
 handle("copy-text", (text: string) => {
   if (typeof text !== "string") throw new Error("复制内容无效");
   clipboard.writeText(text);

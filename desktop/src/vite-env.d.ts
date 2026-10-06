@@ -39,6 +39,8 @@ interface PiAPI {
   checkProviderConfig: (input?: import('./types').ProviderConfigInput) => Promise<import('./types').ProviderCheckResult>;
   uploadAudio: (data:string,mimeType:string,filename:string) => Promise<{text?:string}>;
   copyText: (text:string) => Promise<void>;
+  notifyRunDone: (payload:{sessionTitle?:string; ok:boolean}) => Promise<void>;
+  setBadge: (count:number) => Promise<void>;
   loginMCP: (name:string,workspace:string) => Promise<void>;
 
   getServerUrl: () => Promise<string | null>;
