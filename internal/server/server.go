@@ -254,6 +254,8 @@ func (s *Server) Handler() http.Handler {
 	topMux.Handle("/chat/", restHandler)
 	topMux.Handle("/sessions", restHandler)
 	topMux.Handle("/sessions/", restHandler)
+	topMux.Handle("/computer/", restHandler)
+	topMux.Handle("/usage/", restHandler)
 	topMux.Handle("/models", restHandler)
 	topMux.Handle("/tools", restHandler)
 	topMux.Handle("/commands", restHandler)

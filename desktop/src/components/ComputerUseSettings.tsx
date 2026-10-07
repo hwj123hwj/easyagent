@@ -1,17 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiRequest, useStore } from "../store";
 
-interface ComputerSettings {
-  enabled: boolean;
-  provider: string;
-  available: boolean;
-  granted: boolean;
-  missing?: string[];
-  approval_policy: "ask" | "auto";
-  approved_apps: string[];
-  lease_holder: string;
-  helper_path?: string;
-}
+import { parseComputerSettings, type ComputerSettings } from "../client/computer-settings";
 
 const RISK_BANNER =
   "Computer use 功能属于测试阶段，而且对模型性能要求较高，请在知晓所有风险后开启。" +
@@ -66,7 +56,7 @@ export function ComputerUseSettings() {
     try {
       const next = await apiRequest<ComputerSettings>("GET", "/computer/settings");
       if (current !== epoch.current) return;
-      setSettings(next);
+      setSettings(parseComputerSettings(next));
       setError("");
     } catch (err) {
       if (current === epoch.current) setError(err instanceof Error ? err.message : String(err));
@@ -90,7 +80,7 @@ export function ComputerUseSettings() {
     setError("");
     try {
       const next = await apiRequest<ComputerSettings>("POST", "/computer/settings", body);
-      if (current === epoch.current) setSettings(next);
+      if (current === epoch.current) setSettings(parseComputerSettings(next));
     } catch (err) {
       if (current === epoch.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
