@@ -63,6 +63,37 @@ func TestComputerSettingsTogglePersistsAcrossRestart(t *testing.T) {
 		require.True(t, fresh.EnableComputerUse, "override must survive restart")
 	}
 
+	// Approval policy: switch to auto, invalid values rejected, clear apps.
+	{
+		req := httptest.NewRequest("POST", "/computer/settings",
+			bytes.NewReader([]byte(`{"approval_policy":"auto"}`)))
+		rec := httptest.NewRecorder()
+		s.updateComputerSettings(rec, req)
+		var view struct {
+			ApprovalPolicy string `json:"approval_policy"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view))
+		require.Equal(t, "auto", view.ApprovalPolicy)
+
+		// 非法策略被拒且不落盘
+		req = httptest.NewRequest("POST", "/computer/settings",
+			bytes.NewReader([]byte(`{"approval_policy":"yolo"}`)))
+		rec = httptest.NewRecorder()
+		s.updateComputerSettings(rec, req)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+
+		// 清空已批应用
+		req = httptest.NewRequest("POST", "/computer/settings",
+			bytes.NewReader([]byte(`{"clear_approved_apps":true}`)))
+		rec = httptest.NewRecorder()
+		s.updateComputerSettings(rec, req)
+		var view2 struct {
+			ApprovedApps []string `json:"approved_apps"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view2))
+		require.Empty(t, view2.ApprovedApps)
+	}
+
 	// Toggle back off.
 	{
 		req := httptest.NewRequest("POST", "/computer/settings",

@@ -156,7 +156,7 @@ func generateOverview(relPath string, lines []string) string {
 
 	totalLines := len(lines)
 	wordCount := 0
-	var headers []string // lines starting with #
+	var headers []string  // lines starting with #
 	var sections []string // header + first content line
 
 	scanner := bufio.NewScanner(strings.NewReader(strings.Join(lines, "\n")))

@@ -3,13 +3,13 @@ package music
 import (
 	"path/filepath"
 
-	"github.com/hwj123hwj/easyagent/sdk/agent"
 	musicprompt "github.com/hwj123hwj/easyagent/internal/agents/music/prompt"
 	musictools "github.com/hwj123hwj/easyagent/internal/agents/music/tools"
-	"github.com/hwj123hwj/easyagent/sdk/config"
 	"github.com/hwj123hwj/easyagent/internal/music"
 	"github.com/hwj123hwj/easyagent/internal/music/pref"
 	"github.com/hwj123hwj/easyagent/internal/profile"
+	"github.com/hwj123hwj/easyagent/sdk/agent"
+	"github.com/hwj123hwj/easyagent/sdk/config"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
 )
 
@@ -49,12 +49,12 @@ func NewMusicApplication(cfg config.Config, router *music.SourceRouter, cache *m
 func (a MusicApplication) BuildTools(opts runtime.ToolBuildOptions) []agent.Tool {
 	audioBaseURL := "/music/audio"
 	return musictools.BuildList(musictools.ListOptions{
-		Router:        a.Router,
-		Cache:         a.Cache,
-		Pref:          a.Pref,
-		AudioBaseURL:  audioBaseURL,
-		AllowedTools:  opts.AllowedTools,
-		BlockedTools:  opts.BlockedTools,
+		Router:       a.Router,
+		Cache:        a.Cache,
+		Pref:         a.Pref,
+		AudioBaseURL: audioBaseURL,
+		AllowedTools: opts.AllowedTools,
+		BlockedTools: opts.BlockedTools,
 	})
 }
 

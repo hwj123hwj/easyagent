@@ -67,15 +67,17 @@ type Config struct {
 	OpenAIBaseURL string
 
 	// Tool sandbox
-	AllowOutsideWorkspace bool // Explicit file-path policy; independent of confirmation.
-	Workspace             string
-	EnableBash            bool
-	AutoApprove           bool // 全权模式：跳过危险工具的 y/n 确认（信得过自己环境再开）
-	EnableWeb             bool
-	WebTimeoutSeconds     int
-	EnableWebSearch       bool
-	EnableComputerUse     bool   // experimental: expose the computer-use tool (read-only in PR-1)
-	MCPConfigPath         string // User MCP configuration; empty uses ~/.easyagent/mcp.json.
+	AllowOutsideWorkspace  bool // Explicit file-path policy; independent of confirmation.
+	Workspace              string
+	EnableBash             bool
+	AutoApprove            bool // 全权模式：跳过危险工具的 y/n 确认（信得过自己环境再开）
+	EnableWeb              bool
+	WebTimeoutSeconds      int
+	EnableWebSearch        bool
+	EnableComputerUse      bool     // experimental: expose the computer-use tool
+	ComputerApprovalPolicy string   // computer perform_action 审批策略: "ask"(默认) | "auto"(仅高危确认)
+	ApprovedApps           []string // 已批准执行键鼠控制的应用（bundle id 或名称）
+	MCPConfigPath          string   // User MCP configuration; empty uses ~/.easyagent/mcp.json.
 
 	// Execution backend
 	ExecutionMode string // "local" (default) or "ssh"
@@ -130,12 +132,13 @@ func Default() Config {
 		OpenAIBaseURL: "http://localhost:4001",
 		OpenAIModel:   "longcat-opus",
 
-		Workspace:         "", // empty = use cwd
-		EnableBash:        false,
-		EnableWeb:         false,
-		WebTimeoutSeconds: 30,
-		EnableWebSearch:   false,
-		EnableComputerUse: false, // opt-in experimental
+		Workspace:              "", // empty = use cwd
+		EnableBash:             false,
+		EnableWeb:              false,
+		WebTimeoutSeconds:      30,
+		EnableWebSearch:        false,
+		EnableComputerUse:      false, // opt-in experimental
+		ComputerApprovalPolicy: "ask",
 
 		MaxOutputLen: 30000,
 
@@ -219,6 +222,9 @@ func (c *Config) LoadFromEnv() {
 	c.WebTimeoutSeconds = getEnvInt("EA_WEB_TIMEOUT_SECONDS", c.WebTimeoutSeconds)
 	c.EnableWebSearch = getEnvBool("EA_ENABLE_WEB_SEARCH", c.EnableWebSearch)
 	c.EnableComputerUse = getEnvBool("EA_ENABLE_COMPUTER_USE", c.EnableComputerUse)
+	if p := os.Getenv("EA_COMPUTER_APPROVAL_POLICY"); p == "auto" || p == "ask" {
+		c.ComputerApprovalPolicy = p
+	}
 
 	// Anthropic
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
@@ -549,7 +555,9 @@ func (c *Config) LoadFromYAML(path string) error {
 // keep precedence as boot-time sources, this file captures runtime changes.
 
 type runtimeOverrides struct {
-	EnableComputerUse *bool `json:"enable_computer_use,omitempty"`
+	EnableComputerUse      *bool    `json:"enable_computer_use,omitempty"`
+	ComputerApprovalPolicy *string  `json:"computer_approval_policy,omitempty"`
+	ApprovedApps           []string `json:"approved_apps,omitempty"`
 }
 
 // LoadRuntimeOverrides applies <dataDir>/settings.json on top of c. Missing
@@ -566,6 +574,63 @@ func (c *Config) LoadRuntimeOverrides(dataDir string) {
 	if o.EnableComputerUse != nil {
 		c.EnableComputerUse = *o.EnableComputerUse
 	}
+	if o.ComputerApprovalPolicy != nil && (*o.ComputerApprovalPolicy == "ask" || *o.ComputerApprovalPolicy == "auto") {
+		c.ComputerApprovalPolicy = *o.ComputerApprovalPolicy
+	}
+	c.ApprovedApps = o.ApprovedApps
+}
+
+// SaveRuntimeOverrideComputerPolicy persists the approval policy ("ask"/"auto").
+func SaveRuntimeOverrideComputerPolicy(dataDir, policy string) error {
+	if policy != "ask" && policy != "auto" {
+		return fmt.Errorf("非法审批策略 %q（仅 ask/auto）", policy)
+	}
+	return mutateRuntimeOverrides(dataDir, func(o *runtimeOverrides) {
+		o.ComputerApprovalPolicy = &policy
+	})
+}
+
+// RecordApprovedApp dedupe-appends an app to the approved list (cap 50).
+func RecordApprovedApp(dataDir, app string) error {
+	if app == "" {
+		return nil
+	}
+	return mutateRuntimeOverrides(dataDir, func(o *runtimeOverrides) {
+		for _, existing := range o.ApprovedApps {
+			if existing == app {
+				return
+			}
+		}
+		o.ApprovedApps = append(o.ApprovedApps, app)
+		if len(o.ApprovedApps) > 50 {
+			o.ApprovedApps = o.ApprovedApps[len(o.ApprovedApps)-50:]
+		}
+	})
+}
+
+// ClearApprovedApps empties the approved-apps list.
+func ClearApprovedApps(dataDir string) error {
+	return mutateRuntimeOverrides(dataDir, func(o *runtimeOverrides) {
+		o.ApprovedApps = []string{}
+	})
+}
+
+// mutateRuntimeOverrides is the single-writer helper for settings.json.
+func mutateRuntimeOverrides(dataDir string, mutate func(o *runtimeOverrides)) error {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dataDir, "settings.json")
+	o := runtimeOverrides{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &o)
+	}
+	mutate(&o)
+	data, err := json.MarshalIndent(o, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 // SaveRuntimeOverrideComputerUse persists the computer-use toggle only,

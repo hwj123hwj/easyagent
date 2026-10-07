@@ -18,10 +18,10 @@ import (
 
 // SearchQuery is the input to a search strategy.
 type SearchQuery struct {
-	Query    string   // free-text keywords (space-separated)
-	Tag      string   // exact tag filter (case-insensitive)
-	Category string   // category filter
-	Limit    int      // max results (0 = no limit)
+	Query    string // free-text keywords (space-separated)
+	Tag      string // exact tag filter (case-insensitive)
+	Category string // category filter
+	Limit    int    // max results (0 = no limit)
 }
 
 // SearchResult is a single hit.

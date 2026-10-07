@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hwj123hwj/easyagent/sdk/agent"
 	codingprofile "github.com/hwj123hwj/easyagent/internal/agents/coding/profile"
 	"github.com/hwj123hwj/easyagent/internal/handoff"
+	"github.com/hwj123hwj/easyagent/sdk/agent"
 	platformprompt "github.com/hwj123hwj/easyagent/sdk/prompt"
 	"github.com/hwj123hwj/easyagent/sdk/skill"
 )

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
+	"github.com/hwj123hwj/easyagent/sdk/config"
 )
 
 // ─── Helper bridge ───────────────────────────────────────────────────────────
@@ -129,14 +130,32 @@ var Registry = &leaseRegistry{}
 // Tool is the single model-facing computer tool. PR-1 exposes read-only
 // actions; the schema gates future control actions behind the same lease.
 type Tool struct {
+	dataDir  string // settings.json lives here (approved-apps persistence)
 	shotsDir string // where screenshots are persisted
+
+	mu             sync.Mutex
+	approvalPolicy string   // "ask" (default) | "auto"
+	approvedApps   []string // apps actually controlled in auto mode (session view)
 }
 
-// NewTool wires the computer tool to a screenshot dir under the data dir.
+// NewTool wires the computer tool to the data dir; policy defaults to "ask".
 func NewTool(dataDir string) *Tool {
 	return &Tool{
+		dataDir:  dataDir,
 		shotsDir: filepath.Join(dataDir, "computer", "screenshots"),
 	}
+}
+
+// ConfigurePolicy sets the approval policy and seeds the approved-apps view
+// from persisted settings. Called at tool construction (session-scoped).
+func (t *Tool) ConfigurePolicy(policy string, approvedApps []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if policy != "auto" {
+		policy = "ask"
+	}
+	t.approvalPolicy = policy
+	t.approvedApps = approvedApps
 }
 
 // Name implements agent.Tool.
@@ -254,9 +273,11 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 		if err := json.Unmarshal(params, &batch); err != nil || len(batch.Actions) == 0 {
 			return agent.ToolResult{IsError: true, Content: "perform_action 动作批无效"}, nil
 		}
-		if _, err := runHelper(c, "perform_action", batch); err != nil {
+		out, err := runHelper(c, "perform_action", batch)
+		if err != nil {
 			return agent.ToolResult{IsError: true, Content: "执行键鼠动作失败: " + err.Error()}, nil
 		}
+		t.recordFocusedApp(out)
 		return agent.ToolResult{Content: fmt.Sprintf("已执行 %d 个动作", len(batch.Actions))}, nil
 	}
 	return agent.ToolResult{IsError: true, Content: fmt.Sprintf("未知 action %q", input.Action)}, nil
@@ -265,8 +286,14 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 // ─── 确认门（sdk/agent ToolWithConfirmation）────────────────────────────────
 
 // RequiresConfirmation implements agent.ToolWithConfirmation. Read-only
-// actions run silently; perform_action always requires per-batch approval —
-// the description lists every step so the user approves exactly what will run.
+// actions run silently.
+//
+// perform_action policy (PR-3):
+//   - "ask" (default): every batch needs per-batch approval, description lists
+//     every step so the user approves exactly what will run.
+//   - "auto": non-high-risk batches run without asking (the user opted in via
+//     settings); high-risk batches (quit combos etc.) ALWAYS ask, policy
+//     notwithstanding.
 func (t *Tool) RequiresConfirmation(params json.RawMessage) (string, bool) {
 	var input struct {
 		Action string `json:"action"`
@@ -278,8 +305,17 @@ func (t *Tool) RequiresConfirmation(params json.RawMessage) (string, bool) {
 	if json.Unmarshal(params, &batch) != nil || len(batch.Actions) == 0 {
 		return "执行未知的键鼠动作批", true
 	}
+	highRisk := isHighRisk(batch)
+	if !highRisk {
+		t.mu.Lock()
+		policy := t.approvalPolicy
+		t.mu.Unlock()
+		if policy == "auto" {
+			return "", false
+		}
+	}
 	prefix := "电脑控制："
-	if isHighRisk(batch) {
+	if highRisk {
 		prefix = "⚠️ 高风险电脑控制："
 	}
 	return prefix + describeActions(batch), true
@@ -289,6 +325,40 @@ func (t *Tool) RequiresConfirmation(params json.RawMessage) (string, bool) {
 // In headless entrypoints (serve 单向流、定时任务) there is no human to
 // approve — refuse rather than silently inherit approval.
 func (t *Tool) RequiresConfirmationAvailable() bool { return true }
+
+// recordFocusedApp persists the app that received the injected actions
+// (helper returns focused_app in the result). Best-effort: display data,
+// never blocks control. Updates the in-session view and settings.json.
+func (t *Tool) recordFocusedApp(helperOut json.RawMessage) {
+	var result struct {
+		FocusedApp string `json:"focused_app"`
+	}
+	if json.Unmarshal(helperOut, &result) != nil || result.FocusedApp == "" {
+		return
+	}
+	t.mu.Lock()
+	seen := false
+	for _, existing := range t.approvedApps {
+		if existing == result.FocusedApp {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		t.approvedApps = append(t.approvedApps, result.FocusedApp)
+	}
+	t.mu.Unlock()
+	_ = config.RecordApprovedApp(t.dataDir, result.FocusedApp)
+}
+
+// ApprovedApps returns the session's controlled-app list (settings page).
+func (t *Tool) ApprovedApps() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, len(t.approvedApps))
+	copy(out, t.approvedApps)
+	return out
+}
 
 // runHelper shells out one CLI invocation per action — stateless and simple,
 // matching the daemon convention without holding a long-lived pipe in PR-1.

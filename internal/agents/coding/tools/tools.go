@@ -9,24 +9,26 @@ import (
 
 // ListOptions controls how the coding-agent toolset is assembled.
 type ListOptions struct {
-	AllowOutsideWorkspace bool
-	Workspace             string
-	MaxOutputLen          int
-	EnableBash            bool
-	BashOps               operations.BashOperations
-	EnableWeb             bool
-	WebTimeoutSeconds     int
-	EnableWebSearch       bool
-	EnableComputerUse     bool // experimental: expose read-only computer tool
-	ComputerDataDir       string
-	FileOps               operations.FileOperations
-	ExtensionTools        []agent.Tool
-	AllowedTools          []string
-	BlockedTools          []string
-	FileMutationQueue     *FileMutationQueue       // 可选：per-file 写操作串行化
-	BackupManager         *basetools.BackupManager // 可选：操作前自动快照
-	ReadTracker           *basetools.ReadTracker   // 可选：读后外部修改保护
-	ToolRegistry          basetools.ToolRegistry   // 可选：batch 工具需要的 tool registry
+	AllowOutsideWorkspace  bool
+	Workspace              string
+	MaxOutputLen           int
+	EnableBash             bool
+	BashOps                operations.BashOperations
+	EnableWeb              bool
+	WebTimeoutSeconds      int
+	EnableWebSearch        bool
+	EnableComputerUse      bool // experimental: expose computer tool
+	ComputerDataDir        string
+	ComputerApprovalPolicy string // "ask" | "auto"
+	ComputerApprovedApps   []string
+	FileOps                operations.FileOperations
+	ExtensionTools         []agent.Tool
+	AllowedTools           []string
+	BlockedTools           []string
+	FileMutationQueue      *FileMutationQueue       // 可选：per-file 写操作串行化
+	BackupManager          *basetools.BackupManager // 可选：操作前自动快照
+	ReadTracker            *basetools.ReadTracker   // 可选：读后外部修改保护
+	ToolRegistry           basetools.ToolRegistry   // 可选：batch 工具需要的 tool registry
 }
 
 // BaseToolNames returns the canonical coding-agent tool names before extension tools.
@@ -63,7 +65,9 @@ func BuildList(opts ListOptions) []agent.Tool {
 	}
 
 	if opts.EnableComputerUse {
-		toolList = append(toolList, computer.NewTool(opts.ComputerDataDir))
+		tool := computer.NewTool(opts.ComputerDataDir)
+		tool.ConfigurePolicy(opts.ComputerApprovalPolicy, opts.ComputerApprovedApps)
+		toolList = append(toolList, tool)
 	}
 
 	if opts.EnableWebSearch {

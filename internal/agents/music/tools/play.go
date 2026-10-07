@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/internal/music"
 	"github.com/hwj123hwj/easyagent/internal/music/pref"
+	"github.com/hwj123hwj/easyagent/sdk/agent"
 )
 
 // PlayTool plays a song from any source with cross-source fallback.
@@ -21,13 +21,13 @@ type PlayTool struct {
 
 // PlayDetails is the structured result for the frontend player.
 type PlayDetails struct {
-	SongID         string `json:"song_id"`         // Composite ID
+	SongID         string `json:"song_id"` // Composite ID
 	SongName       string `json:"song_name"`
 	Artist         string `json:"artist"`
 	ProxyURL       string `json:"proxy_url"`
-	Duration       int    `json:"duration"`        // Duration in seconds (0 if unknown)
-	Source         string `json:"source"`          // "netease" or "bilibili"
-	IsFallback     bool   `json:"is_fallback"`     // true if fell back to B站
+	Duration       int    `json:"duration"`    // Duration in seconds (0 if unknown)
+	Source         string `json:"source"`      // "netease" or "bilibili"
+	IsFallback     bool   `json:"is_fallback"` // true if fell back to B站
 	OriginalIntent string `json:"original_intent,omitempty"`
 }
 
@@ -137,13 +137,13 @@ func (t *PlayTool) playByID(ctx context.Context, songID string, isFallback bool)
 	return agent.ToolResult{
 		Content: out,
 		Details: PlayDetails{
-			SongID:       songID,
-			SongName:     detail.Name,
-			Artist:       detail.Artist,
-			ProxyURL:     proxyURL,
-			Duration:     detail.Duration / 1000, // ms → seconds
-			Source:       string(detail.Source),
-			IsFallback:   isFallback,
+			SongID:     songID,
+			SongName:   detail.Name,
+			Artist:     detail.Artist,
+			ProxyURL:   proxyURL,
+			Duration:   detail.Duration / 1000, // ms → seconds
+			Source:     string(detail.Source),
+			IsFallback: isFallback,
 		},
 	}, nil
 }

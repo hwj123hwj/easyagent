@@ -7,6 +7,7 @@ interface ComputerSettings {
   available: boolean;
   granted: boolean;
   missing?: string[];
+  approval_policy: "ask" | "auto";
   approved_apps: string[];
   lease_holder: string;
   helper_path?: string;
@@ -69,12 +70,12 @@ export function ComputerUseSettings() {
     void load();
   }, [load]);
 
-  const toggleEnabled = async (enabled: boolean) => {
+  const patch = async (body: Record<string, unknown>) => {
     setSaving(true);
     setError("");
     try {
       setSettings(
-        await apiRequest<ComputerSettings>("POST", "/computer/settings", { enabled }),
+        await apiRequest<ComputerSettings>("POST", "/computer/settings", body),
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -138,7 +139,7 @@ export function ComputerUseSettings() {
               role="switch"
               aria-checked={settings.enabled}
               disabled={saving}
-              onClick={() => void toggleEnabled(!settings.enabled)}
+              onClick={() => void patch({ enabled: !settings.enabled })}
               style={{
                 width: 40,
                 height: 22,
@@ -165,6 +166,35 @@ export function ComputerUseSettings() {
             </button>
           }
         />
+        <StatusRow
+          label="审批策略"
+          description="逐批询问：每次键鼠操作都需要你批准。自动执行：普通操作自动执行，高风险操作（退出应用等）仍会询问。"
+          action={
+            <div style={{ display: "flex", gap: 6 }}>
+              {(["ask", "auto"] as const).map((policy) => (
+                <button
+                  key={policy}
+                  disabled={saving}
+                  onClick={() => void patch({ approval_policy: policy })}
+                  style={{
+                    padding: "5px 12px",
+                    fontSize: 12,
+                    borderRadius: 7,
+                    border: "1px solid var(--border, #2a2a2a)",
+                    cursor: "pointer",
+                    background:
+                      settings.approval_policy === policy
+                        ? "var(--accent, #3b82f6)"
+                        : "transparent",
+                    color: settings.approval_policy === policy ? "#fff" : "inherit",
+                  }}
+                >
+                  {policy === "ask" ? "逐批询问" : "自动执行"}
+                </button>
+              ))}
+            </div>
+          }
+        />
         <StatusRow label="Provider" value={<code style={{ fontSize: 12 }}>{settings.provider}</code>} />
         <StatusRow label="可用性" value={availabilityLabel} />
         <StatusRow
@@ -184,7 +214,20 @@ export function ComputerUseSettings() {
         <StatusRow label="系统权限" value={permissionLabel} />
         <StatusRow
           label="已批准应用"
+          description="实际被模型执行过键鼠操作的应用（自动记录，用于审计）。"
           value={settings.approved_apps.length ? settings.approved_apps.join("、") : "暂无"}
+          action={
+            settings.approved_apps.length ? (
+              <button
+                className="btn"
+                disabled={saving}
+                onClick={() => void patch({ clear_approved_apps: true })}
+                style={{ padding: "4px 10px", fontSize: 12, borderRadius: 7 }}
+              >
+                清空
+              </button>
+            ) : undefined
+          }
         />
         <StatusRow
           label="当前占用"
@@ -198,8 +241,9 @@ export function ComputerUseSettings() {
       )}
 
       <p style={{ fontSize: 12, opacity: 0.6, marginTop: 12, lineHeight: 1.6 }}>
-        启用后，新建会话的模型将获得 computer 工具（只读：截屏 / 读取应用状态）。
-        已存在的会话保持原有工具集，需要新建会话才会生效。
+        启用后，新建会话的模型将获得 computer 工具（截屏 / 读取应用状态 / 键鼠控制）。
+        键鼠操作按审批策略把关：默认逐批询问，每批最多 20 个动作；退出应用等高风险组合键在任何策略下都会询问。
+        已存在的会话保持原有工具集与策略，需要新建会话才会生效。
       </p>
     </div>
   );

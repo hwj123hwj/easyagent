@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/internal/music"
+	"github.com/hwj123hwj/easyagent/sdk/agent"
 )
 
 // RecommendTool fetches recommendations and rankings.

@@ -1,19 +1,19 @@
 package musictools
 
 import (
-	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/internal/music"
 	"github.com/hwj123hwj/easyagent/internal/music/pref"
+	"github.com/hwj123hwj/easyagent/sdk/agent"
 )
 
 // ListOptions controls how the music-agent toolset is assembled.
 type ListOptions struct {
-	Router        *music.SourceRouter
-	Cache         *music.Cache
-	Pref          *pref.Store
-	AudioBaseURL  string
-	AllowedTools  []string
-	BlockedTools  []string
+	Router       *music.SourceRouter
+	Cache        *music.Cache
+	Pref         *pref.Store
+	AudioBaseURL string
+	AllowedTools []string
+	BlockedTools []string
 }
 
 // BaseToolNames returns the canonical music-agent tool names.

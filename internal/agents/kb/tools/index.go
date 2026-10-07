@@ -39,11 +39,11 @@ var (
 
 // skipFiles are filenames that should not be indexed (auto-generated or non-knowledge).
 var skipFiles = map[string]bool{
-	"INDEX.md":           true,
-	"KNOWLEDGE_BASE.md":  true,
-	"tags-index.json":    true,
-	"by-project.md":      true,
-	"USER-CHANGELOG.md":  true,
+	"INDEX.md":          true,
+	"KNOWLEDGE_BASE.md": true,
+	"tags-index.json":   true,
+	"by-project.md":     true,
+	"USER-CHANGELOG.md": true,
 }
 
 // skipDirs are directory prefixes that should not be indexed.
