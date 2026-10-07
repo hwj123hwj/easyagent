@@ -103,14 +103,16 @@ export function ComputerUseSettings() {
     const current = ++epoch.current;
     setRequesting(true);
     setError("");
+    let succeeded = false;
     try {
       await apiRequest("POST", "/computer/permissions");
+      succeeded = true;
     } catch (err) {
       if (current === epoch.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
       if (current === epoch.current) {
         setRequesting(false);
-        void load();
+        if (succeeded) void load();
       }
     }
   };
