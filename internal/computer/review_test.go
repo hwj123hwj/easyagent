@@ -68,3 +68,13 @@ func TestExecuteRejectsInvalidAndFailedBatches(t *testing.T) {
 	require.Empty(t, tool.ApprovedApps())
 	require.Empty(t, Registry.Owner())
 }
+
+func TestHelperMustExplicitlyConfirmBatchSuccess(t *testing.T) {
+	tool := NewTool(t.TempDir())
+	tool.ConfigureSession("test")
+	for _, out := range []string{`{}`, `null`, `invalid`} {
+		tool.helper = func(context.Context, string, any) (json.RawMessage, error) { return json.RawMessage(out), nil }
+		result, _ := tool.Execute(context.Background(), json.RawMessage(`{"action":"perform_action","actions":[{"type":"key","key":"enter"}]}`), nil)
+		require.True(t, result.IsError, out)
+	}
+}

@@ -294,7 +294,7 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 		if err := json.Unmarshal(out, &result); err != nil {
 			return agent.ToolResult{IsError: true, Content: "键鼠结果无法解析"}, nil
 		}
-		if result.Error != "" || (result.Success != nil && !*result.Success) {
+		if result.Error != "" || result.Success == nil || !*result.Success {
 			return agent.ToolResult{IsError: true, Content: "键鼠操作未完成: " + string(out)}, nil
 		}
 		t.recordFocusedApp(out)

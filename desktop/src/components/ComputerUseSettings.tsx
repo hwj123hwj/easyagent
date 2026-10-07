@@ -62,7 +62,7 @@ export function ComputerUseSettings() {
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    const current = epoch.current;
+    const current = ++epoch.current;
     try {
       const next = await apiRequest<ComputerSettings>("GET", "/computer/settings");
       if (current !== epoch.current) return;
