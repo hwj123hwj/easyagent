@@ -224,7 +224,8 @@ export type SettingsTab =
   | "mcp"
   | "feishu"
   | "capabilities"
-  | "usage";
+  | "usage"
+  | "experiments";
 
 interface StoreState {
   ready: boolean;

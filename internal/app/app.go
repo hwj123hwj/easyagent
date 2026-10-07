@@ -28,6 +28,7 @@ type App struct {
 	mcpState          mcpState
 	workflowConfirmMu sync.Mutex
 	flows             *dynamicflow.Manager
+	cfgMu             sync.Mutex
 	cfg               config.Config
 	skillDirs         []string
 	sessionMgr        *sessionmgr.Manager
@@ -216,7 +217,17 @@ func (a *App) SessionDepsWithApp(appName string) runtime.Dependencies {
 }
 
 // Config returns the current configuration.
+// SetConfig atomically replaces the app-wide configuration. Already-loaded
+// sessions keep their captured config; new sessions pick up the change.
+func (a *App) SetConfig(cfg config.Config) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	a.cfg = cfg
+}
+
 func (a *App) Config() config.Config {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
 	return a.cfg
 }
 

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/hwj123hwj/easyagent/internal/computer"
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/operations"
 	basetools "github.com/hwj123hwj/easyagent/sdk/tools"
@@ -16,6 +17,8 @@ type ListOptions struct {
 	EnableWeb             bool
 	WebTimeoutSeconds     int
 	EnableWebSearch       bool
+	EnableComputerUse     bool // experimental: expose read-only computer tool
+	ComputerDataDir       string
 	FileOps               operations.FileOperations
 	ExtensionTools        []agent.Tool
 	AllowedTools          []string
@@ -57,6 +60,10 @@ func BuildList(opts ListOptions) []agent.Tool {
 			basetools.WithWebFetchTimeout(opts.WebTimeoutSeconds),
 			basetools.WithWebFetchMaxOutputLen(opts.MaxOutputLen),
 		))
+	}
+
+	if opts.EnableComputerUse {
+		toolList = append(toolList, computer.NewTool(opts.ComputerDataDir))
 	}
 
 	if opts.EnableWebSearch {

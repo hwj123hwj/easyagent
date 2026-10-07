@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -73,6 +74,7 @@ type Config struct {
 	EnableWeb             bool
 	WebTimeoutSeconds     int
 	EnableWebSearch       bool
+	EnableComputerUse     bool   // experimental: expose the computer-use tool (read-only in PR-1)
 	MCPConfigPath         string // User MCP configuration; empty uses ~/.easyagent/mcp.json.
 
 	// Execution backend
@@ -133,6 +135,7 @@ func Default() Config {
 		EnableWeb:         false,
 		WebTimeoutSeconds: 30,
 		EnableWebSearch:   false,
+		EnableComputerUse: false, // opt-in experimental
 
 		MaxOutputLen: 30000,
 
@@ -215,6 +218,7 @@ func (c *Config) LoadFromEnv() {
 	c.EnableWeb = getEnvBool("EA_ENABLE_WEB", c.EnableWeb)
 	c.WebTimeoutSeconds = getEnvInt("EA_WEB_TIMEOUT_SECONDS", c.WebTimeoutSeconds)
 	c.EnableWebSearch = getEnvBool("EA_ENABLE_WEB_SEARCH", c.EnableWebSearch)
+	c.EnableComputerUse = getEnvBool("EA_ENABLE_COMPUTER_USE", c.EnableComputerUse)
 
 	// Anthropic
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
@@ -535,4 +539,50 @@ func (c *Config) LoadFromYAML(path string) error {
 	}
 
 	return nil
+}
+
+// ─── Runtime overrides (settings.json) ──────────────────────────────────────
+//
+// Desktop settings toggles need persistence that survives restarts without
+// editing the user's yaml or env files. runtimeOverrides is a small
+// machine-written overlay stored in <dataDir>/settings.json; env and yaml
+// keep precedence as boot-time sources, this file captures runtime changes.
+
+type runtimeOverrides struct {
+	EnableComputerUse *bool `json:"enable_computer_use,omitempty"`
+}
+
+// LoadRuntimeOverrides applies <dataDir>/settings.json on top of c. Missing
+// or malformed files are ignored (boot must never fail on settings).
+func (c *Config) LoadRuntimeOverrides(dataDir string) {
+	data, err := os.ReadFile(filepath.Join(dataDir, "settings.json"))
+	if err != nil {
+		return
+	}
+	var o runtimeOverrides
+	if json.Unmarshal(data, &o) != nil {
+		return
+	}
+	if o.EnableComputerUse != nil {
+		c.EnableComputerUse = *o.EnableComputerUse
+	}
+}
+
+// SaveRuntimeOverrideComputerUse persists the computer-use toggle only,
+// leaving other keys untouched.
+func SaveRuntimeOverrideComputerUse(dataDir string, enabled bool) error {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dataDir, "settings.json")
+	o := runtimeOverrides{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &o)
+	}
+	o.EnableComputerUse = &enabled
+	data, err := json.MarshalIndent(o, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }

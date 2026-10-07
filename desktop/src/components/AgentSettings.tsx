@@ -1,3 +1,4 @@
+import { ComputerUseSettings } from "./ComputerUseSettings";
 import { UsageSettings } from "./UsageSettings";
 import { useEffect, useRef, useState } from "react";
 import { apiRequest, useStore, type SettingsTab } from "../store";
@@ -43,6 +44,12 @@ const settingGroups: Array<{
         label: "用量统计",
         icon: "sparkle",
         description: "查看近 30 天 Token 消耗与各会话用量排行。",
+      },
+      {
+        id: "experiments",
+        label: "实验",
+        icon: "sparkle",
+        description: "实验性功能开关：Computer use 等能力。",
       },
     ],
   },
@@ -407,6 +414,8 @@ export function AgentSettings() {
             </section>
           ) : tab === "usage" ? (
             <UsageSettings />
+          ) : tab === "experiments" ? (
+            <ComputerUseSettings />
           ) : tab === "capabilities" ? (
             <CapabilitySettings />
           ) : tab === "feishu" ? (

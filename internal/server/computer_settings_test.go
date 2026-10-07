@@ -1,0 +1,102 @@
+package server
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/hwj123hwj/easyagent/internal/computer"
+	"github.com/hwj123hwj/easyagent/sdk/config"
+	"github.com/stretchr/testify/require"
+)
+
+func TestComputerSettingsTogglePersistsAcrossRestart(t *testing.T) {
+	s, _, _ := newRunTestServer(t)
+	dataDir := s.app.Config().DataDir
+
+	// Default is off.
+	{
+		req := httptest.NewRequest("GET", "/computer/settings", nil)
+		rec := httptest.NewRecorder()
+		s.getComputerSettings(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var view struct {
+			Enabled  bool   `json:"enabled"`
+			Provider string `json:"provider"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view))
+		require.False(t, view.Enabled, "experimental feature must default to off")
+		require.Equal(t, "macos:cua", view.Provider)
+	}
+
+	// Toggle on: response flips and settings.json records the override.
+	{
+		req := httptest.NewRequest("POST", "/computer/settings",
+			bytes.NewReader([]byte(`{"enabled":true}`)))
+		rec := httptest.NewRecorder()
+		s.updateComputerSettings(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var view struct {
+			Enabled bool `json:"enabled"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view))
+		require.True(t, view.Enabled)
+
+		data, err := os.ReadFile(filepath.Join(dataDir, "settings.json"))
+		require.NoError(t, err)
+		require.Contains(t, string(data), `"enable_computer_use": true`)
+
+		// In-memory config flipped too: new sessions will expose the tool.
+		require.True(t, s.app.Config().EnableComputerUse)
+	}
+
+	// Simulated restart: fresh config load applies the override on top of env.
+	{
+		fresh := config.Config{}
+		fresh.LoadRuntimeOverrides(dataDir)
+		require.True(t, fresh.EnableComputerUse, "override must survive restart")
+	}
+
+	// Toggle back off.
+	{
+		req := httptest.NewRequest("POST", "/computer/settings",
+			bytes.NewReader([]byte(`{"enabled":false}`)))
+		rec := httptest.NewRecorder()
+		s.updateComputerSettings(rec, req)
+
+		var view struct {
+			Enabled bool `json:"enabled"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view))
+		require.False(t, view.Enabled)
+		require.False(t, s.app.Config().EnableComputerUse)
+	}
+}
+
+func TestComputerToolSchemaIsReadOnly(t *testing.T) {
+	tool := computer.NewTool(t.TempDir())
+
+	// Only read-only actions pass validation.
+	valid, err := tool.Validate(json.RawMessage(`{"action":"screenshot"}`))
+	require.NoError(t, err)
+	require.NotNil(t, valid)
+
+	_, err = tool.Validate(json.RawMessage(`{"action":"get_app_state"}`))
+	require.NoError(t, err)
+
+	// Control actions are rejected — they do not exist in PR-1.
+	_, err = tool.Validate(json.RawMessage(`{"action":"perform_action"}`))
+	require.ErrorContains(t, err, "仅支持")
+
+	_, err = tool.Validate(json.RawMessage(`{"action":"click"}`))
+	require.Error(t, err)
+
+	_, err = tool.Validate(json.RawMessage(`{}`))
+	require.ErrorContains(t, err, "action")
+}

@@ -81,6 +81,8 @@ func (a CodingApplication) BuildTools(opts runtime.ToolBuildOptions) []agent.Too
 		EnableWeb:             a.Cfg.EnableWeb,
 		WebTimeoutSeconds:     a.Cfg.WebTimeoutSeconds,
 		EnableWebSearch:       a.Cfg.EnableWebSearch,
+		EnableComputerUse:     a.Cfg.EnableComputerUse,
+		ComputerDataDir:       a.Cfg.DataDir,
 		FileOps:               opts.FileOps,
 		ExtensionTools:        opts.ExtensionTools,
 		AllowedTools:          opts.AllowedTools,
