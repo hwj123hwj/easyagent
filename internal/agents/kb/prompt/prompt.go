@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hwj123hwj/easyagent/internal/profile"
 	"github.com/hwj123hwj/easyagent/sdk/agent"
+	"github.com/hwj123hwj/easyagent/internal/profile"
 )
 
 // Options configures the kb-agent system prompt.
 type Options struct {
-	Tools       []agent.Tool
-	Goal        string
-	RepoPath    string
+	Tools      []agent.Tool
+	Goal       string
+	RepoPath   string
 	UserProfile *profile.Store // unified user profile for personalization
 }
 

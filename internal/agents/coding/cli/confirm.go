@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/hwj123hwj/easyagent/internal/ui"
 	"github.com/hwj123hwj/easyagent/sdk/agent"
+	"github.com/hwj123hwj/easyagent/internal/ui"
 )
 
 // promptConfirm 向用户展示操作描述并同步等待 y/n 裁决。

@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hwj123hwj/easyagent/internal/music/pref"
 	"github.com/hwj123hwj/easyagent/sdk/agent"
+	"github.com/hwj123hwj/easyagent/internal/music/pref"
 )
 
 // HistoryTool lets the LLM query the user's listening history on demand.

@@ -20,15 +20,15 @@ import (
 
 // HealthReport is the top-level result of a KB health check.
 type HealthReport struct {
-	GeneratedAt           time.Time
-	TotalEntries          int
-	Categories            int
-	Tags                  int
+	GeneratedAt       time.Time
+	TotalEntries      int
+	Categories        int
+	Tags              int
 	EntriesMissingSummary []Entry
 	EntriesMissingTags    []Entry
 	EntriesMissingTitle   []Entry
-	DuplicateGroups       []DuplicateGroup
-	TagClusters           []TagCluster
+	DuplicateGroups   []DuplicateGroup
+	TagClusters       []TagCluster
 }
 
 // DuplicateGroup is a set of entries with highly similar titles.

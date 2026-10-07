@@ -4,12 +4,12 @@ import (
 	"log/slog"
 	"path/filepath"
 
+	"github.com/hwj123hwj/easyagent/sdk/agent"
 	kbprompt "github.com/hwj123hwj/easyagent/internal/agents/kb/prompt"
 	kbtools "github.com/hwj123hwj/easyagent/internal/agents/kb/tools"
+	"github.com/hwj123hwj/easyagent/sdk/config"
 	"github.com/hwj123hwj/easyagent/internal/kbvector"
 	"github.com/hwj123hwj/easyagent/internal/profile"
-	"github.com/hwj123hwj/easyagent/sdk/agent"
-	"github.com/hwj123hwj/easyagent/sdk/config"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
 )
 
@@ -44,10 +44,10 @@ func (a KBApplication) BuildTools(opts runtime.ToolBuildOptions) []agent.Tool {
 	searchStrategy := a.buildSearchStrategy()
 
 	return kbtools.BuildList(kbtools.ListOptions{
-		RepoPath:       a.RepoPath,
-		SearchStrategy: searchStrategy,
-		AllowedTools:   opts.AllowedTools,
-		BlockedTools:   opts.BlockedTools,
+		RepoPath:         a.RepoPath,
+		SearchStrategy:   searchStrategy,
+		AllowedTools:     opts.AllowedTools,
+		BlockedTools:     opts.BlockedTools,
 	})
 }
 
@@ -75,9 +75,9 @@ func (a KBApplication) buildSearchStrategy() kbtools.SearchStrategy {
 // BuildPrompt constructs the kb-agent system prompt.
 func (a KBApplication) BuildPrompt(opts runtime.PromptBuildOptions, profile, goal string) string {
 	return kbprompt.BuildSystemPrompt(kbprompt.Options{
-		Tools:       opts.Tools,
-		Goal:        goal,
-		RepoPath:    a.RepoPath,
+		Tools:      opts.Tools,
+		Goal:       goal,
+		RepoPath:   a.RepoPath,
 		UserProfile: a.Profile,
 	})
 }

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/internal/music/pref"
 	"github.com/hwj123hwj/easyagent/internal/profile"
-	"github.com/hwj123hwj/easyagent/sdk/agent"
 )
 
 // Options configures the music-agent system prompt.

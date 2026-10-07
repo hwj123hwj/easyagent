@@ -6,8 +6,8 @@ import (
 
 // ListOptions controls how the kb-agent toolset is assembled.
 type ListOptions struct {
-	RepoPath       string         // path to agent-lessons repo
-	SearchStrategy SearchStrategy // optional: inject custom search strategy (vector/hybrid)
+	RepoPath       string          // path to agent-lessons repo
+	SearchStrategy SearchStrategy  // optional: inject custom search strategy (vector/hybrid)
 	AllowedTools   []string
 	BlockedTools   []string
 }

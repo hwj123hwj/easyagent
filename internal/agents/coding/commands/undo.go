@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
 	basetools "github.com/hwj123hwj/easyagent/sdk/tools"
+	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
 )
 
 // undoManager is a package-level backup manager shared across sessions.
