@@ -45,10 +45,12 @@ type ConfirmationRequest struct {
 	// RequiresApproval marks integrations whose trust is independent of the
 	// ordinary dangerous-tool confirmation toggle.
 	RequiresApproval bool
-	ToolCallID       string
-	ToolName         string
-	Args             json.RawMessage // validated + prepared args
-	Description      string          // 工具给出的操作描述，展示给用户
+	// ForceConfirmation prevents global auto-approve from bypassing this request.
+	ForceConfirmation bool
+	ToolCallID        string
+	ToolName          string
+	Args              json.RawMessage // validated + prepared args
+	Description       string          // 工具给出的操作描述，展示给用户
 }
 
 // ConfirmDecision 是用户对一次确认请求的裁决。

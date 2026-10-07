@@ -33,7 +33,7 @@ func (a *App) initMCP() {
 	a.mcpState.ctx, a.mcpState.cancel = context.WithCancel(context.Background())
 	a.mcpState.managers = map[string]*mcp.Manager{}
 	a.mcpState.trusted = map[string]bool{}
-	path := a.cfg.MCPConfigPath
+	path := a.Config().MCPConfigPath
 	if path == "" {
 		path = filepath.Join(config.HomeDir(), "mcp.json")
 	}
@@ -49,7 +49,7 @@ func (a *App) initMCP() {
 
 func (a *App) MCPWorkspace(workspace string) string {
 	if workspace == "" {
-		workspace = a.cfg.Workspace
+		workspace = a.Config().Workspace
 	}
 	if workspace == "" {
 		workspace, _ = os.Getwd()

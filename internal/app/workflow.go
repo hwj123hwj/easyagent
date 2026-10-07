@@ -35,7 +35,7 @@ func (h workflowHost) Prepare(_ context.Context, parent string) (json.RawMessage
 		return nil, errors.New("工作流需要已加载的父会话")
 	}
 	provider, model := sess.ModelInfo()
-	policy := actorConfig{Workspace: sess.Workspace(), Provider: provider, Model: model, RequireConfirmation: sess.ConfirmEnabled(), AllowedTools: sess.ToolNames(), EnableBash: h.app.cfg.EnableBash, AllowOutsideWorkspace: h.app.cfg.AllowOutsideWorkspace}
+	policy := actorConfig{Workspace: sess.Workspace(), Provider: provider, Model: model, RequireConfirmation: sess.ConfirmEnabled(), AllowedTools: sess.ToolNames(), EnableBash: h.app.Config().EnableBash, AllowOutsideWorkspace: h.app.Config().AllowOutsideWorkspace}
 	return json.Marshal(policy)
 }
 
@@ -52,10 +52,10 @@ func (h workflowHost) Actor(ctx context.Context, parent string, policy json.RawM
 	if record.RequireConfirmation && (parentSession == nil || parentSession.ConfirmationCallback() == nil) {
 		return "", errors.New("该 Actor 需要原会话的工具确认，请从带确认交互的入口恢复")
 	}
-	cfg := a.cfg
+	cfg := a.Config()
 	record.apply(&cfg)
 	deps := a.deps()
-	deps.Application = a.application // actors never receive workflow-launch tools
+	deps.Application = a.ResolveApplication("") // actors never receive workflow-launch tools
 	cfg.PromptTemplate += "\n\nWorkflow actor: " + persona.Name + "\n" + persona.System
 	options := runtime.AgentSessionOptions{Config: cfg, SkillDirs: a.skillDirs}
 	var sess *runtime.AgentSession

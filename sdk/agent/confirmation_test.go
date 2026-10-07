@@ -197,3 +197,34 @@ func (c *capturingProvider) Stream(ctx context.Context, req ai.StreamRequest) (*
 	}
 	return c.inner.Stream(ctx, req)
 }
+
+type mandatoryApprovalTool struct{ confirmableTool }
+
+func (*mandatoryApprovalTool) RequiresInteractiveConfirmation() bool { return true }
+func TestMandatoryApprovalReachesCallbackAndRefusesHeadless(t *testing.T) {
+	for _, withCallback := range []bool{false, true} {
+		registry := providers.NewRegistry()
+		registry.Register(&mockTestProvider{responses: []mockTestResponse{
+			{toolCalls: []ai.ToolCall{{ID: "c1", Name: "danger", Args: `{}`}}, stop: ai.StopReasonToolUse},
+			{text: "done", stop: ai.StopReasonStop},
+		}})
+		tool := &mandatoryApprovalTool{}
+		calls := 0
+		var confirm ConfirmFunc
+		if withCallback {
+			confirm = func(_ context.Context, req ConfirmationRequest) ConfirmDecision {
+				calls++
+				require.True(t, req.ForceConfirmation)
+				require.True(t, req.RequiresApproval)
+				return ConfirmDecision{Approved: false}
+			}
+		}
+		ag := New(Options{Model: ai.Model{ID: "test", Provider: "mock_test"}, Registry: registry, Tools: []Tool{tool}, ConfirmFunc: confirm, MaxTurns: 5})
+		_, err := ag.Prompt(context.Background(), ai.NewTextUserMessage("do it"))
+		require.NoError(t, err)
+		require.Zero(t, tool.executed.Load())
+		if withCallback {
+			require.Equal(t, 1, calls)
+		}
+	}
+}

@@ -80,3 +80,11 @@ Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。ser
 `ASR_API_KEY` 与 `ASR_BASE_URL` 可显式配置专用语音服务；文件中的专用 ASR 凭据、地址与模型会保留。没有专用配置时，`SILICONFLOW_API_KEY` 使用默认 SiliconFlow 地址；否则复用 OpenAI 兼容网关的密钥和地址。显式设置其他 `ASR_BASE_URL` 时必须同时提供语音密钥，不会将网关或 SiliconFlow 凭据转发到该地址。地址可包含 `/v1`，网关需支持 `audio/transcriptions` 与 `ASR_MODEL`（默认 `TeleAI/TeleSpeechASR`）。
 
 本机飞书设置支持扫码授权并确认保存应用凭据；授权凭据存于该主机的 EasyAgent 配置目录，不回显密钥。保存不会自动启动桥接，需另行启动或重启 `easyagent-bridge`。托管 systemd 桥接继续使用已有自建应用和使用者配对设置。扫码使用飞书注册接口，服务不可用时可使用自建应用。
+
+## 实验性电脑控制
+
+`EA_ENABLE_COMPUTER_USE`（默认 `false`）与 `EA_COMPUTER_APPROVAL_POLICY`（`ask` 默认，或 `auto`）控制新建/重新加载的编码会话。桌面设置保存在数据目录的 `settings.json`，启动时覆盖环境与 YAML 中的对应项；已加载会话保持配置快照。
+
+v0.9.0 只提供可选 `easyagent-cua-helper` 的 CLI 协议，安装包没有原生 helper。仅 macOS 主机安装兼容 helper 后可执行，权限检测不可用时界面明确提示。截图结果当前只是本地路径。审批策略独立于编码会话的完全权限；`ask` 批次及 `auto` 中退出/注销/锁屏/强制退出组合键必须经交互批准。审计列表表示实际控制过的应用，不是允许列表，也不限制目标应用。原生实现与基于应用/元素的控制需要后续完善。
+
+兼容 helper 的 CLI 契约：`status` 返回 `accessibility` / `screen_recording` 布尔值；`request-permissions` 打开权限面板；`tool screenshot --args '{"output_dir":"…"}'` 返回 `path`；`tool app_state` 返回 JSON 应用状态；`tool perform_action --args '{"actions":[…]}'` 仅整批完成时返回 `{"success":true,"focused_app":"应用 ID"}`，失败返回非零退出码或 `{"success":false,"error":"原因"}`。批次按顺序执行，不保证回滚，失败不可盲目重放。所有输出走 stdout，诊断走 stderr。

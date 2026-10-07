@@ -1,8 +1,8 @@
 package coding
 
 import (
-	codingtools "github.com/hwj123hwj/easyagent/internal/agents/coding/tools"
 	codingcommands "github.com/hwj123hwj/easyagent/internal/agents/coding/commands"
+	codingtools "github.com/hwj123hwj/easyagent/internal/agents/coding/tools"
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
 )
 
@@ -14,5 +14,3 @@ func RegisterCommands(registry *slashcmd.Registry) {
 	codingcommands.RegisterBuiltins(registry)
 	codingcommands.RegisterWikiCommands(registry)
 }
-
-

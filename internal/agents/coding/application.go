@@ -73,21 +73,26 @@ func (a CodingApplication) BuildTools(opts runtime.ToolBuildOptions) []agent.Too
 	}
 
 	return codingtools.BuildList(codingtools.ListOptions{
-		Workspace:             opts.Workspace,
-		AllowOutsideWorkspace: a.Cfg.AllowOutsideWorkspace,
-		MaxOutputLen:          opts.MaxOutputLen,
-		EnableBash:            a.Cfg.EnableBash,
-		BashOps:               opts.BashOps,
-		EnableWeb:             a.Cfg.EnableWeb,
-		WebTimeoutSeconds:     a.Cfg.WebTimeoutSeconds,
-		EnableWebSearch:       a.Cfg.EnableWebSearch,
-		FileOps:               opts.FileOps,
-		ExtensionTools:        opts.ExtensionTools,
-		AllowedTools:          opts.AllowedTools,
-		BlockedTools:          opts.BlockedTools,
-		FileMutationQueue:     mutationQueue,
-		BackupManager:         backupMgr,
-		ReadTracker:           readTracker,
+		Workspace:              opts.Workspace,
+		AllowOutsideWorkspace:  a.Cfg.AllowOutsideWorkspace,
+		MaxOutputLen:           opts.MaxOutputLen,
+		EnableBash:             a.Cfg.EnableBash,
+		BashOps:                opts.BashOps,
+		EnableWeb:              a.Cfg.EnableWeb,
+		WebTimeoutSeconds:      a.Cfg.WebTimeoutSeconds,
+		EnableWebSearch:        a.Cfg.EnableWebSearch,
+		EnableComputerUse:      a.Cfg.EnableComputerUse,
+		ComputerDataDir:        a.Cfg.DataDir,
+		ComputerSessionID:      opts.SessionID,
+		ComputerApprovalPolicy: a.Cfg.ComputerApprovalPolicy,
+		ComputerApprovedApps:   a.Cfg.ApprovedApps,
+		FileOps:                opts.FileOps,
+		ExtensionTools:         opts.ExtensionTools,
+		AllowedTools:           opts.AllowedTools,
+		BlockedTools:           opts.BlockedTools,
+		FileMutationQueue:      mutationQueue,
+		BackupManager:          backupMgr,
+		ReadTracker:            readTracker,
 	})
 }
 
@@ -136,3 +141,12 @@ func (CodingApplication) ToolNames(enableBash bool) []string {
 
 // Verify interface compliance at compile time.
 var _ runtime.Application = CodingApplication{}
+
+// WithRuntimeOverrides captures settings for a new session without replacing
+// application-specific boot configuration or rediscovering gateway models.
+func (a CodingApplication) WithRuntimeOverrides(cfg config.Config) runtime.Application {
+	a.Cfg.EnableComputerUse = cfg.EnableComputerUse
+	a.Cfg.ComputerApprovalPolicy = cfg.ComputerApprovalPolicy
+	a.Cfg.ApprovedApps = append([]string(nil), cfg.ApprovedApps...)
+	return a
+}

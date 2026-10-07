@@ -98,3 +98,10 @@ type ToolRequiringConfirmation interface {
 	Tool
 	RequiresConfirmationAvailable() bool
 }
+
+// ToolWithMandatoryConfirmation keeps a tool's interactive approval independent
+// of the entrypoint's global full-access / auto-approve setting.
+type ToolWithMandatoryConfirmation interface {
+	Tool
+	RequiresInteractiveConfirmation() bool
+}

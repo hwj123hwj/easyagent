@@ -1,12 +1,14 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -66,14 +68,17 @@ type Config struct {
 	OpenAIBaseURL string
 
 	// Tool sandbox
-	AllowOutsideWorkspace bool // Explicit file-path policy; independent of confirmation.
-	Workspace             string
-	EnableBash            bool
-	AutoApprove           bool // 全权模式：跳过危险工具的 y/n 确认（信得过自己环境再开）
-	EnableWeb             bool
-	WebTimeoutSeconds     int
-	EnableWebSearch       bool
-	MCPConfigPath         string // User MCP configuration; empty uses ~/.easyagent/mcp.json.
+	AllowOutsideWorkspace  bool // Explicit file-path policy; independent of confirmation.
+	Workspace              string
+	EnableBash             bool
+	AutoApprove            bool // 全权模式：跳过危险工具的 y/n 确认（信得过自己环境再开）
+	EnableWeb              bool
+	WebTimeoutSeconds      int
+	EnableWebSearch        bool
+	EnableComputerUse      bool     // experimental: expose the computer-use tool
+	ComputerApprovalPolicy string   // computer perform_action 审批策略: "ask"(默认) | "auto"(仅高危确认)
+	ApprovedApps           []string // 已批准执行键鼠控制的应用（bundle id 或名称）
+	MCPConfigPath          string   // User MCP configuration; empty uses ~/.easyagent/mcp.json.
 
 	// Execution backend
 	ExecutionMode string // "local" (default) or "ssh"
@@ -128,11 +133,13 @@ func Default() Config {
 		OpenAIBaseURL: "http://localhost:4001",
 		OpenAIModel:   "longcat-opus",
 
-		Workspace:         "", // empty = use cwd
-		EnableBash:        false,
-		EnableWeb:         false,
-		WebTimeoutSeconds: 30,
-		EnableWebSearch:   false,
+		Workspace:              "", // empty = use cwd
+		EnableBash:             false,
+		EnableWeb:              false,
+		WebTimeoutSeconds:      30,
+		EnableWebSearch:        false,
+		EnableComputerUse:      false, // opt-in experimental
+		ComputerApprovalPolicy: "ask",
 
 		MaxOutputLen: 30000,
 
@@ -215,6 +222,10 @@ func (c *Config) LoadFromEnv() {
 	c.EnableWeb = getEnvBool("EA_ENABLE_WEB", c.EnableWeb)
 	c.WebTimeoutSeconds = getEnvInt("EA_WEB_TIMEOUT_SECONDS", c.WebTimeoutSeconds)
 	c.EnableWebSearch = getEnvBool("EA_ENABLE_WEB_SEARCH", c.EnableWebSearch)
+	c.EnableComputerUse = getEnvBool("EA_ENABLE_COMPUTER_USE", c.EnableComputerUse)
+	if p := os.Getenv("EA_COMPUTER_APPROVAL_POLICY"); p == "auto" || p == "ask" {
+		c.ComputerApprovalPolicy = p
+	}
 
 	// Anthropic
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
@@ -535,4 +546,155 @@ func (c *Config) LoadFromYAML(path string) error {
 	}
 
 	return nil
+}
+
+// ─── Runtime overrides (settings.json) ──────────────────────────────────────
+//
+// Desktop settings toggles need persistence that survives restarts without
+// editing the user's yaml or env files. runtimeOverrides is a small
+// machine-written overlay stored in <dataDir>/settings.json; this overlay is applied after
+// boot-time env and yaml sources so saved runtime changes survive restarts.
+
+type runtimeOverrides struct {
+	EnableComputerUse      *bool    `json:"enable_computer_use,omitempty"`
+	ComputerApprovalPolicy *string  `json:"computer_approval_policy,omitempty"`
+	ApprovedApps           []string `json:"approved_apps,omitempty"`
+}
+
+// LoadRuntimeOverrides applies <dataDir>/settings.json on top of c. Missing
+// or malformed files are ignored (boot must never fail on settings).
+func (c *Config) LoadRuntimeOverrides(dataDir string) {
+	data, err := os.ReadFile(filepath.Join(dataDir, "settings.json"))
+	if err != nil {
+		return
+	}
+	var o runtimeOverrides
+	if json.Unmarshal(data, &o) != nil {
+		return
+	}
+	if o.EnableComputerUse != nil {
+		c.EnableComputerUse = *o.EnableComputerUse
+	}
+	if o.ComputerApprovalPolicy != nil && (*o.ComputerApprovalPolicy == "ask" || *o.ComputerApprovalPolicy == "auto") {
+		c.ComputerApprovalPolicy = *o.ComputerApprovalPolicy
+	}
+	c.ApprovedApps = o.ApprovedApps
+}
+
+// SaveRuntimeOverrideComputerPolicy persists the approval policy ("ask"/"auto").
+func SaveRuntimeOverrideComputerPolicy(dataDir, policy string) error {
+	if policy != "ask" && policy != "auto" {
+		return fmt.Errorf("非法审批策略 %q（仅 ask/auto）", policy)
+	}
+	return mutateRuntimeOverrides(dataDir, func(o *runtimeOverrides) {
+		o.ComputerApprovalPolicy = &policy
+	})
+}
+
+// RecordApprovedApp dedupe-appends an app to the approved list (cap 50).
+func RecordApprovedApp(dataDir, app string) error {
+	if app == "" {
+		return nil
+	}
+	return mutateRuntimeOverrides(dataDir, func(o *runtimeOverrides) {
+		for _, existing := range o.ApprovedApps {
+			if existing == app {
+				return
+			}
+		}
+		o.ApprovedApps = append(o.ApprovedApps, app)
+		if len(o.ApprovedApps) > 50 {
+			o.ApprovedApps = o.ApprovedApps[len(o.ApprovedApps)-50:]
+		}
+	})
+}
+
+// ClearApprovedApps empties the approved-apps list.
+func ClearApprovedApps(dataDir string) error {
+	return mutateRuntimeOverrides(dataDir, func(o *runtimeOverrides) {
+		o.ApprovedApps = []string{}
+	})
+}
+
+// runtimeOverridesMu serializes read-modify-write updates in this server.
+var runtimeOverridesMu sync.Mutex
+
+// mutateRuntimeOverrides writes an atomic overlay, retaining unrelated keys.
+func mutateRuntimeOverrides(dataDir string, mutate func(o *runtimeOverrides)) error {
+	runtimeOverridesMu.Lock()
+	defer runtimeOverridesMu.Unlock()
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dataDir, "settings.json")
+	raw := map[string]json.RawMessage{}
+	o := runtimeOverrides{}
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(data, &o); err != nil {
+			return err
+		}
+		if raw == nil {
+			return fmt.Errorf("settings.json must be an object")
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	mutate(&o)
+	known, err := json.Marshal(o)
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(known, &fields); err != nil {
+		return err
+	}
+	for _, key := range []string{"enable_computer_use", "computer_approval_policy", "approved_apps"} {
+		delete(raw, key)
+	}
+	for key, value := range fields {
+		raw[key] = value
+	}
+	data, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dataDir, ".settings-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
+}
+
+// UpdateComputerRuntimeSettings validates and persists one settings request.
+func UpdateComputerRuntimeSettings(dataDir string, enabled *bool, policy *string, clearApps bool) error {
+	if policy != nil && *policy != "ask" && *policy != "auto" {
+		return fmt.Errorf("非法审批策略 %q（仅 ask/auto）", *policy)
+	}
+	return mutateRuntimeOverrides(dataDir, func(o *runtimeOverrides) {
+		if enabled != nil {
+			o.EnableComputerUse = enabled
+		}
+		if policy != nil {
+			o.ComputerApprovalPolicy = policy
+		}
+		if clearApps {
+			o.ApprovedApps = []string{}
+		}
+	})
+}
+
+// SaveRuntimeOverrideComputerUse persists the computer-use toggle only.
+func SaveRuntimeOverrideComputerUse(dataDir string, enabled bool) error {
+	return UpdateComputerRuntimeSettings(dataDir, &enabled, nil, false)
 }

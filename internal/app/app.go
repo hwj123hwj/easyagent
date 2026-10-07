@@ -28,6 +28,7 @@ type App struct {
 	mcpState          mcpState
 	workflowConfirmMu sync.Mutex
 	flows             *dynamicflow.Manager
+	cfgMu             sync.Mutex
 	cfg               config.Config
 	skillDirs         []string
 	sessionMgr        *sessionmgr.Manager
@@ -127,12 +128,16 @@ func (a *App) ApplicationNames() []string {
 // ResolveApplication returns the Application for the given name.
 // Falls back to the default application if name is empty or unknown.
 func (a *App) ResolveApplication(name string) runtime.Application {
-	if name != "" {
-		if app, ok := a.applications[name]; ok {
-			return app
-		}
+	application := a.application
+	if selected, ok := a.applications[name]; name != "" && ok {
+		application = selected
 	}
-	return a.application
+	if configurable, ok := application.(interface {
+		WithRuntimeOverrides(config.Config) runtime.Application
+	}); ok {
+		application = configurable.WithRuntimeOverrides(a.Config())
+	}
+	return application
 }
 
 // Profile returns the unified user profile store (may be nil if not configured).
@@ -144,7 +149,7 @@ func (a *App) Profile() *profile.Store {
 func (a *App) NewSession(ctx context.Context) (*runtime.AgentSession, error) {
 	deps := a.deps()
 	opts := runtime.AgentSessionOptions{
-		Config:    a.cfg,
+		Config:    a.Config(),
 		SkillDirs: a.skillDirs,
 	}
 	sess, err := a.sessionStore.Create(ctx, opts, deps)
@@ -165,7 +170,7 @@ func (a *App) LoadSession(ctx context.Context, sessionID string) (*runtime.Agent
 	}
 	deps := a.deps()
 	opts := runtime.AgentSessionOptions{
-		Config:    a.cfg,
+		Config:    a.Config(),
 		SkillDirs: a.skillDirs,
 	}
 	workspace, application := a.sessionMgr.Metadata(sessionID)
@@ -215,8 +220,17 @@ func (a *App) SessionDepsWithApp(appName string) runtime.Dependencies {
 	return d
 }
 
-// Config returns the current configuration.
+// ReloadRuntimeOverrides refreshes saved settings for future sessions only.
+func (a *App) ReloadRuntimeOverrides() {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	a.cfg.LoadRuntimeOverrides(a.cfg.DataDir)
+}
+
+// Config returns a snapshot of the current configuration.
 func (a *App) Config() config.Config {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
 	return a.cfg
 }
 
@@ -253,7 +267,7 @@ func (a *App) deps() runtime.Dependencies {
 		Registry:        a.registry,
 		SessionMgr:      a.sessionMgr,
 		ExtRegistry:     a.extRegistry,
-		Application:     workflowApplication{Application: a.application, app: a},
+		Application:     workflowApplication{Application: a.ResolveApplication(""), app: a},
 		ExternalTools:   a.extraTools,
 		AdditionalTools: func(workspace string) []agent.Tool { return a.MCP(workspace).AllTools() },
 		ToolRevision:    func(workspace string) uint64 { return a.mcpRevision(workspace) },
@@ -277,7 +291,7 @@ func (a *App) deps() runtime.Dependencies {
 // ToolNames returns the names of tools available given the current config and extensions.
 // This accounts for EnableBash, AllowedTools, BlockedTools, and extension tools.
 func (a *App) ToolNames() []string {
-	cfg := a.cfg
+	cfg := a.Config()
 
 	// Try to delegate to Application
 	type toolNamer interface {

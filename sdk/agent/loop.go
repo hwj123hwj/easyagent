@@ -614,17 +614,21 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) (result ai.
 			reason := ""
 			gate, gated := tool.(ToolRequiringConfirmation)
 			requiresApproval := gated && gate.RequiresConfirmationAvailable()
+			mandatory, hasMandatory := tool.(ToolWithMandatoryConfirmation)
+			forceConfirmation := hasMandatory && mandatory.RequiresInteractiveConfirmation()
+			requiresApproval = requiresApproval || forceConfirmation
 			if requiresApproval && a.confirmFunc == nil {
 				approved = false
 				reason = "this tool requires an interactive approval or explicit server trust"
 			}
 			if a.confirmFunc != nil {
 				decision := a.confirmFunc(ctx, ConfirmationRequest{
-					RequiresApproval: requiresApproval,
-					ToolCallID:       call.ID,
-					ToolName:         call.Name,
-					Args:             args,
-					Description:      desc,
+					RequiresApproval:  requiresApproval,
+					ForceConfirmation: forceConfirmation,
+					ToolCallID:        call.ID,
+					ToolName:          call.Name,
+					Args:              args,
+					Description:       desc,
 				})
 				approved = decision.Approved
 				reason = decision.Reason

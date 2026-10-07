@@ -77,6 +77,8 @@ func main() {
 	}
 
 	cfg.LoadFromEnv()
+	// Runtime overrides (desktop settings toggles) sit on top of env+yaml.
+	cfg.LoadRuntimeOverrides(cfg.DataDir)
 
 	// Handle --version
 	if *versionFlag {

@@ -86,11 +86,11 @@ func (a *App) loadWorkflowActor(ctx context.Context, id string) (*runtime.AgentS
 	if err != nil {
 		return nil, err
 	}
-	cfg := a.cfg
+	cfg := a.Config()
 	record.apply(&cfg)
 	cfg.PromptTemplate += "\n\nWorkflow actor: " + record.Persona.Name + "\n" + record.Persona.System
 	deps := a.deps()
-	deps.Application = a.application
+	deps.Application = a.ResolveApplication("")
 	sess, err := a.sessionStore.Load(ctx, id, runtime.AgentSessionOptions{Config: cfg, SkillDirs: a.skillDirs}, deps)
 	if err == nil && record.RequireConfirmation && sess.ConfirmationCallback() == nil {
 		sess.SetConfirmFunc(func(context.Context, agent.ConfirmationRequest) agent.ConfirmDecision {
