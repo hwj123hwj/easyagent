@@ -1,9 +1,6 @@
 // Package computer implements the experimental computer-use integration:
-// a macOS helper bridge (Swift, backed by trycua/cua's CuaDriverCore) plus a
-// lease registry that guarantees one controlling session per target.
-//
-// PR-1 scope is read-only: screenshot and accessibility-tree snapshots only.
-// Mouse/keyboard injection lands in a follow-up behind the same lease gate.
+// an optional macOS helper CLI bridge and exclusive per-invocation ownership.
+// The helper implementation is not bundled with this experimental integration.
 package computer
 
 import (
@@ -99,7 +96,10 @@ type leaseRegistry struct {
 func (r *leaseRegistry) Acquire(sessionID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.owner != "" && r.owner != sessionID {
+	if sessionID == "" {
+		return errors.New("computer use 缺少会话身份")
+	}
+	if r.owner != "" {
 		return fmt.Errorf("%w（当前持有者会话 %s）", ErrLeaseHeld, r.owner)
 	}
 	r.owner = sessionID
@@ -127,11 +127,12 @@ var Registry = &leaseRegistry{}
 
 // ─── Model-facing tool ───────────────────────────────────────────────────────
 
-// Tool is the single model-facing computer tool. PR-1 exposes read-only
-// actions; the schema gates future control actions behind the same lease.
+// Tool is the session-scoped model-facing computer tool.
 type Tool struct {
-	dataDir  string // settings.json lives here (approved-apps persistence)
-	shotsDir string // where screenshots are persisted
+	sessionID string
+	helper    func(context.Context, string, any) (json.RawMessage, error)
+	dataDir   string // settings.json lives here (approved-apps persistence)
+	shotsDir  string // where screenshots are persisted
 
 	mu             sync.Mutex
 	approvalPolicy string   // "ask" (default) | "auto"
@@ -142,6 +143,7 @@ type Tool struct {
 func NewTool(dataDir string) *Tool {
 	return &Tool{
 		dataDir:  dataDir,
+		helper:   runHelper,
 		shotsDir: filepath.Join(dataDir, "computer", "screenshots"),
 	}
 }
@@ -155,8 +157,11 @@ func (t *Tool) ConfigurePolicy(policy string, approvedApps []string) {
 		policy = "ask"
 	}
 	t.approvalPolicy = policy
-	t.approvedApps = approvedApps
+	t.approvedApps = append([]string(nil), approvedApps...)
 }
+
+// ConfigureSession binds occupancy to the owning runtime session.
+func (t *Tool) ConfigureSession(sessionID string) { t.sessionID = sessionID }
 
 // Name implements agent.Tool.
 func (t *Tool) Name() string { return "computer" }
@@ -165,7 +170,7 @@ func (t *Tool) Name() string { return "computer" }
 func (t *Tool) Description() string {
 	return "macOS 电脑使用工具（实验）：感知与控制当前电脑。" +
 		"actions: screenshot（全屏截图，返回本地文件路径）、get_app_state（当前焦点应用的可读元素列表）、" +
-		"perform_action（键鼠控制：click/type/key/scroll/wait 批量动作，需用户逐批批准；单批最多 " + fmt.Sprint(maxActionSteps) + " 个动作）。"
+		"perform_action（键鼠控制：click/type/key/scroll/wait 批量动作，按电脑控制审批策略确认；单批最多 " + fmt.Sprint(maxActionSteps) + " 个动作）。"
 }
 
 // Parameters implements agent.Tool (map-based JSON Schema).
@@ -180,7 +185,7 @@ func (t *Tool) Parameters() map[string]any {
 			},
 			"actions": map[string]any{
 				"type":        "array",
-				"description": "perform_action 时必填：按顺序原子执行的键鼠动作列表（单次调用一批，整体一次确认）",
+				"description": "perform_action 时必填：按顺序执行（不支持回滚）的键鼠动作列表（单次调用一批，整体一次确认）",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -229,16 +234,21 @@ func (t *Tool) Validate(params json.RawMessage) (json.RawMessage, error) {
 	}
 }
 
-// Execute performs the read-only action. Both actions acquire the process-wide
-// lease so the settings page occupancy reflects real usage — the gate is
-// exercised from day one, before any control action exists.
+// Execute validates arguments and holds exclusive ownership until the helper returns.
 func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate func(agent.PartialResult)) (agent.ToolResult, error) {
+	normalized, err := t.Validate(params)
+	if err != nil {
+		return agent.ToolResult{IsError: true, Content: err.Error()}, nil
+	}
+	params = normalized
 	var input struct {
 		Action string `json:"action"`
 	}
-	if err := json.Unmarshal(params, &input); err != nil {
+	_ = json.Unmarshal(params, &input)
+	if err := Registry.Acquire(t.sessionID); err != nil {
 		return agent.ToolResult{IsError: true, Content: err.Error()}, nil
 	}
+	defer Registry.Release(t.sessionID)
 
 	c, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -248,7 +258,7 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 		if err := os.MkdirAll(t.shotsDir, 0o755); err != nil {
 			return agent.ToolResult{IsError: true, Content: "创建截图目录失败: " + err.Error()}, nil
 		}
-		out, err := runHelper(c, "screenshot", map[string]any{"output_dir": t.shotsDir})
+		out, err := t.helper(c, "screenshot", map[string]any{"output_dir": t.shotsDir})
 		if err != nil {
 			return agent.ToolResult{IsError: true, Content: "截屏失败: " + err.Error()}, nil
 		}
@@ -261,7 +271,7 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 		return agent.ToolResult{Content: "屏幕截图已保存: " + result.Path}, nil
 
 	case "get_app_state":
-		out, err := runHelper(c, "app_state", nil)
+		out, err := t.helper(c, "app_state", nil)
 		if err != nil {
 			return agent.ToolResult{IsError: true, Content: "读取应用状态失败: " + err.Error()}, nil
 		}
@@ -273,9 +283,19 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 		if err := json.Unmarshal(params, &batch); err != nil || len(batch.Actions) == 0 {
 			return agent.ToolResult{IsError: true, Content: "perform_action 动作批无效"}, nil
 		}
-		out, err := runHelper(c, "perform_action", batch)
+		out, err := t.helper(c, "perform_action", batch)
 		if err != nil {
 			return agent.ToolResult{IsError: true, Content: "执行键鼠动作失败: " + err.Error()}, nil
+		}
+		var result struct {
+			Error   string `json:"error"`
+			Success *bool  `json:"success"`
+		}
+		if err := json.Unmarshal(out, &result); err != nil {
+			return agent.ToolResult{IsError: true, Content: "键鼠结果无法解析"}, nil
+		}
+		if result.Error != "" || (result.Success != nil && !*result.Success) {
+			return agent.ToolResult{IsError: true, Content: "键鼠操作未完成: " + string(out)}, nil
 		}
 		t.recordFocusedApp(out)
 		return agent.ToolResult{Content: fmt.Sprintf("已执行 %d 个动作", len(batch.Actions))}, nil
@@ -324,7 +344,8 @@ func (t *Tool) RequiresConfirmation(params json.RawMessage) (string, bool) {
 // RequiresConfirmationAvailable implements agent.ToolRequiringConfirmation.
 // In headless entrypoints (serve 单向流、定时任务) there is no human to
 // approve — refuse rather than silently inherit approval.
-func (t *Tool) RequiresConfirmationAvailable() bool { return true }
+func (t *Tool) RequiresConfirmationAvailable() bool   { return true }
+func (t *Tool) RequiresInteractiveConfirmation() bool { return true }
 
 // recordFocusedApp persists the app that received the injected actions
 // (helper returns focused_app in the result). Best-effort: display data,
@@ -444,9 +465,11 @@ func validateActions(raw json.RawMessage) (json.RawMessage, error) {
 			if s.Key == "" {
 				return nil, fmt.Errorf("actions[%d] key 需要 key", i)
 			}
-			if err := checkKeyCombo(s.Key); err != nil {
+			key, err := normalizeKeyCombo(s.Key)
+			if err != nil {
 				return nil, fmt.Errorf("actions[%d]: %w", i, err)
 			}
+			wrapper.Actions[i].Key = key
 		case "scroll":
 			if s.Dx == nil && s.Dy == nil {
 				return nil, fmt.Errorf("actions[%d] scroll 需要 dx 或 dy", i)
@@ -488,35 +511,46 @@ func checkScreenPoint(x, y int) error {
 	return nil
 }
 
-// dangerousKeyCombos are combos that can destroy work or lock the user out.
-// They get a high-risk confirmation description and (PR-3) policy gating.
-var dangerousKeyCombos = map[string]bool{
-	"cmd+q":       true, // 退出应用
-	"cmd+shift+q": true, // 退出并注销（多数应用）
-	"cmd+alt+esc": true, // 强制退出对话框
-	"cmd+w":       false,
-	"ctrl+click":  false,
-}
-
-// checkKeyCombo rejects malformed combos early; the helper does final mapping.
-func checkKeyCombo(key string) error {
-	k := strings.ToLower(strings.TrimSpace(key))
-	if k == "" {
-		return fmt.Errorf("key 不能为空")
-	}
-	for _, part := range strings.Split(k, "+") {
-		switch strings.TrimSpace(part) {
-		case "cmd", "alt", "ctrl", "shift", "fn", "space", "enter", "return",
-			"tab", "esc", "escape", "delete", "backspace", "up", "down", "left", "right",
-			"home", "end", "pageup", "pagedown", "f1", "f2", "f3", "f4", "f5", "f6",
-			"f7", "f8", "f9", "f10", "f11", "f12":
+// normalizeKeyCombo gives validation, confirmation and the helper one spelling.
+func normalizeKeyCombo(key string) (string, error) {
+	modifiers := map[string]bool{}
+	base := ""
+	for _, part := range strings.Split(strings.ToLower(key), "+") {
+		part = strings.TrimSpace(part)
+		switch part {
+		case "cmd", "alt", "ctrl", "shift", "fn":
+			if modifiers[part] {
+				return "", fmt.Errorf("重复修饰键 %q", part)
+			}
+			modifiers[part] = true
+			continue
+		case "escape":
+			part = "esc"
+		case "return":
+			part = "enter"
+		}
+		switch part {
+		case "space", "enter", "tab", "esc", "delete", "backspace", "up", "down", "left", "right", "home", "end", "pageup", "pagedown", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12":
 		default:
 			if len([]rune(part)) != 1 {
-				return fmt.Errorf("key 组合含无法识别的部分 %q", part)
+				return "", fmt.Errorf("key 组合含无法识别的部分 %q", part)
 			}
 		}
+		if base != "" {
+			return "", fmt.Errorf("key 组合仅支持一个普通按键")
+		}
+		base = part
 	}
-	return nil
+	if base == "" {
+		return "", fmt.Errorf("key 需要普通按键")
+	}
+	parts := []string{}
+	for _, modifier := range []string{"cmd", "ctrl", "alt", "shift", "fn"} {
+		if modifiers[modifier] {
+			parts = append(parts, modifier)
+		}
+	}
+	return strings.Join(append(parts, base), "+"), nil
 }
 
 // describeActions renders a batch into a human-readable confirmation
@@ -541,18 +575,11 @@ func describeStep(s actionStep) string {
 	case "right_click":
 		return fmt.Sprintf("右键点击 (%d, %d)", deref(s.X), deref(s.Y))
 	case "type":
-		preview := s.Text
-		if len([]rune(preview)) > 40 {
-			preview = string([]rune(preview)[:40]) + "…"
-		}
-		return fmt.Sprintf("输入文本 %q", preview)
+		return fmt.Sprintf("输入文本 %q", s.Text)
 	case "key":
 		return "按键 " + s.Key
 	case "scroll":
-		if s.Dy != nil {
-			return fmt.Sprintf("滚动 dy=%d", *s.Dy)
-		}
-		return fmt.Sprintf("滚动 dx=%d", *s.Dx)
+		return fmt.Sprintf("滚动 dx=%d dy=%d", deref(s.Dx), deref(s.Dy))
 	case "wait":
 		return fmt.Sprintf("等待 %d ms", deref(s.Ms))
 	}
@@ -569,8 +596,21 @@ func deref(p *int) int {
 // isHighRisk reports whether the batch contains an action that can destroy
 // work or lock the user out (PR-3 policy gates on this).
 func isHighRisk(batch actionBatch) bool {
-	for _, s := range batch.Actions {
-		if s.Type == "key" && dangerousKeyCombos[strings.ToLower(strings.TrimSpace(s.Key))] {
+	for _, step := range batch.Actions {
+		if step.Type != "key" {
+			continue
+		}
+		key, err := normalizeKeyCombo(step.Key)
+		if err != nil {
+			return true
+		}
+		parts := strings.Split(key, "+")
+		keys := map[string]bool{}
+		for _, part := range parts {
+			keys[part] = true
+		}
+		// Extra modifiers must not bypass quit, logout, lock or force-quit approval.
+		if keys["cmd"] && (keys["q"] || (keys["alt"] && keys["esc"])) {
 			return true
 		}
 	}

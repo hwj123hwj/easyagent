@@ -83,6 +83,7 @@ func (a CodingApplication) BuildTools(opts runtime.ToolBuildOptions) []agent.Too
 		EnableWebSearch:        a.Cfg.EnableWebSearch,
 		EnableComputerUse:      a.Cfg.EnableComputerUse,
 		ComputerDataDir:        a.Cfg.DataDir,
+		ComputerSessionID:      opts.SessionID,
 		ComputerApprovalPolicy: a.Cfg.ComputerApprovalPolicy,
 		ComputerApprovedApps:   a.Cfg.ApprovedApps,
 		FileOps:                opts.FileOps,
@@ -140,3 +141,12 @@ func (CodingApplication) ToolNames(enableBash bool) []string {
 
 // Verify interface compliance at compile time.
 var _ runtime.Application = CodingApplication{}
+
+// WithRuntimeOverrides captures settings for a new session without replacing
+// application-specific boot configuration or rediscovering gateway models.
+func (a CodingApplication) WithRuntimeOverrides(cfg config.Config) runtime.Application {
+	a.Cfg.EnableComputerUse = cfg.EnableComputerUse
+	a.Cfg.ComputerApprovalPolicy = cfg.ComputerApprovalPolicy
+	a.Cfg.ApprovedApps = append([]string(nil), cfg.ApprovedApps...)
+	return a
+}

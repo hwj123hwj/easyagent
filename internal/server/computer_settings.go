@@ -28,6 +28,7 @@ type computerSettingsView struct {
 
 func (s *Server) getComputerSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Config()
+	cfg.LoadRuntimeOverrides(cfg.DataDir)
 	view := computerSettingsView{
 		Enabled:        cfg.EnableComputerUse,
 		Provider:       "macos:cua",
@@ -77,34 +78,18 @@ func (s *Server) updateComputerSettings(w http.ResponseWriter, r *http.Request) 
 	}
 
 	cfg := s.app.Config()
-	dirty := false
-	if req.Enabled != nil && cfg.EnableComputerUse != *req.Enabled {
-		if err := config.SaveRuntimeOverrideComputerUse(cfg.DataDir, *req.Enabled); err != nil {
+	if req.ApprovalPolicy != nil && *req.ApprovalPolicy != "ask" && *req.ApprovalPolicy != "auto" {
+		writeError(w, http.StatusBadRequest, "审批策略仅支持 ask/auto")
+		return
+	}
+	if req.Enabled != nil || req.ApprovalPolicy != nil || req.ClearApprovedApps {
+		if err := config.UpdateComputerRuntimeSettings(cfg.DataDir, req.Enabled, req.ApprovalPolicy, req.ClearApprovedApps); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		cfg.EnableComputerUse = *req.Enabled
-		dirty = true
+		s.app.ReloadRuntimeOverrides()
 	}
-	if req.ApprovalPolicy != nil && *req.ApprovalPolicy != "" {
-		if err := config.SaveRuntimeOverrideComputerPolicy(cfg.DataDir, *req.ApprovalPolicy); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		cfg.ComputerApprovalPolicy = *req.ApprovalPolicy
-		dirty = true
-	}
-	if req.ClearApprovedApps {
-		if err := config.ClearApprovedApps(cfg.DataDir); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		cfg.ApprovedApps = nil
-		dirty = true
-	}
-	if dirty {
-		s.app.SetConfig(cfg)
-	}
+
 	s.getComputerSettings(w, r)
 }
 

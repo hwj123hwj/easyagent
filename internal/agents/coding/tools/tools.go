@@ -19,6 +19,7 @@ type ListOptions struct {
 	EnableWebSearch        bool
 	EnableComputerUse      bool // experimental: expose computer tool
 	ComputerDataDir        string
+	ComputerSessionID      string
 	ComputerApprovalPolicy string // "ask" | "auto"
 	ComputerApprovedApps   []string
 	FileOps                operations.FileOperations
@@ -66,6 +67,7 @@ func BuildList(opts ListOptions) []agent.Tool {
 
 	if opts.EnableComputerUse {
 		tool := computer.NewTool(opts.ComputerDataDir)
+		tool.ConfigureSession(opts.ComputerSessionID)
 		tool.ConfigurePolicy(opts.ComputerApprovalPolicy, opts.ComputerApprovedApps)
 		toolList = append(toolList, tool)
 	}

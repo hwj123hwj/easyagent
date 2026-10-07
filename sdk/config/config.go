@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -551,8 +552,8 @@ func (c *Config) LoadFromYAML(path string) error {
 //
 // Desktop settings toggles need persistence that survives restarts without
 // editing the user's yaml or env files. runtimeOverrides is a small
-// machine-written overlay stored in <dataDir>/settings.json; env and yaml
-// keep precedence as boot-time sources, this file captures runtime changes.
+// machine-written overlay stored in <dataDir>/settings.json; this overlay is applied after
+// boot-time env and yaml sources so saved runtime changes survive restarts.
 
 type runtimeOverrides struct {
 	EnableComputerUse      *bool    `json:"enable_computer_use,omitempty"`
@@ -615,39 +616,85 @@ func ClearApprovedApps(dataDir string) error {
 	})
 }
 
-// mutateRuntimeOverrides is the single-writer helper for settings.json.
+// runtimeOverridesMu serializes read-modify-write updates in this server.
+var runtimeOverridesMu sync.Mutex
+
+// mutateRuntimeOverrides writes an atomic overlay, retaining unrelated keys.
 func mutateRuntimeOverrides(dataDir string, mutate func(o *runtimeOverrides)) error {
+	runtimeOverridesMu.Lock()
+	defer runtimeOverridesMu.Unlock()
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
 	}
 	path := filepath.Join(dataDir, "settings.json")
+	raw := map[string]json.RawMessage{}
 	o := runtimeOverrides{}
 	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &o)
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(data, &o); err != nil {
+			return err
+		}
+		if raw == nil {
+			return fmt.Errorf("settings.json must be an object")
+		}
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	mutate(&o)
-	data, err := json.MarshalIndent(o, "", "  ")
+	known, err := json.Marshal(o)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(known, &fields); err != nil {
+		return err
+	}
+	for _, key := range []string{"enable_computer_use", "computer_approval_policy", "approved_apps"} {
+		delete(raw, key)
+	}
+	for key, value := range fields {
+		raw[key] = value
+	}
+	data, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dataDir, ".settings-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
-// SaveRuntimeOverrideComputerUse persists the computer-use toggle only,
-// leaving other keys untouched.
+// UpdateComputerRuntimeSettings validates and persists one settings request.
+func UpdateComputerRuntimeSettings(dataDir string, enabled *bool, policy *string, clearApps bool) error {
+	if policy != nil && *policy != "ask" && *policy != "auto" {
+		return fmt.Errorf("非法审批策略 %q（仅 ask/auto）", *policy)
+	}
+	return mutateRuntimeOverrides(dataDir, func(o *runtimeOverrides) {
+		if enabled != nil {
+			o.EnableComputerUse = enabled
+		}
+		if policy != nil {
+			o.ComputerApprovalPolicy = policy
+		}
+		if clearApps {
+			o.ApprovedApps = []string{}
+		}
+	})
+}
+
+// SaveRuntimeOverrideComputerUse persists the computer-use toggle only.
 func SaveRuntimeOverrideComputerUse(dataDir string, enabled bool) error {
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(dataDir, "settings.json")
-	o := runtimeOverrides{}
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &o)
-	}
-	o.EnableComputerUse = &enabled
-	data, err := json.MarshalIndent(o, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
+	return UpdateComputerRuntimeSettings(dataDir, &enabled, nil, false)
 }

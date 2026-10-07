@@ -674,7 +674,7 @@ func (s *AgentSession) wrapConfirm(fn agent.ConfirmFunc) agent.ConfirmFunc {
 		return nil
 	}
 	return func(ctx context.Context, req agent.ConfirmationRequest) agent.ConfirmDecision {
-		if !s.confirmEnabled.Load() && (!req.RequiresApproval || s.cfg.AutoApprove) {
+		if !req.ForceConfirmation && !s.confirmEnabled.Load() && (!req.RequiresApproval || s.cfg.AutoApprove) {
 			return agent.ConfirmDecision{Approved: true, Reason: "全权模式（/confirm on 可恢复确认）"}
 		}
 		return fn(ctx, req)

@@ -107,3 +107,16 @@ func TestContextSnapshotRejectsActiveMutation(t *testing.T) {
 		})
 	}
 }
+
+func TestMandatoryConfirmationSurvivesGlobalAutoApprove(t *testing.T) {
+	session := &AgentSession{cfg: config.Config{AutoApprove: true}}
+	calls := 0
+	confirm := func(context.Context, agent.ConfirmationRequest) agent.ConfirmDecision {
+		calls++
+		return agent.ConfirmDecision{Approved: false}
+	}
+	decision := session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{RequiresApproval: true, ForceConfirmation: true})
+	require.False(t, decision.Approved)
+	require.Equal(t, 1, calls)
+	require.True(t, session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{RequiresApproval: true}).Approved, "existing explicit server trust remains compatible")
+}
