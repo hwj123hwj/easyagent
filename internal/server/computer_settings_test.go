@@ -90,13 +90,25 @@ func TestComputerToolSchemaIsReadOnly(t *testing.T) {
 	_, err = tool.Validate(json.RawMessage(`{"action":"get_app_state"}`))
 	require.NoError(t, err)
 
-	// Control actions are rejected — they do not exist in PR-1.
-	_, err = tool.Validate(json.RawMessage(`{"action":"perform_action"}`))
-	require.ErrorContains(t, err, "仅支持")
+	// Control actions go through strict batch validation (PR-2), and always
+	// demand a user confirmation before Execute.
+	normalized, err := tool.Validate(json.RawMessage(
+		`{"action":"perform_action","actions":[{"type":"click","x":10,"y":20}]}`))
+	require.NoError(t, err)
+	desc, needConfirm := tool.RequiresConfirmation(normalized)
+	require.True(t, needConfirm, "perform_action must require per-batch approval")
+	require.Contains(t, desc, "左键点击 (10, 20)")
 
+	// Headless entrypoints must refuse the control tool entirely.
+	require.True(t, tool.RequiresConfirmationAvailable())
+
+	// Unknown or missing actions stay rejected.
 	_, err = tool.Validate(json.RawMessage(`{"action":"click"}`))
 	require.Error(t, err)
-
 	_, err = tool.Validate(json.RawMessage(`{}`))
 	require.ErrorContains(t, err, "action")
+
+	// Malformed control batches are rejected too.
+	_, err = tool.Validate(json.RawMessage(`{"action":"perform_action"}`))
+	require.ErrorContains(t, err, "actions 数组")
 }
