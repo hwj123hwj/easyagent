@@ -234,10 +234,10 @@ export function SkillMarketPanel() {
           const st = installs[s.id] ?? { kind: "idle" as const };
           const isInstalled = installedNames.has(s.name);
           return (
-            <li key={s.id} aria-pressed={section === s.id} className="skill-market-item">
+            <li key={s.id} className="skill-market-item">
               <div className="skill-market-item-main">
                 <div className="skill-market-item-title">
-                  <strong>{s.display_name}</strong>
+                  <strong>{s.display_name || s.name}</strong>
                   <span className="skill-market-item-meta">v{s.version}</span>
                   <span className="skill-market-item-meta">
                     {t("settings.skillMarket.installs", { count: s.install_count })}
