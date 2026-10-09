@@ -437,3 +437,23 @@ test("stale confirmation refreshes authoritative approvals without replaying the
     assert.equal(calls.filter(c => c[0] === "POST").length, 1);
   } finally { window.piAPI = api; useStore.setState(before); }
 });
+
+test('question replies send structured answers and failed submission preserves the question', async () => {
+ const before = useStore.getState(), api = global.window.piAPI;
+ const confirmation = {confirmation_id:'c',tool_name:'ask_user_question',tool_call_id:'q',args:{questions:[]}};
+ const s = {...view(), run:{run_id:'r',state:'waiting_confirmation'},confirmations:[confirmation],phase:'approval'};
+ const answers = [{selected:['React']},{selected:[],text:'自定义'}];
+ let payload, fail = true;
+ global.window.piAPI = { request:async (method, path, body) => {payload={method,path,body}; if(fail) throw Error('network offline');return {confirmed:true};} };
+ useStore.setState({sessions:{s}});
+ try {
+  await assert.rejects(useStore.getState().confirm('s','c',true,answers),/offline/);
+  assert.equal(useStore.getState().sessions.s.confirmations.length,1);
+  fail=false;
+  await useStore.getState().confirm('s','c',true,answers);
+  assert.deepEqual(payload.body.answers,answers);
+  assert.equal(payload.body.run_id,'r');
+  assert.equal(payload.path,'/sessions/s/run/confirm');
+  assert.equal(useStore.getState().sessions.s.confirmations.length,0);
+ } finally {global.window.piAPI=api;useStore.setState(before);}
+});

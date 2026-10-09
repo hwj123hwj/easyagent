@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiRequest, useStore, type SessionView } from "../store";
 import { Icon } from "./Icon";
+import { QuestionPrompt } from "./QuestionPrompt";
 import { ContextInspector } from "./ContextInspector";
 import { ComposerStatus } from "./ComposerStatus";
 import { ModelPicker } from "./ModelPicker";
@@ -230,11 +231,11 @@ export function PromptBar({
         {inspect && <ContextInspector key={id} view={view} onBusy={setCommandBusy} onClose={() => { setInspect(false); input.current?.focus(); }} />}
         <div className="confirmation-list">
           {view.confirmations.map((confirmation) => (
-            <ConfirmationPrompt
-              key={confirmation.confirmation_id}
-              id={id}
-              value={confirmation}
-            />
+            confirmation.tool_name === "ask_user_question" ? (
+              <QuestionPrompt key={id + confirmation.confirmation_id} id={id} value={confirmation} />
+            ) : (
+              <ConfirmationPrompt key={confirmation.confirmation_id} id={id} value={confirmation} />
+            )
           ))}
         </div>
         {output && (

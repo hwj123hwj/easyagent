@@ -12,6 +12,8 @@ import (
 	"github.com/hwj123hwj/easyagent/sdk/operations"
 )
 
+const DefaultBashTimeoutSeconds = 120
+
 type BashTool struct {
 	workspace        string // 工作目录限制，空字符串表示不限制
 	maxOutputLen     int    // 最大输出长度，0 表示使用 DefaultMaxOutputLen
@@ -64,7 +66,7 @@ func (t *BashTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"command": map[string]any{"type": "string", "description": "The shell command to execute."},
-			"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (default 30)."},
+			"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (default 120). Set a longer timeout for builds or tests."},
 		},
 		"required": []string{"command"},
 	}
@@ -78,7 +80,7 @@ func (t *BashTool) Validate(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, fmt.Errorf("command is required")
 	}
 	if params.Timeout <= 0 {
-		params.Timeout = 30
+		params.Timeout = DefaultBashTimeoutSeconds
 	}
 	return json.Marshal(params)
 }
@@ -100,6 +102,10 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, onUpdate fu
 	var params BashParams
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return agent.ToolResult{IsError: true}, err
+	}
+
+	if params.Timeout <= 0 {
+		params.Timeout = DefaultBashTimeoutSeconds
 	}
 
 	req := operations.RunRequest{
@@ -195,7 +201,7 @@ func (t *BashTool) reportProgress(ctx context.Context, timeout int, update func(
 			case <-ticker.C:
 				message := fmt.Sprintf("命令仍在执行 · 已等待 %ds", int(time.Since(start).Seconds()))
 				if timeout > 0 {
-					message += fmt.Sprintf(" · 超时上限 %ds", timeout)
+					message += fmt.Sprintf(" · 本次超时 %ds", timeout)
 				}
 				update(agent.PartialResult{Content: message})
 			}

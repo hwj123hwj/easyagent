@@ -135,6 +135,8 @@ export const zh = {
   'permission.title': '需要你的批准',
 
   // ── ask_user_question (multi-choice cards) ───────────────────────────────────────
+  "ask.invalid": "问题格式无效，请跳过后让 Agent 重新提问。",
+  "ask.submitting": "提交中…",
   'ask.title': '请回答以下问题',
   'ask.other': '其他（自定义输入）…',
   'ask.otherPlaceholder': '输入你的回答…',
