@@ -109,6 +109,11 @@ type Config struct {
 	ASRModel   string // ASR model name (default: TeleAI/TeleSpeechASR)
 	ASRBaseURL string // ASR API base URL (default: https://api.siliconflow.cn)
 
+	// Skill marketplace (EasyCode official skill store)
+	SkillMarketEnabled  bool   // expose skill_market tool and REST endpoints (default: true)
+	SkillMarketBaseURL  string // store endpoint (default: https://skills.deepvlab.ai)
+	SkillMarketSkillDir string // local install root (default: ~/.agents/skills)
+
 	// Server security
 	APIKey string // Bearer token for HTTP API auth (empty = no auth, backward compatible)
 }
@@ -143,7 +148,8 @@ func Default() Config {
 
 		MaxOutputLen: 30000,
 
-		KBRepoPath: "", // empty → defaults to ~/agent-lessons at runtime
+		KBRepoPath:         "", // empty → defaults to ~/agent-lessons at runtime
+		SkillMarketEnabled: true,
 	}
 }
 
@@ -293,6 +299,15 @@ func (c *Config) LoadFromEnv() {
 		c.KBRepoPath = v
 	}
 
+	// Skill marketplace
+	c.SkillMarketEnabled = getEnvBool("EA_SKILL_MARKET", c.SkillMarketEnabled)
+	if v := getEnv("EA_SKILL_MARKET_BASE_URL", ""); v != "" {
+		c.SkillMarketBaseURL = sanitizeConfigString(v)
+	}
+	if v := getEnv("EA_SKILL_MARKET_SKILL_DIR", ""); v != "" {
+		c.SkillMarketSkillDir = v
+	}
+
 	// KB vector search
 	if v := os.Getenv("SILICONFLOW_API_KEY"); v != "" {
 		c.KBEmbeddingAPIKey = v
@@ -416,6 +431,9 @@ type yamlConfig struct {
 	KBEmbeddingModel   string `yaml:"kb_embedding_model,omitempty"`
 	KBEmbeddingBaseURL string `yaml:"kb_embedding_base_url,omitempty"`
 
+	SkillMarketBaseURL  string `yaml:"skill_market_base_url,omitempty"`
+	SkillMarketSkillDir string `yaml:"skill_market_skill_dir,omitempty"`
+
 	ASRAPIKey  string `yaml:"asr_api_key,omitempty"`
 	ASRModel   string `yaml:"asr_model,omitempty"`
 	ASRBaseURL string `yaml:"asr_base_url,omitempty"`
@@ -525,6 +543,12 @@ func (c *Config) LoadFromYAML(path string) error {
 	}
 	if yc.KBRepoPath != "" {
 		c.KBRepoPath = yc.KBRepoPath
+	}
+	if yc.SkillMarketBaseURL != "" {
+		c.SkillMarketBaseURL = yc.SkillMarketBaseURL
+	}
+	if yc.SkillMarketSkillDir != "" {
+		c.SkillMarketSkillDir = yc.SkillMarketSkillDir
 	}
 	if yc.KBEmbeddingAPIKey != "" {
 		c.KBEmbeddingAPIKey = yc.KBEmbeddingAPIKey

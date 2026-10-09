@@ -69,6 +69,7 @@ Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。ser
 | `EA_WORKFLOW_RUNTIME` | 动态工作流 bundle 绝对路径，见 [构建说明](DYNAMIC_WORKFLOW.md) |
 | `EA_MCP_CONFIG` / `--mcp-config` / YAML `mcp_config` | 用户 MCP 配置文件，默认 `EA_HOME/mcp.json`；项目文件与授权见 [MCP](MCP.md) |
 | `EA_KB_REPO_PATH` | 知识库目录；未设置时运行入口使用 `~/agent-lessons` |
+| `EA_SKILL_MARKET`、`EA_SKILL_MARKET_BASE_URL`、`EA_SKILL_MARKET_SKILL_DIR` | 技能市场（EasyCode 官方 skill store）；默认开启，`EA_SKILL_MARKET=0` 关闭。安装到 `EA_SKILL_MARKET_SKILL_DIR`（默认 `~/.agents/skills`），下一轮或新会话生效，见 [技能市场](SKILL_MARKET.md) |
 | `SILICONFLOW_API_KEY`、`SILICONFLOW_EMBEDDING_MODEL`、`SILICONFLOW_BASE_URL` | 可选知识库向量搜索 |
 | `ASR_API_KEY`、`ASR_MODEL`、`ASR_BASE_URL` | 语音识别；未设置 ASR Key 时可回退到 SiliconFlow Key |
 | `EA_FEISHU_ENV_FILE`、`FEISHU_OWNER_STATE_FILE` | 托管飞书配置与配对状态，见 [飞书](FEISHU.md) |

@@ -87,6 +87,7 @@ sdk/agent/ sdk/ai/ sdk/session/ …      ← 核心层（零领域知识）
 | 接口 | 文件 | 作用 |
 |------|------|------|
 | `agent.Tool` | `sdk/agent/tool.go` | 工具系统，可选接口：`ToolWithMode`、`ConcurrencySafeChecker`、`ToolWithPrepareArguments` |
+| `skillmarket.Client` | `sdk/skillmarket/skillmarket.go` | 技能市场客户端：store 搜索/详情 + 本地安装/卸载（见 `docs/SKILL_MARKET.md`） |
 | `providers.Provider` | `sdk/ai/providers/interface.go` | LLM Provider 注册制（Name + Stream + StreamSimple） |
 | `runtime.Application` | `sdk/runtime/application.go` | Platform↔App 解耦点：`BuildTools()` + `BuildPrompt()` + `NewSessionExt()` |
 | `operations.Operations` | `sdk/operations/interface.go` | 本地/SSH 执行后端切换 |
@@ -135,3 +136,6 @@ Provider 开发使用测试中注入的 mock 或本地模拟 HTTP 服务，不�
 | `EA_PROVIDER` | 空，需显式配置 | `anthropic` / `openai` |
 | `EA_ENABLE_BASH` | `false` | 启用 Bash 工具 |
 | `EA_DATA_DIR` | `./data` | 会话数据目录 |
+| `EA_SKILL_MARKET` | `true` | 技能市场（官方 store 搜索/安装）；设 `0` 关闭 |
+| `EA_SKILL_MARKET_BASE_URL` | `https://skills.deepvlab.ai` | 技能市场 API 地址 |
+| `EA_SKILL_MARKET_SKILL_DIR` | `~/.agents/skills` | 市场技能安装目录 |

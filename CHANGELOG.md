@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+新增技能市场：会话内 `skill_market` 工具与 REST 端点对接 EasyCode 官方 skill store。
+
+- 支持搜索/详情/主题分组浏览，安装（zip 下载 + SHA-256 校验 + zip-slip 防护）到 `~/.agents/skills`，以及按 manifest 卸载；只信服务端元数据，不覆盖已有目录，手写技能不可能经市场路径删除。
+- 安装改为后台任务 + SSE 进度流（`GET /skills/market/jobs/{id}/events`）：阶段（解析/下载/校验/解压）与字节级下载进度，订阅即重放快照，15s keepalive；轮询端点与取消端点同步提供。
+- 桌面端设置页新增「技能市场」标签：搜索/排序/分组浏览、实时安装进度条、已安装徽标与确认卸载、分页（中英词条齐备）。
+- 安装/卸载通过 `ToolRevision` 触发会话重建，已加载会话下一轮生效、新会话立即生效；与 MCP 热重载机制一致。
+- `EA_SKILL_MARKET=0` 整体关闭；`EA_SKILL_MARKET_BASE_URL` / `EA_SKILL_MARKET_SKILL_DIR` 可覆盖 store 地址与安装目录，见 [技能市场](docs/SKILL_MARKET.md)。
+
 ## [v0.9.1] - 2026-10-07
 
 修复实验设置页和用量统计页的实际请求路由。
