@@ -71,7 +71,7 @@ type ExampleFile struct {
 }
 
 // SkillItem is a skill as returned by browse and detail endpoints.
-// Field names mirror the store's snake_case JSON.
+// JSON tags preserve the REST contract; decoding also accepts the official store's camelCase fields.
 type SkillItem struct {
 	ID                int                 `json:"id"`
 	Name              string              `json:"name"`
@@ -94,6 +94,55 @@ type SkillItem struct {
 	OSSKey            *string             `json:"oss_key"`
 	SectionID         *int                `json:"section_id"`
 	SectionName       *string             `json:"section_name"`
+}
+
+// decodeStoreJSON accepts both the official store's camelCase wire format and
+// the snake_case fields used by EasyAgent REST responses and existing fixtures.
+// Explicit snake_case fields take precedence if both forms are present.
+func decodeStoreJSON(data []byte, out any) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	aliases := map[string]string{
+		"displayName": "display_name", "richDescription": "rich_description",
+		"iconUrl": "icon_url", "previewImages": "preview_images",
+		"previewThumbnails": "preview_thumbnails", "usageExample": "usage_example",
+		"exampleFiles": "example_files", "installCount": "install_count",
+		"sortOrder": "sort_order", "tarballSize": "tarball_size", "ossKey": "oss_key",
+		"sectionId": "section_id", "sectionName": "section_name",
+		"nameI18n": "name_i18n", "descriptionI18n": "description_i18n",
+		"orderIndex": "order_index", "isLong": "is_long", "mimeType": "mime_type",
+	}
+	for camel, snake := range aliases {
+		if _, exists := fields[snake]; !exists {
+			if value, ok := fields[camel]; ok {
+				fields[snake] = value
+			}
+		}
+	}
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(normalized, out)
+}
+
+func (s *SkillItem) UnmarshalJSON(data []byte) error {
+	type plain SkillItem
+	return decodeStoreJSON(data, (*plain)(s))
+}
+func (s *Section) UnmarshalJSON(data []byte) error {
+	type plain Section
+	return decodeStoreJSON(data, (*plain)(s))
+}
+func (s *PreviewThumbnail) UnmarshalJSON(data []byte) error {
+	type plain PreviewThumbnail
+	return decodeStoreJSON(data, (*plain)(s))
+}
+func (s *ExampleFile) UnmarshalJSON(data []byte) error {
+	type plain ExampleFile
+	return decodeStoreJSON(data, (*plain)(s))
 }
 
 // BrowseQuery filters a store browse/search request.

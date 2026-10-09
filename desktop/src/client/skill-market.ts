@@ -2,8 +2,8 @@
 // and stream install progress over SSE.
 //
 // Two transports:
-// - Electron (window.piAPI): requests go over IPC; SSE uses fetch + ReadableStream
-//   against getServerUrl() since EventSource cannot send auth headers.
+// - Electron (window.piAPI): requests and authoritative progress polling use
+//   authenticated IPC, keeping connection tokens in the main process.
 // - Browser dev mode: same fetch approach with baseUrl + authHeaders from store.
 
 import { apiRequest, authHeaders, getBaseUrl } from "../store";
