@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -146,7 +147,7 @@ type Client struct {
 
 	// progress, when set, receives coarse install phase updates
 	// (downloading with byte counts, extracting, verifying, done).
-	progress func(InstallProgress)
+	mutation sync.Mutex
 }
 
 // InstallPhase identifies where an install currently is.
@@ -318,6 +319,8 @@ func (c *Client) Install(ctx context.Context, id int) (SkillItem, error) {
 // Only server-provided metadata is trusted: the detail response supplies
 // the name, version, and expected digest.
 func (c *Client) InstallWithProgress(ctx context.Context, id int, progress ProgressFunc) (SkillItem, error) {
+	c.mutation.Lock()
+	defer c.mutation.Unlock()
 	emit := func(p InstallProgress) {
 		if progress != nil {
 			progress(p)
@@ -345,7 +348,7 @@ func (c *Client) InstallWithProgress(ctx context.Context, id int, progress Progr
 	}
 
 	target := filepath.Join(c.skillsDir, item.Name)
-	if _, err := os.Stat(target); err == nil {
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
 		// Refuse to merge into (or later rm -rf) a user-owned directory.
 		err := fmt.Errorf("%w: %s", ErrAlreadyInstalled, target)
 		prog(PhaseDownloading, item, err)
@@ -364,8 +367,15 @@ func (c *Client) InstallWithProgress(ctx context.Context, id int, progress Progr
 
 	prog(PhaseVerifying, item, nil)
 	prog(PhaseExtracting, item, nil)
-	if err := extractZip(zipPath, target); err != nil {
-		os.RemoveAll(target)
+	if err := os.MkdirAll(c.skillsDir, 0o755); err != nil {
+		return SkillItem{}, err
+	}
+	stage, err := os.MkdirTemp(c.skillsDir, ".market-install-")
+	if err != nil {
+		return SkillItem{}, err
+	}
+	defer os.RemoveAll(stage)
+	if err := extractZipContext(ctx, zipPath, stage); err != nil {
 		prog(PhaseExtracting, item, err)
 		return SkillItem{}, err
 	}
@@ -381,9 +391,19 @@ func (c *Client) InstallWithProgress(ctx context.Context, id int, progress Progr
 	if item.SHA256 != nil {
 		record.SHA256 = *item.SHA256
 	}
-	if err := writeManifest(target, record); err != nil {
-		os.RemoveAll(target)
+	if err := writeManifest(stage, record); err != nil {
 		prog(PhaseExtracting, item, err)
+		return SkillItem{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return SkillItem{}, err
+	}
+	// Publish the fully validated directory without replacing any target,
+	// including a directory created by another process during the download.
+	if err := renameNew(stage, target); err != nil {
+		if os.IsExist(err) {
+			return SkillItem{}, fmt.Errorf("%w: %s", ErrAlreadyInstalled, target)
+		}
 		return SkillItem{}, err
 	}
 	prog(PhaseDone, item, nil)
@@ -449,10 +469,14 @@ func (c *Client) downloadZipWithProgress(ctx context.Context, item SkillItem, on
 			onBytes(counted, total)
 		}})
 	}
-	size, err := io.Copy(dst, io.LimitReader(resp.Body, maxPackageSize))
+	size, err := io.Copy(dst, io.LimitReader(resp.Body, maxPackageSize+1))
 	if err != nil {
 		os.Remove(tmp.Name())
 		return "", fmt.Errorf("skillmarket: download failed: %w", err)
+	}
+	if size > maxPackageSize {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("skillmarket: package exceeds size limit")
 	}
 	if onBytes != nil {
 		// Flush the final count (stride throttling skips small files).
@@ -479,15 +503,36 @@ const maxPackageSize = 200 << 20
 
 // extractZip unpacks src into dst, rejecting path traversal ("zip slip")
 // and absolute entry names. Missing parent directories are created.
-func extractZip(src, dst string) error {
+func extractZip(src, dst string) error { return extractZipContext(context.Background(), src, dst) }
+
+func extractZipContext(ctx context.Context, src, dst string) error {
 	reader, err := zip.OpenReader(src)
 	if err != nil {
 		return fmt.Errorf("skillmarket: invalid zip: %w", err)
 	}
 	defer reader.Close()
 
+	if len(reader.File) > 10000 {
+		return fmt.Errorf("skillmarket: too many zip entries")
+	}
+	var expanded uint64
+	for _, f := range reader.File {
+		if f.UncompressedSize64 > maxPackageSize || expanded > maxPackageSize-f.UncompressedSize64 {
+			return fmt.Errorf("skillmarket: expanded package exceeds size limit")
+		}
+		expanded += f.UncompressedSize64
+	}
 	cleanDst := filepath.Clean(dst)
 	for _, f := range reader.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !f.Mode().IsRegular() && !f.FileInfo().IsDir() {
+			return fmt.Errorf("skillmarket: unsupported zip entry %q", f.Name)
+		}
+		if strings.Contains(f.Name, "\\") {
+			return fmt.Errorf("skillmarket: illegal zip entry %q", f.Name)
+		}
 		name := filepath.Clean(f.Name)
 		if strings.HasPrefix(name, "..") || filepath.IsAbs(name) {
 			return fmt.Errorf("skillmarket: illegal zip entry %q", f.Name)
@@ -506,14 +551,14 @@ func extractZip(src, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
-		if err := copyZipEntry(f, target); err != nil {
+		if err := copyZipEntry(ctx, f, target); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func copyZipEntry(f *zip.File, target string) error {
+func copyZipEntry(ctx context.Context, f *zip.File, target string) error {
 	src, err := f.Open()
 	if err != nil {
 		return err
@@ -529,8 +574,20 @@ func copyZipEntry(f *zip.File, target string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, src)
+	_, err = io.Copy(out, &contextReader{ctx: ctx, reader: io.LimitReader(src, maxPackageSize+1)})
 	return err
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 func writeManifest(dir string, record InstallRecord) error {
@@ -543,6 +600,10 @@ func writeManifest(dir string, record InstallRecord) error {
 
 // readManifest loads the manifest from an installed skill directory.
 func readManifest(dir string) (InstallRecord, error) {
+	info, err := os.Lstat(filepath.Join(dir, manifestName))
+	if err != nil || !info.Mode().IsRegular() {
+		return InstallRecord{}, ErrNotMarketplace
+	}
 	data, err := os.ReadFile(filepath.Join(dir, manifestName))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -553,6 +614,9 @@ func readManifest(dir string) (InstallRecord, error) {
 	var record InstallRecord
 	if err := json.Unmarshal(data, &record); err != nil {
 		return InstallRecord{}, fmt.Errorf("skillmarket: corrupt manifest: %w", err)
+	}
+	if record.Name != filepath.Base(dir) || record.ID <= 0 {
+		return InstallRecord{}, ErrNotMarketplace
 	}
 	return record, nil
 }
@@ -599,15 +663,19 @@ func (c *Client) ListInstalled() ([]Installed, error) {
 // yields ErrNotMarketplace so user-written skills can never be deleted
 // through the marketplace path.
 func (c *Client) Uninstall(name string) error {
+	c.mutation.Lock()
+	defer c.mutation.Unlock()
 	if !packageNameRe.MatchString(name) {
 		return fmt.Errorf("skillmarket: invalid skill name %q", name)
 	}
 	dir := filepath.Join(c.skillsDir, name)
-	if _, err := os.Stat(dir); err != nil {
+	if info, err := os.Lstat(dir); err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotFound
 		}
 		return err
+	} else if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return ErrNotMarketplace
 	}
 	if _, err := readManifest(dir); err != nil {
 		return err

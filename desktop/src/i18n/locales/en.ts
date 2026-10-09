@@ -138,6 +138,8 @@ export const en = {
   'permission.title': 'Your approval is needed',
 
   // ── ask_user_question (multi-choice cards) ───────────────────────────────────────
+  "ask.invalid": "Invalid question format. Skip and ask the agent to try again.",
+  "ask.submitting": "Submitting…",
   'ask.title': 'Please answer the following',
   'ask.other': 'Other (custom input)…',
   'ask.otherPlaceholder': 'Type your answer…',
@@ -449,6 +451,8 @@ export const en = {
   'mobile.settings': 'Settings',
   'mobile.server': 'Server',
   // ── skill market ───────────────────────────────────────────────────────────
+  'settings.skillMarket.previous': 'Previous page',
+  'settings.skillMarket.next': 'Next page',
   'settings.skillMarket.title': 'Skill Market',
   'settings.skillMarket.subtitle': 'Browse and install skills from the official market. New sessions get them immediately; live sessions pick them up next turn.',
   'settings.skillMarket.searchPlaceholder': 'Search skills…',
@@ -473,5 +477,3 @@ export const en = {
   'settings.skillMarket.phase.done': 'Done',
 
 };
-
-

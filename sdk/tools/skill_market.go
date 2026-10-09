@@ -61,7 +61,7 @@ func (t *SkillMarketTool) Description() string {
 Actions:
 - search: browse/list skills. Optional query (keyword), category, sort (featured|installs|name), page (1-based).
 - detail: full metadata for one skill. Requires id.
-- install: download and install a skill into the personal skills directory (~/.agents/skills). Requires id. Asks the user for confirmation. Newly installed skills take effect on the NEXT turn or session.
+- install: download and install a skill into the personal skills directory (~/.agents/skills). Requires id. Follows the session permission mode for confirmation. Newly installed skills take effect on the NEXT turn or session.
 - uninstall: remove a previously marketplace-installed skill by name (directory name). Requires name. Hand-written skills are never removable this way.
 
 Use search first to discover what is available, then install by numeric id.`
@@ -128,7 +128,7 @@ func (t *SkillMarketTool) Validate(raw json.RawMessage) (json.RawMessage, error)
 }
 
 // RequiresConfirmation implements agent.ToolWithConfirmation: installs pull
-// remote packages and write outside the workspace, so they always ask.
+// remote packages and write outside the workspace, so they follow the session confirmation policy.
 func (t *SkillMarketTool) RequiresConfirmation(raw json.RawMessage) (string, bool) {
 	var params SkillMarketParams
 	if err := json.Unmarshal(raw, &params); err != nil {

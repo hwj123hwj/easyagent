@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ type fakeStore struct {
 	server    *httptest.Server
 	skill     SkillItem
 	zipBytes  []byte
-	downloads int
+	downloads atomic.Int32
 }
 
 func newFakeStore(t *testing.T) *fakeStore {
@@ -76,7 +77,7 @@ func newFakeStore(t *testing.T) *fakeStore {
 		})
 	})
 	mux.HandleFunc("GET /api/skills/1/download", func(w http.ResponseWriter, r *http.Request) {
-		store.downloads++
+		store.downloads.Add(1)
 		_, _ = w.Write(store.zipBytes)
 	})
 
@@ -142,8 +143,8 @@ func TestInstallDownloadVerifyExtractManifest(t *testing.T) {
 	if item.Name != "hello-skill" {
 		t.Fatalf("unexpected item: %+v", item)
 	}
-	if store.downloads != 1 {
-		t.Fatalf("expected exactly one download, got %d", store.downloads)
+	if store.downloads.Load() != 1 {
+		t.Fatalf("expected exactly one download, got %d", store.downloads.Load())
 	}
 
 	// Extracted content exists and manifest records the install.

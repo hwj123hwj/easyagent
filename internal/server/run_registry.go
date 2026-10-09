@@ -18,6 +18,7 @@ import (
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
+	"github.com/hwj123hwj/easyagent/sdk/tools"
 )
 
 const runReplayLimit = 256
@@ -435,14 +436,20 @@ func (s *Server) confirmRunTool(ctx context.Context, request agent.ConfirmationR
 	s.runs.publishLocked(state, wsServerMessage{Type: "confirmation", SessionID: run.SessionID, RunID: run.ID, Confirmation: pending, State: run.State})
 	wait := s.runs.confirmationTimeout
 	s.runs.mu.Unlock()
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
+	// Questions are user-driven: do not silently expire them on the short
+	// dangerous-action approval timer. Explicit reply/skip/cancel resolves them.
+	var deadline <-chan time.Time
+	if request.ToolName != "ask_user_question" {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		deadline = timer.C
+	}
 	decision := agent.ConfirmDecision{Reason: "确认等待超时，操作未执行"}
 	select {
 	case decision = <-pending.decision:
 	case <-ctx.Done():
 		decision.Reason = "任务已取消，操作未执行"
-	case <-timer.C:
+	case <-deadline:
 	}
 	s.runs.mu.Lock()
 	delete(run.pending, pending.ID)
@@ -459,7 +466,7 @@ func (s *Server) confirmRunTool(ctx context.Context, request agent.ConfirmationR
 	return decision
 }
 
-func (s *Server) confirmRun(sessionID, runID, confirmationID string, approved bool, reason string) error {
+func (s *Server) confirmRun(sessionID, runID, confirmationID string, approved bool, reason string, response ...json.RawMessage) error {
 	s.runs.mu.Lock()
 	defer s.runs.mu.Unlock()
 	state := s.runs.sessions[sessionID]
@@ -470,8 +477,20 @@ func (s *Server) confirmRun(sessionID, runID, confirmationID string, approved bo
 	if pending == nil {
 		return &runAdmissionError{"stale_confirmation", "确认请求不存在或已经处理"}
 	}
+	decision := agent.ConfirmDecision{Approved: approved, Reason: reason}
+	if pending.ToolName == "ask_user_question" && approved {
+		if len(response) > 0 {
+			decision.Response = response[0]
+		}
+		if _, err := tools.ValidateAskUserAnswers(pending.Args, decision.Response); err != nil {
+			return &runAdmissionError{"invalid_answers", err.Error()}
+		}
+	}
+	if pending.ToolName == "ask_user_question" && !approved && reason == "" {
+		decision.Reason = "User skipped the questions; no answers were submitted. Ask in plain text if still necessary."
+	}
 	select {
-	case pending.decision <- agent.ConfirmDecision{Approved: approved, Reason: reason}:
+	case pending.decision <- decision:
 		delete(state.run.pending, confirmationID)
 		return nil
 	default:
@@ -666,16 +685,17 @@ func (s *Server) cancelRunHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) confirmRunHTTP(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		RunID          string `json:"run_id"`
-		ConfirmationID string `json:"confirmation_id"`
-		Approved       bool   `json:"approved"`
-		Reason         string `json:"reason"`
+		RunID          string          `json:"run_id"`
+		ConfirmationID string          `json:"confirmation_id"`
+		Approved       bool            `json:"approved"`
+		Reason         string          `json:"reason"`
+		Answers        json.RawMessage `json:"answers"`
 	}
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&request) != nil {
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&request) != nil {
 		writeError(w, 400, "invalid JSON")
 		return
 	}
-	if err := s.confirmRun(r.PathValue("id"), request.RunID, request.ConfirmationID, request.Approved, request.Reason); err != nil {
+	if err := s.confirmRun(r.PathValue("id"), request.RunID, request.ConfirmationID, request.Approved, request.Reason, request.Answers); err != nil {
 		runHTTPError(w, err)
 		return
 	}
@@ -694,7 +714,7 @@ func runHTTPError(w http.ResponseWriter, err error) {
 	var admission *runAdmissionError
 	if errors.As(err, &admission) {
 		code := http.StatusConflict
-		if admission.code == "invalid_prompt" || admission.code == "invalid_request_id" {
+		if admission.code == "invalid_prompt" || admission.code == "invalid_request_id" || admission.code == "invalid_answers" {
 			code = http.StatusBadRequest
 		}
 		if admission.code == "updating" {

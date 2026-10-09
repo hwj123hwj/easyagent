@@ -89,3 +89,9 @@ Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。ser
 v0.9.0 只提供可选 `easyagent-cua-helper` 的 CLI 协议，安装包没有原生 helper。仅 macOS 主机安装兼容 helper 后可执行，权限检测不可用时界面明确提示。截图结果当前只是本地路径。审批策略独立于编码会话的完全权限；`ask` 批次及 `auto` 中退出/注销/锁屏/强制退出组合键必须经交互批准。审计列表表示实际控制过的应用，不是允许列表，也不限制目标应用。原生实现与基于应用/元素的控制需要后续完善。
 
 兼容 helper 的 CLI 契约：`status` 返回 `accessibility` / `screen_recording` 布尔值；`request-permissions` 打开权限面板；`tool screenshot --args '{"output_dir":"…"}'` 返回 `path`；`tool app_state` 返回 JSON 应用状态；`tool perform_action --args '{"actions":[…]}'` 仅整批完成时返回 `{"success":true,"focused_app":"应用 ID"}`，失败返回非零退出码或 `{"success":false,"error":"原因"}`。批次按顺序执行，不保证回滚，失败不可盲目重放。所有输出走 stdout，诊断走 stderr。
+
+### 命令超时与自动压缩
+
+`bash` 未指定 `timeout` 时默认等待 120 秒；模型可为构建、测试等显式指定更长秒数，用户停止任务仍会取消命令。界面显示的是本次命令的超时，而非工具的固定上限。
+
+自动压缩估算包含消息、系统提示词和工具定义，与桌面上下文用量一致。默认超过窗口 60% 时尝试清理旧工具输出，累计至少节省 2048 tokens 才持久化；超过 80% 或侵入输出预留区（默认 16384 tokens）时直接调用 LLM 做深度摘要，不先微压缩来推迟摘要。保留最近约 20000 tokens，不删除 JSONL 中的原始会话记录。SDK 可用 `compaction.Settings` 调整比例、预留与回收阈值；没有摘要通道的 SDK 调用方只能做微压缩。

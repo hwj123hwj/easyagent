@@ -247,7 +247,7 @@ loop:
 			break loop
 		}
 	}
-	require.Contains(t, body, "event: progress")
+	// Fast installs may finish before subscribing; terminal replay is valid.
 	require.Contains(t, body, "event: done")
 	require.Contains(t, body, `"state":"succeeded"`)
 
@@ -300,4 +300,51 @@ func TestSkillMarketRESTInstallValidation(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// A slow client must always be able to observe the terminal state.
+func TestMarketSubscriberRetainsTerminalWhenBufferFull(t *testing.T) {
+	srv, _ := skillMarketTestServer(t)
+	job := &marketJob{ID: "slow", State: "running", subs: map[chan marketEvent]struct{}{}}
+	srv.marketJobs.jobs[job.ID] = job
+	events, cancel, err := srv.marketJobs.Subscribe(job.ID, 64)
+	require.NoError(t, err)
+	defer cancel()
+	for range 100 {
+		srv.marketJobs.publish(job, marketEvent{JobID: job.ID, State: "running"})
+	}
+	srv.marketJobs.publish(job, marketEvent{JobID: job.ID, State: "succeeded"})
+	found := false
+	for len(events) > 0 {
+		if (<-events).State == "succeeded" {
+			found = true
+		}
+	}
+	require.True(t, found)
+}
+
+func TestMarketCustomDirectoryReloadsExistingAndNewSessions(t *testing.T) {
+	srv, _ := skillMarketTestServer(t)
+	sess, err := srv.app.NewSession(t.Context())
+	require.NoError(t, err)
+	_, err = srv.app.SkillMarket().Install(t.Context(), 42)
+	require.NoError(t, err)
+	srv.app.BumpSkillMarketRevision()
+	require.NoError(t, sess.RefreshTools(t.Context()))
+	found := func() bool {
+		for _, s := range sess.LoadedSkills() {
+			if s.Name == "rest-demo" {
+				return true
+			}
+		}
+		return false
+	}
+	require.True(t, found(), "custom marketplace root must be loaded")
+	newer, err := srv.app.NewSession(t.Context())
+	require.NoError(t, err)
+	require.NotEmpty(t, newer.LoadedSkills())
+	require.NoError(t, srv.app.SkillMarket().Uninstall("rest-demo"))
+	srv.app.BumpSkillMarketRevision()
+	require.NoError(t, sess.RefreshTools(t.Context()))
+	require.False(t, found(), "uninstalled skill must disappear after reload")
 }

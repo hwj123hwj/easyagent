@@ -70,12 +70,14 @@ export async function marketSearch(params: {
   category?: string;
   sort?: string;
   page?: number;
+  section?: number;
 }): Promise<MarketSearchResult> {
   const usp = new URLSearchParams();
   if (params.q) usp.set("q", params.q);
   if (params.category) usp.set("category", params.category);
   if (params.sort) usp.set("sort", params.sort);
   if (params.page && params.page > 1) usp.set("page", String(params.page));
+  if (params.section) usp.set("section", String(params.section));
   const qs = usp.toString();
   return apiRequest<MarketSearchResult>(
     "GET",
@@ -112,10 +114,10 @@ export async function marketInstallStart(
 export async function marketJobStatus(
   jobId: string,
 ): Promise<InstallJobState & { started_at: string }> {
-  return apiRequest<InstallJobState & { started_at: string }>(
-    "GET",
-    `/skills/market/jobs/${encodeURIComponent(jobId)}`,
+  const res = await apiRequest<Omit<InstallJobState, "job_id" | "name"> & { id: string; skill_name?: string; started_at: string }>(
+    "GET", `/skills/market/jobs/${encodeURIComponent(jobId)}`,
   );
+  return { ...res, job_id: res.id, name: res.skill_name };
 }
 
 export async function marketUninstall(name: string): Promise<void> {
@@ -139,68 +141,57 @@ export function subscribeInstallJob(
   },
 ): () => void {
   const controller = new AbortController();
-  const base = typeof window !== "undefined" && window.piAPI?.getServerUrl
-    ? null // resolved async below
-    : getBaseUrl();
-
-  (async () => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const terminal = (evt: InstallJobState) => evt.state === "succeeded" || evt.state === "failed";
+  const poll = async () => {
     try {
-      let url: string;
-      let headers: Record<string, string>;
-      if (window.piAPI) {
-        const serverUrl = await window.piAPI.getServerUrl();
-        url = `${serverUrl ?? "http://127.0.0.1:8080"}/skills/market/jobs/${encodeURIComponent(jobId)}/events`;
-        headers = {}; // loopback IPC-spawned server needs no token
-      } else {
-        url = `${base}/skills/market/jobs/${encodeURIComponent(jobId)}/events`;
-        headers = authHeaders();
-      }
-
-      const res = await fetch(url, {
-        headers,
-        signal: controller.signal,
-      });
-      if (!res.ok || !res.body) {
-        throw new Error(`SSE HTTP ${res.status}`);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-
-        // Parse complete SSE frames: event: X\ndata: {...}\n\n
-        let idx: number;
-        while ((idx = buf.indexOf("\n\n")) >= 0) {
-          const frame = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const dataLine = frame
-            .split("\n")
-            .find((l) => l.startsWith("data: "));
-          if (!dataLine) continue;
-          try {
-            const evt = JSON.parse(dataLine.slice(6)) as InstallJobState;
-            handlers.onEvent(evt);
-            if (evt.state === "succeeded" || evt.state === "failed") {
-              controller.abort();
-              return;
-            }
-          } catch {
-            // Malformed frame: skip, keep the stream alive.
-          }
-        }
-      }
+      const evt = await marketJobStatus(jobId);
+      if (controller.signal.aborted) return;
+      handlers.onEvent(evt);
+      if (!terminal(evt)) timer = setTimeout(() => void poll(), 500);
     } catch (err) {
-      if (!controller.signal.aborted) {
-        handlers.onError?.(err instanceof Error ? err : new Error(String(err)));
-      }
+      if (!controller.signal.aborted) handlers.onError?.(err instanceof Error ? err : new Error(String(err)));
     }
-  })();
-
-  return () => controller.abort();
+  };
+  // Electron retains tokens in the main process. Use its authenticated IPC
+  // transport for local and SSH hosts rather than unauthenticated fetch.
+  if (typeof window !== "undefined" && window.piAPI) {
+    void poll();
+  } else {
+    void (async () => {
+      try {
+        const res = await fetch(`${getBaseUrl()}/skills/market/jobs/${encodeURIComponent(jobId)}/events`, {
+          headers: authHeaders(), signal: controller.signal,
+        });
+        if (!res.ok || !res.body) throw new Error(`SSE HTTP ${res.status}`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let idx: number;
+            while ((idx = buf.indexOf("\n\n")) >= 0) {
+              const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+              const line = frame.split("\n").find(l => l.startsWith("data: "));
+              if (!line) continue;
+              const evt = JSON.parse(line.slice(6)) as InstallJobState;
+              if (controller.signal.aborted) return;
+              handlers.onEvent(evt);
+              if (terminal(evt)) return;
+            }
+          }
+        } finally { await reader.cancel().catch(() => {}); }
+      } catch {
+        // Disconnects are not install failures: recover the authoritative job
+        // snapshot through the authenticated REST transport.
+      }
+      if (!controller.signal.aborted) void poll();
+    })();
+  }
+  return () => { controller.abort(); if (timer) clearTimeout(timer); };
 }
 
 export function formatBytes(n?: number): string {

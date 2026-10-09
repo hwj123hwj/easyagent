@@ -48,6 +48,10 @@ export function SkillMarketPanel() {
   // Install state keyed by skill id; one install per skill at a time.
   const [installs, setInstalls] = useState<Record<number, InstallState>>({});
   const [confirmName, setConfirmName] = useState<string | null>(null);
+  const searchSeq = useRef(0);
+  const pageSize = useRef(0);
+  const mounted = useRef(false);
+  const starting = useRef(new Set<number>());
   const subsRef = useRef(new Map<number, () => void>());
 
   const refreshInstalled = useCallback(async () => {
@@ -60,6 +64,7 @@ export function SkillMarketPanel() {
 
   const runSearch = useCallback(
     async (opts?: { page?: number }) => {
+      const seq = ++searchSeq.current;
       setLoading(true);
       setError(null);
       try {
@@ -68,36 +73,44 @@ export function SkillMarketPanel() {
           q: query.trim() || undefined,
           sort,
           page: p,
+          section: section ?? undefined,
         });
+        if (!mounted.current || seq !== searchSeq.current) return;
+        if (p === 1) pageSize.current = res.skills.length;
         setSkills(res.skills);
         setTotal(res.total);
         setPage(p);
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        if (mounted.current && seq === searchSeq.current) setError(err instanceof Error ? err.message : String(err));
       } finally {
-        setLoading(false);
+        if (mounted.current && seq === searchSeq.current) setLoading(false);
       }
     },
-    [query, sort],
+    [query, sort, section],
   );
 
   useEffect(() => {
-    void runSearch();
+    mounted.current = true;
     void marketSections()
       .then(setSections)
       .catch(() => setSections([]));
     void refreshInstalled();
     const subs = subsRef.current;
     return () => {
+      mounted.current = false;
+      searchSeq.current++;
       subs.forEach((cancel) => cancel());
       subs.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => { void runSearch(); }, [sort, section]);
+
   const watchInstall = useCallback(
     (skillId: number, jobId: string) => {
       setInstalls((m) => ({ ...m, [skillId]: { kind: "running", jobId, phase: "resolving", pct: null } }));
+      subsRef.current.get(skillId)?.();
       const cancel = subscribeInstallJob(jobId, {
         onEvent: (evt: InstallJobState) => {
           if (evt.state === "succeeded") {
@@ -134,12 +147,15 @@ export function SkillMarketPanel() {
   const install = useCallback(
     async (skill: MarketSkill) => {
       try {
+        if (starting.current.has(skill.id)) return;
+        starting.current.add(skill.id);
+        setInstalls(m => ({ ...m, [skill.id]: { kind: "running", jobId: "", phase: "resolving", pct: null } }));
         const { job_id } = await marketInstallStart(skill.id);
-        watchInstall(skill.id, job_id);
+        if (mounted.current) watchInstall(skill.id, job_id);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setInstalls((m) => ({ ...m, [skill.id]: { kind: "failed", message: msg } }));
-      }
+      } finally { starting.current.delete(skill.id); }
     },
     [watchInstall],
   );
@@ -184,15 +200,16 @@ export function SkillMarketPanel() {
           </select>
         </form>
         {sections.length > 0 && (
-          <div className="skill-market-sections" role="tablist">
+          <div className="skill-market-sections" aria-label={t("settings.skillMarket.allSections")}>
             <button
+              aria-pressed={section === null}
               className={section === null ? "active" : ""}
               onClick={() => { setSection(null); }}
             >
               {t("settings.skillMarket.allSections")}
             </button>
             {sections.map((s) => (
-              <button key={s.id} className={section === s.id ? "active" : ""} onClick={() => setSection(s.id)}>
+              <button key={s.id} aria-pressed={section === s.id} className={section === s.id ? "active" : ""} onClick={() => setSection(s.id)}>
                 {s.name}
               </button>
             ))}
@@ -217,7 +234,7 @@ export function SkillMarketPanel() {
           const st = installs[s.id] ?? { kind: "idle" as const };
           const isInstalled = installedNames.has(s.name);
           return (
-            <li key={s.id} className="skill-market-item">
+            <li key={s.id} aria-pressed={section === s.id} className="skill-market-item">
               <div className="skill-market-item-main">
                 <div className="skill-market-item-title">
                   <strong>{s.display_name}</strong>
@@ -298,16 +315,16 @@ export function SkillMarketPanel() {
         <div className="skill-market-empty">{t("settings.skillMarket.empty")}</div>
       )}
 
-      {total > skills.length && (
+      {total > pageSize.current && (
         <div className="skill-market-pager">
-          <button disabled={page <= 1} onClick={() => void runSearch({ page: page - 1 })}>
+          <button aria-label={t("settings.skillMarket.previous")} disabled={loading || page <= 1} onClick={() => void runSearch({ page: page - 1 })}>
             <Icon name="chevron-right" className="flip-x" />
           </button>
           <span>
-            {t("settings.skillMarket.pageOf", { page, pages: Math.max(1, Math.ceil(total / skills.length)) })}
+            {t("settings.skillMarket.pageOf", { page, pages: Math.max(1, Math.ceil(total / Math.max(1, pageSize.current))) })}
           </span>
           <button
-            disabled={page >= Math.ceil(total / Math.max(1, skills.length))}
+            aria-label={t("settings.skillMarket.next")} disabled={loading || page >= Math.ceil(total / Math.max(1, pageSize.current))}
             onClick={() => void runSearch({ page: page + 1 })}
           >
             <Icon name="chevron-right" />

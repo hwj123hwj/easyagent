@@ -12,8 +12,8 @@ easyagent 内置技能市场客户端，对接 EasyCode 官方 skill store（`ht
 |---|---|---|
 | `search` | `query`、`category`、`sort`（`featured`/`installs`/`name`）、`page` | 浏览/搜索技能列表 |
 | `detail` | `id`（必填） | 查看单个技能的完整元数据 |
-| `install` | `id`（必填） | 下载并安装；**需要用户确认** |
-| `uninstall` | `name`（必填，目录名） | 卸载市场安装的技能；**需要用户确认** |
+| `install` | `id`（必填） | 下载并安装；**按会话权限模式确认** |
+| `uninstall` | `name`（必填，目录名） | 卸载市场安装的技能；**按会话权限模式确认** |
 
 安装成功后提示技能在**下一轮或新会话**生效（见下文"生效时机"）。
 
@@ -43,7 +43,7 @@ easyagent 内置技能市场客户端，对接 EasyCode 官方 skill store（`ht
 
 桌面端设置页新增「技能市场」标签：搜索/排序/主题分组浏览、一键安装（实时进度条：解析 → 下载（百分比/不确定动画）→ 校验 → 解压）、已安装徽标与二次确认卸载、分页。
 
-客户端（`desktop/src/client/skill-market.ts`）通过 fetch + ReadableStream 消费 SSE（Electron IPC 与浏览器开发模式双适配）；SSE 中断时可回退轮询 `GET /skills/market/jobs/{id}`。
+客户端（`desktop/src/client/skill-market.ts`）桌面使用主进程带认证的 IPC 轮询，不把 token 暴露给页面；浏览器通过 fetch + ReadableStream 消费带认证的 SSE，中断时自动回退轮询 `GET /skills/market/jobs/{id}`。
 
 ## 安全模型
 
@@ -53,8 +53,8 @@ easyagent 内置技能市场客户端，对接 EasyCode 官方 skill store（`ht
 2. **完整性校验**：下载后校验 SHA-256（store 未提供时跳过，但校验包大小）；不匹配立即失败且不落盘。
 3. **zip-slip 防护**：解压拒绝 `../`、绝对路径等越界条目；文件权限保留 zip 内声明。
 4. **不覆盖已有目录**：目标目录已存在（无论是手写技能还是其他内容）直接拒绝安装。
-5. **卸载只删自己的**：每个市场安装都写入 `.easyagent-market.json` manifest；卸载时无 manifest 的目录一律拒绝（409），手写技能不可能通过市场路径被删除。
-6. **下载上限**：单包最大 200 MiB，防止异常响应拖垮内存。
+5. **卸载只删自己的**：每个市场安装都写入 `.easyagent-market.json` manifest；卸载时无 manifest 的目录一律拒绝（409），已有目录不会被安装覆盖或失败清理误删。
+6. **下载上限**：下载包与展开后总量均最大 200 MiB，最多 10000 个条目；拒绝符号链接等特殊条目，临时目录完成验证后原子发布（macOS/Linux），防止异常响应拖垮内存。
 7. **包名校验**：安装名必须匹配 `[a-z0-9][a-z0-9._-]*`，阻断路径注入。
 
 ## 配置

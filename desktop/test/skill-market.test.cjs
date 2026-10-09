@@ -1,49 +1,45 @@
-// Skill-market client tests: SSE frame parsing + formatting helpers.
-const { test } = require("node:test");
-const assert = require("node:assert");
-const fs = require("node:fs");
-const path = require("node:path");
+const {test} = require("node:test");
+const assert = require("node:assert/strict");
+global.localStorage={getItem:()=>null,setItem:()=>{}};
+global.sessionStorage={getItem:()=>null,setItem:()=>{}};
+global.window={};
+const client=require("../.test-output/src/client/skill-market.js");
+const store=require("../.test-output/src/store.js");
 
-const src = fs.readFileSync(
-  path.join(__dirname, "..", "src", "client", "skill-market.ts"),
-  "utf8",
-);
-
-test("skill-market client: formatBytes tiers", () => {
-  // formatBytes is exported from the module; assert the documented tiers via
-  // the same logic the UI shows (re-implemented here to avoid TS imports).
-  const formatBytes = (n) => {
-    if (!n || n <= 0) return "";
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  };
-  assert.equal(formatBytes(0), "");
-  assert.equal(formatBytes(undefined), "");
-  assert.equal(formatBytes(512), "512 B");
-  assert.equal(formatBytes(2048), "2.0 KB");
-  assert.equal(formatBytes(5 * 1024 * 1024), "5.0 MB");
+test("desktop job tracking uses authenticated IPC, maps polling fields, and never fetches a token-free stream",async()=>{
+ let calls=0; const requests=[]; let cancel;
+ global.window.piAPI={request:async(method,path)=>{
+   requests.push([method,path]); calls++;
+   return {id:"job",skill_id:42,state:calls===1?"running":"succeeded",skill_name:"demo"};
+ }};
+ const oldFetch=global.fetch; global.fetch=()=>{throw Error("renderer must use IPC")};
+ try {
+  const events=await new Promise((resolve,reject)=>{
+   const events=[];
+   cancel=client.subscribeInstallJob("job",{onEvent:e=>{events.push(e);if(e.state==="succeeded")resolve(events)},onError:reject});
+  });
+  assert.equal(events.length,2); assert.equal(events[1].job_id,"job"); assert.equal(events[1].name,"demo");
+  assert.deepEqual(requests,[["GET","/skills/market/jobs/job"],["GET","/skills/market/jobs/job"]]);
+ } finally { cancel?.(); global.window.piAPI=undefined; global.fetch=oldFetch; }
 });
 
-test("skill-market client: module exposes install job SSE subscription", () => {
-  assert.match(src, /export function subscribeInstallJob/);
-  assert.match(src, /fetch\(/);
-  assert.match(src, /AbortController/);
+test("browser stream EOF recovers authoritative completion via polling",async()=>{
+ global.window={}; store.setBaseUrl("http://qa");
+ const oldFetch=global.fetch; const requests=[]; let cancel;
+ global.fetch=async url=>{
+  requests.push(url);
+  if(url.endsWith("/events")) return new Response(new ReadableStream({start(c){c.close()}}));
+  return new Response(JSON.stringify({id:"j",skill_id:1,state:"succeeded",skill_name:"done"}),{headers:{"Content-Type":"application/json"}});
+ };
+ try {
+  const evt=await new Promise((resolve,reject)=>{cancel=client.subscribeInstallJob("j",{onEvent:resolve,onError:reject})});
+  assert.equal(evt.state,"succeeded"); assert.equal(evt.name,"done"); assert.equal(requests.length,2);
+ } finally {cancel?.();global.fetch=oldFetch;}
 });
 
-test("skill-market client: SSE parser handles event+data frames", () => {
-  // The parser contract: split on blank lines, read `data: ` payloads,
-  // stop after terminal state. Verify the source implements exactly that.
-  assert.match(src, /buf\.indexOf\("\\n\\n"\)/);
-  assert.match(src, /startsWith\("data: "\)/);
-  assert.match(src, /state === "succeeded" \|\| evt\.state === "failed"/);
-});
-
-test("skill-market client: endpoints match server routes", () => {
-  assert.ok(src.includes("/skills/market/search"));
-  assert.ok(src.includes("/skills/market/sections"));
-  assert.ok(src.includes("/skills/market/installed"));
-  assert.ok(src.includes("/skills/market/install"));
-  assert.ok(src.includes("/skills/market/jobs/"));
-  assert.ok(src.includes("/events"));
+test("search forwards page, sort and section to the server",async()=>{
+ let request;
+ global.window.piAPI={request:async(method,path)=>{request=path;return{skills:[],total:0,page:3}}};
+ try {await client.marketSearch({section:8,sort:"name",page:3,q:"a b"});assert.equal(request,"/skills/market/search?q=a+b&sort=name&page=3&section=8");}
+ finally {global.window.piAPI=undefined;}
 });

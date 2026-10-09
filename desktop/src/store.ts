@@ -256,6 +256,7 @@ interface StoreState {
     id: string,
     confirmation: string,
     approved: boolean,
+    answers?: import("./client/questions").QuestionAnswer[],
   ) => Promise<void>;
   sessions: Record<string, SessionView>;
   order: string[];
@@ -648,7 +649,7 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
   },
-  confirm: async (id, confirmation, approved) => {
+  confirm: async (id, confirmation, approved, answers) => {
     const run = get().sessions[id]?.run,
       epoch = connectionEpoch;
     if (!run) throw new Error("任务已结束，请刷新会话");
@@ -656,7 +657,7 @@ export const useStore = create<StoreState>((set, get) => ({
       await apiRequest(
         "POST",
         `/sessions/${encodeURIComponent(id)}/run/confirm`,
-        { run_id: run.run_id, confirmation_id: confirmation, approved },
+        { run_id: run.run_id, confirmation_id: confirmation, approved, answers },
       );
     } catch (error) {
       if (epoch === connectionEpoch && /HTTP 409\b/.test(String(error))) {

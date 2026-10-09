@@ -59,13 +59,14 @@ type marketJobRegistry struct {
 	final map[string]*marketEvent
 	seq   int
 	app   *app.App
+	ctx   context.Context
 }
 
 // retention keeps terminal jobs for 10 minutes after completion.
 const jobRetention = 10 * time.Minute
 
-func newMarketJobRegistry(application *app.App) *marketJobRegistry {
-	return &marketJobRegistry{jobs: map[string]*marketJob{}, final: map[string]*marketEvent{}, app: application}
+func newMarketJobRegistry(ctx context.Context, application *app.App) *marketJobRegistry {
+	return &marketJobRegistry{jobs: map[string]*marketJob{}, final: map[string]*marketEvent{}, app: application, ctx: ctx}
 }
 
 // Start launches a background install for skillID and returns its job id.
@@ -85,7 +86,7 @@ func (r *marketJobRegistry) Start(skillID int) (string, error) {
 	}
 	r.seq++
 	jobID := fmt.Sprintf("inst-%d-%d", time.Now().UnixMilli(), r.seq)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(r.ctx)
 	job := &marketJob{
 		ID:        jobID,
 		SkillID:   skillID,
@@ -108,6 +109,7 @@ func (r *marketJobRegistry) run(ctx context.Context, job *marketJob) {
 		r.publish(job, marketEvent{
 			JobID:      job.ID,
 			SkillID:    job.SkillID,
+			State:      "running",
 			Phase:      p.Phase,
 			Name:       p.Name,
 			Display:    p.DisplayName,
@@ -118,6 +120,9 @@ func (r *marketJobRegistry) run(ctx context.Context, job *marketJob) {
 		})
 	})
 
+	if err == nil {
+		r.app.BumpSkillMarketRevision()
+	}
 	now := time.Now()
 	r.mu.Lock()
 	job.mu.Lock()
@@ -153,17 +158,16 @@ func (r *marketJobRegistry) run(ctx context.Context, job *marketJob) {
 
 	// Garbage-collect the job after the retention window.
 	go func(id string) {
-		time.Sleep(jobRetention)
+		select {
+		case <-time.After(jobRetention):
+		case <-r.ctx.Done():
+		}
 		r.mu.Lock()
 		delete(r.jobs, id)
 		delete(r.final, id)
 		r.mu.Unlock()
 	}(job.ID)
 
-	// Reload skills in live sessions after a successful install.
-	if err == nil {
-		r.app.BumpSkillMarketRevision()
-	}
 }
 
 // publish stamps the event and fans it out to current subscribers.
@@ -180,16 +184,18 @@ func (r *marketJobRegistry) publish(job *marketJob, evt marketEvent) {
 	if evt.Error != "" {
 		job.Error = evt.Error
 	}
-	chans := make([]chan marketEvent, 0, len(job.subs))
+	defer job.mu.Unlock()
 	for ch := range job.subs {
-		chans = append(chans, ch)
-	}
-	job.mu.Unlock()
-
-	for _, ch := range chans {
 		select {
 		case ch <- evt:
-		default: // slow subscriber: drop rather than block installs
+		default:
+			// Keep the newest snapshot, particularly terminal events, even when
+			// the subscriber is slow. Publish is serialized under job.mu.
+			select {
+			case <-ch:
+			default:
+			}
+			ch <- evt
 		}
 	}
 }

@@ -136,6 +136,8 @@ export const zh = {
   'permission.title': '需要你的批准',
 
   // ── ask_user_question (multi-choice cards) ───────────────────────────────────────
+  "ask.invalid": "问题格式无效，请跳过后让 Agent 重新提问。",
+  "ask.submitting": "提交中…",
   'ask.title': '请回答以下问题',
   'ask.other': '其他（自定义输入）…',
   'ask.otherPlaceholder': '输入你的回答…',
@@ -449,6 +451,8 @@ export const zh = {
 
 
   // ── skill market ───────────────────────────────────────────────────────────
+  'settings.skillMarket.previous': '上一页',
+  'settings.skillMarket.next': '下一页',
   'settings.skillMarket.title': '技能市场',
   'settings.skillMarket.subtitle': '从官方技能市场浏览并安装技能；安装后新会话立即可用，当前会话下一轮生效。',
   'settings.skillMarket.searchPlaceholder': '搜索技能…',

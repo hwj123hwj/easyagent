@@ -67,7 +67,7 @@ func (s *Server) registerSkillMarketRoutes(mux *http.ServeMux) {
 	// s.marketJobs is created once in New(); never here (Handler() rebuilds
 	// the mux per request and must not reset job state).
 	if s.marketJobs == nil {
-		s.marketJobs = newMarketJobRegistry(s.app)
+		s.marketJobs = newMarketJobRegistry(s.ctx, s.app)
 	}
 	mux.HandleFunc("GET /skills/market/search", s.marketSearch)
 	mux.HandleFunc("GET /skills/market/sections", s.marketSections)

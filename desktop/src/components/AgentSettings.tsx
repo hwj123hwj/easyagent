@@ -422,7 +422,7 @@ export function AgentSettings() {
           ) : tab === "usage" ? (
             <UsageSettings />
           ) : tab === "skillMarket" ? (
-            <SkillMarketPanel />
+            <SkillMarketPanel key={selected} />
           ) : tab === "experiments" ? (
             <ComputerUseSettings />
           ) : tab === "capabilities" ? (

@@ -144,7 +144,7 @@ func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
 	// Install jobs must live for the whole server lifetime; Handler() is
 	// rebuilt per request in tests, so create the registry exactly once here.
 	if application.SkillMarket() != nil {
-		srv.marketJobs = newMarketJobRegistry(application)
+		srv.marketJobs = newMarketJobRegistry(srv.ctx, application)
 	}
 	srv.restoreRunReceipts()
 

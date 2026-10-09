@@ -558,6 +558,9 @@ func (s *AgentSession) buildAgent(ctx context.Context, registry *providers.Regis
 	if len(skillDirs) == 0 {
 		skillDirs = DefaultSkillDirs(cwd)
 	}
+	if cfg.SkillMarketEnabled && cfg.SkillMarketSkillDir != "" {
+		skillDirs = append(append([]string(nil), skillDirs...), cfg.SkillMarketSkillDir)
+	}
 	if len(skillDirs) > 0 {
 		result := skill.LoadFromDirs(skillDirs...)
 		skills = result.Skills
