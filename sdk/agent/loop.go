@@ -304,29 +304,31 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 }
 
 // maybeCompact 检查是否需要压缩上下文，如果需要则执行压缩并返回新的历史。
-// 两级压缩：先 MicroCompact（低阈值，清旧 tool result，不调 LLM），
-// 再全量 AutoCompact（高阈值，调 LLM 摘要）。
+// 完整请求达到深度压缩阈值时直接摘要；低水位才批量清理旧工具输出。
 func (a *Agent) maybeCompact(ctx context.Context, history []ai.Message) []ai.Message {
 	if !a.compactionSettings.Enabled {
 		return history
 	}
 
-	// 估算当前 token 数
-	contextTokens := compaction.EstimateTokens(history)
+	// 与桌面上下文用量使用同一估算，包含系统提示词和工具定义。
+	requestUsage := estimateContext(a.llmRequest(history), ai.Usage{})
+	contextTokens := requestUsage.EstimatedTokens
+	messageTokens := requestUsage.Messages
 	contextWindow := a.model.ContextWindow
 	if contextWindow <= 0 {
 		contextWindow = 128000
 	}
 
-	// 第一级：MicroCompact（清旧 tool result，不依赖 summarizeFunc）
-	if compaction.ShouldMicroCompact(contextTokens, contextWindow, a.compactionSettings) {
+	// 一旦到达高水位，微压缩不得用少量节省延后深度压缩。
+	fullCompact := a.summarizeFunc != nil && compaction.ShouldCompact(contextTokens, contextWindow, a.compactionSettings)
+	if !fullCompact && compaction.ShouldMicroCompact(contextTokens, contextWindow, a.compactionSettings) {
 		newHistory, cleared := compaction.MicroCompact(append([]ai.Message(nil), history...), a.compactionSettings.MicroKeepRecent)
 		if cleared > 0 {
-			tokensAfter := compaction.EstimateTokens(newHistory)
+			tokensAfter := contextTokens - messageTokens + compaction.EstimateTokens(newHistory)
 			savings := contextTokens - tokensAfter
 			minSavings := a.compactionSettings.MinSavingsTokens
 			if minSavings <= 0 {
-				minSavings = 500
+				minSavings = compaction.DefaultSettings().MinSavingsTokens
 			}
 			// 只有节省达到阈值才进行持久化和通知；极小的几十 token 局部清理不值得反复落盘和刷屏，
 			// 避免每次工具调用都产生挤牙膏式的微压缩干扰。
@@ -345,10 +347,7 @@ func (a *Agent) maybeCompact(ctx context.Context, history []ai.Message) []ai.Mes
 	}
 
 	// 第二级：全量 AutoCompact（需 summarizeFunc 才能做 LLM 摘要）
-	if a.summarizeFunc == nil {
-		return history
-	}
-	if !compaction.ShouldCompact(contextTokens, contextWindow, a.compactionSettings) {
+	if !fullCompact {
 		return history
 	}
 
@@ -600,6 +599,7 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) (result ai.
 	}
 	args = callCtx.Args
 
+	var confirmationDecision ConfirmDecision
 	// 5.5 Confirmation gate: 危险工具执行前向用户确认（若工具声明需要且注入了 ConfirmFunc）
 	if confirmer, ok := tool.(ToolWithConfirmation); ok {
 		if desc, needConfirm := confirmer.RequiresConfirmation(args); needConfirm {
@@ -630,6 +630,7 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) (result ai.
 					Args:              args,
 					Description:       desc,
 				})
+				confirmationDecision = decision
 				approved = decision.Approved
 				reason = decision.Reason
 			}
@@ -664,7 +665,12 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) (result ai.
 	}
 
 	// 7. Execute tool
-	rawResult, err := tool.Execute(ctx, args, onUpdate)
+	var rawResult ToolResult
+	if interactive, ok := tool.(ToolWithConfirmedExecution); ok {
+		rawResult, err = interactive.ExecuteConfirmed(ctx, args, confirmationDecision, onUpdate)
+	} else {
+		rawResult, err = tool.Execute(ctx, args, onUpdate)
+	}
 	if err != nil {
 		// Some tools (e.g. bash) return both a result with output and an error.
 		// Prefer the result content (actual command output/error) over err.Error()

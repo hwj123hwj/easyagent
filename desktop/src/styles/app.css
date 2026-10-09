@@ -6161,3 +6161,45 @@ body.resizing .resizer {
   margin-right: 4px;
   flex-shrink: 0;
 }
+
+.question-prompt {
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 12px);
+  background: var(--bg-raised);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  max-height: min(420px, 42vh);
+}
+.question-prompt-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 10px 0;
+}
+.question-prompt .ask-question {
+  margin: 0;
+  padding: 8px 0 16px;
+  min-width: 0;
+  border: 0;
+}
+.question-prompt .ask-q-text,
+.question-prompt .ask-option-body,
+.question-prompt .ask-option-label { overflow-wrap: anywhere; }
+.question-prompt .ask-option { color: var(--text); }
+.question-prompt .ask-option-desc,
+.question-prompt .ask-q-hint { color: var(--text-dim); }
+.question-prompt input { flex-shrink: 0; accent-color: var(--accent); }
+.question-prompt .ask-option:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.question-prompt .ask-other-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.question-prompt-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.ask-answer-preview { margin-top: 10px; overflow-wrap: anywhere; }
+.question-prompt[aria-busy="true"] .ask-option { cursor: wait; }
+@media (prefers-reduced-motion: reduce) { .question-prompt .ask-option { transition: none; } }
+.confirmation-list:has(.question-prompt) { max-height: none; overflow: visible; }
+.question-prompt > strong,
+.question-prompt-actions,
+.question-prompt > [role="alert"] { flex-shrink: 0; }

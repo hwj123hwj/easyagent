@@ -601,3 +601,80 @@ func TestRunWithoutNewMessagesCannotReusePreviousReplyAnchor(t *testing.T) {
 	require.Empty(t, run.UserEntryID)
 	require.Empty(t, run.AssistantEntryID)
 }
+
+func TestQuestionAnswersWaitValidateAndResume(t *testing.T) {
+	srv, server, gateway := newRunTestServer(t)
+	run, _, err := srv.startRun("", "question", "question-answer")
+	require.NoError(t, err)
+	waitRunText(t, srv, run)
+	args := json.RawMessage(`{"questions":[{"question":"Framework?","options":[{"label":"React"},{"label":"Vue"}]}]}`)
+	decisions := make(chan agent.ConfirmDecision, 1)
+	ctx := context.WithValue(context.Background(), runContextKey{}, run)
+	go func() {
+		decisions <- srv.confirmRunTool(ctx, agent.ConfirmationRequest{ToolCallID: "ask", ToolName: "ask_user_question", Args: args, ForceConfirmation: true})
+	}()
+	require.Eventually(t, func() bool { srv.runs.mu.Lock(); defer srv.runs.mu.Unlock(); return len(run.pending) == 1 }, time.Second, time.Millisecond)
+	snapshot, err := srv.runSnapshot(run.SessionID, 0, "", nil)
+	require.NoError(t, err)
+	require.Len(t, snapshot.PendingConfirmations, 1)
+	id := snapshot.PendingConfirmations[0].ID
+	require.JSONEq(t, string(args), string(snapshot.PendingConfirmations[0].Args))
+	post := func(answer string) int {
+		body := fmt.Sprintf(`{"run_id":%q,"confirmation_id":%q,"approved":true,"answers":%s}`, run.ID, id, answer)
+		resp, err := http.Post(server.URL+"/sessions/"+run.SessionID+"/run/confirm", "application/json", strings.NewReader(body))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	require.Equal(t, http.StatusBadRequest, post(`[{"selected":["invented"]}]`))
+	select {
+	case <-decisions:
+		t.Fatal("invalid answer consumed the question")
+	default:
+	}
+	snapshot, err = srv.runSnapshot(run.SessionID, 0, "", nil)
+	require.NoError(t, err)
+	require.Len(t, snapshot.PendingConfirmations, 1)
+	require.Equal(t, http.StatusOK, post(`[{"selected":["React"]}]`))
+	select {
+	case decision := <-decisions:
+		require.True(t, decision.Approved)
+		require.JSONEq(t, `[{"selected":["React"]}]`, string(decision.Response))
+	case <-time.After(time.Second):
+		t.Fatal("answer did not resume execution")
+	}
+	require.Equal(t, http.StatusConflict, post(`[{"selected":["Vue"]}]`))
+	close(gateway.finish)
+	_, err = srv.waitRun(context.Background(), run)
+	require.NoError(t, err)
+}
+
+func TestQuestionWaitDoesNotExpireAsAnApproval(t *testing.T) {
+	srv, _, gateway := newRunTestServer(t)
+	run, _, err := srv.startRun("", "question", "question-no-expiry")
+	require.NoError(t, err)
+	srv.runs.mu.Lock()
+	srv.runs.confirmationTimeout = time.Nanosecond
+	srv.runs.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), runContextKey{}, run))
+	defer cancel()
+	decisions := make(chan agent.ConfirmDecision, 1)
+	go func() { decisions <- srv.confirmRunTool(ctx, agent.ConfirmationRequest{ToolName: "ask_user_question"}) }()
+	require.Eventually(t, func() bool { srv.runs.mu.Lock(); defer srv.runs.mu.Unlock(); return len(run.pending) == 1 }, time.Second, time.Millisecond)
+	select {
+	case <-decisions:
+		t.Fatal("question expired before explicit reply")
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case d := <-decisions:
+		require.False(t, d.Approved)
+		require.Contains(t, d.Reason, "取消")
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not resolve question")
+	}
+	close(gateway.finish)
+	_, err = srv.waitRun(context.Background(), run)
+	require.NoError(t, err)
+}

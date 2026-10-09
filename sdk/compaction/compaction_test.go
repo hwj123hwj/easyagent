@@ -200,3 +200,14 @@ func TestCompactRejectsEmptySummary(t *testing.T) {
 	_, err := Compact(context.Background(), []ai.Message{ai.NewTextUserMessage("must preserve")}, nil, "", func(context.Context, []ai.Message, []ai.Message, string) (string, error) { return " \n", nil })
 	assert.ErrorContains(t, err, "empty summary")
 }
+
+func TestCompactionThresholdReservesOutputAndHonorsRatio(t *testing.T) {
+	settings := DefaultSettings()
+	assert.False(t, ShouldCompact(102400, 128000, settings))
+	assert.True(t, ShouldCompact(102401, 128000, settings))
+	settings.AutoCompactRatio = 0.95
+	assert.True(t, ShouldCompact(112000, 128000, settings), "reserve boundary overrides higher ratio")
+	settings.AutoCompactRatio = 0
+	assert.True(t, ShouldCompact(102401, 128000, settings), "zero uses default")
+	assert.False(t, ShouldCompact(1000, 0, settings))
+}

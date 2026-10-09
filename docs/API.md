@@ -110,10 +110,18 @@ GET /ws
 | `POST` | `/sessions/{id}/command` | 执行斜杠命令 |
 | `GET` | `/sessions/{id}/run` | 当前 run 与恢复快照 |
 | `POST` | `/sessions/{id}/run/cancel` | body 为 `{"run_id":"..."}` |
-| `POST` | `/sessions/{id}/run/confirm` | body 为 `{"run_id":"...","confirmation_id":"...","approved":true}` |
+| `POST` | `/sessions/{id}/run/confirm` | body 为 `{"run_id":"...","confirmation_id":"...","approved":true}`；提问须同时提交 `answers`，见下文 |
 | `GET` | `/sessions/{id}/diff` | 获取会话 Git diff |
 | `GET` | `/sessions/{id}/file` | 获取会话文件内容 |
 | `PUT` | `/sessions/{id}/file` | 写入会话文件 |
+
+`ask_user_question` 的待回答请求通过 `confirmation` 事件和 snapshot 的 `pending_confirmations` 返回，`args.questions` 包含问题、选项及 `multiSelect`。即使会话为完全权限模式，也必须等待用户回答；提问不会被普通审批的短超时自动跳过，直到回答、跳过或取消任务。提交到同一 `/run/confirm` 接口：
+
+```json
+{"run_id":"...","confirmation_id":"...","approved":true,"answers":[{"selected":["选项标签"]},{"selected":[],"text":"自定义回答"}]}
+```
+
+`answers` 按问题顺序排列，每题必须有答案；单选题只允许一个选项或自定义文本，多选题可组合。无效答案返回 400 并保留待回答请求；过期/重复提交返回 409。`approved:false` 表示跳过，不会伪造答案。答案作为工具结果回传模型；无交互通道的入口不会直接返回提问成功。
 
 `access_mode` 为 `ask`（确认危险工具）或 `full`（自动批准普通工具）；仅在当前服务进程的会话内保留，活跃任务及工作流 Actor 返回 409。不会解决已经等待的批准，MCP 独立审批及工作区边界仍有效。
 

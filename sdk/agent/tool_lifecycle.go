@@ -55,8 +55,9 @@ type ConfirmationRequest struct {
 
 // ConfirmDecision 是用户对一次确认请求的裁决。
 type ConfirmDecision struct {
-	Approved bool   // true=放行执行；false=阻断
-	Reason   string // 拒绝理由（approved=false 时回告 LLM，让 Agent 知道动作未做成）
+	Response json.RawMessage // Structured user input, if the tool needs more than approval.
+	Approved bool            // true=放行执行；false=阻断
+	Reason   string          // 拒绝理由（approved=false 时回告 LLM，让 Agent 知道动作未做成）
 }
 
 // ConfirmFunc 由各入口（chat/serve/feishu）注入，负责向用户发起确认并同步等待裁决。
@@ -184,4 +185,11 @@ func runPreCompressHooks(ctx context.Context, hooks []PreCompressHook, e PreComp
 type ToolWithPrepareArguments interface {
 	Tool
 	PrepareArguments(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+}
+
+// ToolWithConfirmedExecution consumes structured input collected at the confirmation gate.
+// The decision belongs to this invocation, never shared mutable tool state.
+type ToolWithConfirmedExecution interface {
+	Tool
+	ExecuteConfirmed(context.Context, json.RawMessage, ConfirmDecision, func(PartialResult)) (ToolResult, error)
 }

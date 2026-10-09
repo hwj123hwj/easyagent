@@ -137,6 +137,8 @@ export const en = {
   'permission.title': 'Your approval is needed',
 
   // ── ask_user_question (multi-choice cards) ───────────────────────────────────────
+  "ask.invalid": "Invalid question format. Skip and ask the agent to try again.",
+  "ask.submitting": "Submitting…",
   'ask.title': 'Please answer the following',
   'ask.other': 'Other (custom input)…',
   'ask.otherPlaceholder': 'Type your answer…',
