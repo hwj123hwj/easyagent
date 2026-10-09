@@ -26,6 +26,7 @@ import (
 // but does NOT carry session-specific behavior — that belongs to AgentSession.
 type App struct {
 	mcpState          mcpState
+	skillMarket       *skillMarketState
 	workflowConfirmMu sync.Mutex
 	flows             *dynamicflow.Manager
 	cfgMu             sync.Mutex
@@ -113,6 +114,7 @@ func New(opts AppOptions) (*App, error) {
 	}
 	result.flows = flows
 	result.initMCP()
+	result.skillMarket = initSkillMarket(cfg)
 	return result, nil
 }
 
@@ -269,8 +271,8 @@ func (a *App) deps() runtime.Dependencies {
 		ExtRegistry:     a.extRegistry,
 		Application:     workflowApplication{Application: a.ResolveApplication(""), app: a},
 		ExternalTools:   a.extraTools,
-		AdditionalTools: func(workspace string) []agent.Tool { return a.MCP(workspace).AllTools() },
-		ToolRevision:    func(workspace string) uint64 { return a.mcpRevision(workspace) },
+		AdditionalTools: func(workspace string) []agent.Tool { return a.additionalTools(workspace) },
+		ToolRevision:    a.combinedToolRevision,
 		PrepareTools:    a.prepareMCP,
 		AcquireTools:    a.acquireMCP,
 		BuildOperations: func(cfg config.Config, workspace string) *operations.Operations {
@@ -286,6 +288,28 @@ func (a *App) deps() runtime.Dependencies {
 			}
 		},
 	}
+}
+
+// additionalTools returns MCP tools plus the skill-market tool for the
+// given workspace. Used as runtime.Dependencies.AdditionalTools.
+func (a *App) additionalTools(workspace string) []agent.Tool {
+	list := a.MCP(workspace).AllTools()
+	if tool := a.SkillMarketTool(); tool != nil {
+		list = append(list, tool)
+	}
+	return list
+}
+
+// combinedToolRevision merges the MCP and skill-market revision counters so
+// either one triggers a session rebuild on change.
+func (a *App) combinedToolRevision(workspace string) uint64 {
+	rev := a.mcpRevision(workspace)
+	if sm := a.skillMarketRevision(); sm > 0 {
+		// Compose both counters: MCP revisions can be small numbers, so
+		// offset the skill-market counter into a disjoint range.
+		rev += sm << 32
+	}
+	return rev
 }
 
 // ToolNames returns the names of tools available given the current config and extensions.
@@ -317,6 +341,9 @@ func (a *App) ToolNames() []string {
 	}
 
 	baseNames = append(baseNames, "create_workflow", "get_workflow", "resume_workflow")
+	if a.skillMarket != nil {
+		baseNames = append(baseNames, "skill_market")
+	}
 	for _, tool := range a.MCP(cfg.Workspace).AllTools() {
 		baseNames = append(baseNames, tool.Name())
 	}

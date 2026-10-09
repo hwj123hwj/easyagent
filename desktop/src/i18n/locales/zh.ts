@@ -12,6 +12,7 @@
 export const zh = {
   // ── common ────────────────────────────────────────────────────────────────
   'common.cancel': '取消',
+  'common.dismiss': '关闭',
   'common.close': '关闭',
   'common.back': '返回',
   'common.save': '保存',
@@ -447,4 +448,32 @@ export const zh = {
   'mobile.chats': '聊天',
   'mobile.settings': '设置',
   'mobile.server': '服务器',
+
+
+  // ── skill market ───────────────────────────────────────────────────────────
+  'settings.skillMarket.previous': '上一页',
+  'settings.skillMarket.next': '下一页',
+  'settings.skillMarket.title': '技能市场',
+  'settings.skillMarket.subtitle': '从官方技能市场浏览并安装技能；安装后新会话立即可用，当前会话下一轮生效。',
+  'settings.skillMarket.searchPlaceholder': '搜索技能…',
+  'settings.skillMarket.sortFeatured': '推荐排序',
+  'settings.skillMarket.sortInstalls': '按安装量',
+  'settings.skillMarket.sortName': '按名称',
+  'settings.skillMarket.allSections': '全部',
+  'settings.skillMarket.loading': '加载中…',
+  'settings.skillMarket.empty': '没有匹配的技能，换个关键词试试。',
+  'settings.skillMarket.install': '安装',
+  'settings.skillMarket.installing': '安装中…',
+  'settings.skillMarket.installDone': '已安装，新会话即可使用。',
+  'settings.skillMarket.installedBadge': '已安装',
+  'settings.skillMarket.uninstall': '卸载',
+  'settings.skillMarket.confirmUninstall': '确认卸载？',
+  'settings.skillMarket.installs': '{count} 次安装',
+  'settings.skillMarket.pageOf': '第 {page} / {pages} 页',
+  'settings.skillMarket.phase.resolving': '获取信息',
+  'settings.skillMarket.phase.downloading': '下载中',
+  'settings.skillMarket.phase.verifying': '校验中',
+  'settings.skillMarket.phase.extracting': '解压安装',
+  'settings.skillMarket.phase.done': '完成',
+
 } as const;

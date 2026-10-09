@@ -224,6 +224,7 @@ export type SettingsTab =
   | "mcp"
   | "feishu"
   | "capabilities"
+  | "skillMarket"
   | "usage"
   | "experiments";
 

@@ -10,6 +10,7 @@
 export const en = {
   // ── common ────────────────────────────────────────────────────────────────
   'common.cancel': 'Cancel',
+  'common.dismiss': 'Dismiss',
   'common.close': 'Close',
   'common.back': 'Back',
   'common.save': 'Save',
@@ -449,4 +450,30 @@ export const en = {
   'mobile.chats': 'Chats',
   'mobile.settings': 'Settings',
   'mobile.server': 'Server',
+  // ── skill market ───────────────────────────────────────────────────────────
+  'settings.skillMarket.previous': 'Previous page',
+  'settings.skillMarket.next': 'Next page',
+  'settings.skillMarket.title': 'Skill Market',
+  'settings.skillMarket.subtitle': 'Browse and install skills from the official market. New sessions get them immediately; live sessions pick them up next turn.',
+  'settings.skillMarket.searchPlaceholder': 'Search skills…',
+  'settings.skillMarket.sortFeatured': 'Featured',
+  'settings.skillMarket.sortInstalls': 'Most installed',
+  'settings.skillMarket.sortName': 'Name',
+  'settings.skillMarket.allSections': 'All',
+  'settings.skillMarket.loading': 'Loading…',
+  'settings.skillMarket.empty': 'No matching skills. Try different keywords.',
+  'settings.skillMarket.install': 'Install',
+  'settings.skillMarket.installing': 'Installing…',
+  'settings.skillMarket.installDone': 'Installed. Available in new sessions.',
+  'settings.skillMarket.installedBadge': 'Installed',
+  'settings.skillMarket.uninstall': 'Uninstall',
+  'settings.skillMarket.confirmUninstall': 'Uninstall?',
+  'settings.skillMarket.installs': '{count} installs',
+  'settings.skillMarket.pageOf': 'Page {page} / {pages}',
+  'settings.skillMarket.phase.resolving': 'Resolving',
+  'settings.skillMarket.phase.downloading': 'Downloading',
+  'settings.skillMarket.phase.verifying': 'Verifying',
+  'settings.skillMarket.phase.extracting': 'Extracting',
+  'settings.skillMarket.phase.done': 'Done',
+
 };

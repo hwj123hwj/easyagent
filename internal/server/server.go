@@ -41,6 +41,7 @@ func (s *Server) SetVersion(v string) {
 type Server struct {
 	activity        activityGate
 	runs            *runRegistry
+	marketJobs      *marketJobRegistry
 	queueMu         sync.Mutex
 	queues          map[string]*messageQueue
 	ctx             context.Context
@@ -140,6 +141,11 @@ func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
 	srv := &Server{app: application, slashCmds: slashCmds, ctx: ctx, cancel: cancel, runs: newRunRegistry(),
 		terminalEnabled: os.Getenv("EA_ENABLE_TERMINAL") == "1", terminalSlots: make(chan struct{}, 8),
 		allowedOrigins: envAllowedOrigins(), allowNoAuth: envAllowNoAuth()}
+	// Install jobs must live for the whole server lifetime; Handler() is
+	// rebuilt per request in tests, so create the registry exactly once here.
+	if application.SkillMarket() != nil {
+		srv.marketJobs = newMarketJobRegistry(srv.ctx, application)
+	}
 	srv.restoreRunReceipts()
 
 	// Wire loop trigger: when a /loop fires, inject the prompt into the target session
@@ -226,6 +232,9 @@ func (s *Server) Handler() http.Handler {
 	s.registerFeishuSettings(restMux)
 	s.registerMCPRoutes(restMux)
 
+	// Skill marketplace endpoints (no-op when disabled)
+	s.registerSkillMarketRoutes(restMux)
+
 	// User profile endpoints
 	s.registerProfileRoutes(restMux)
 
@@ -264,6 +273,8 @@ func (s *Server) Handler() http.Handler {
 	topMux.Handle("/applications", restHandler)
 	topMux.Handle("/workspace/", restHandler)
 	topMux.Handle("/kb/", restHandler)
+	topMux.Handle("/skills/market", restHandler)
+	topMux.Handle("/skills/market/", restHandler)
 	topMux.Handle("/dynamic-workflows", restHandler)
 	topMux.Handle("/dynamic-workflows/", restHandler)
 	topMux.Handle("/workflows", restHandler)

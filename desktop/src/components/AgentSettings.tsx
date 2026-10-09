@@ -7,6 +7,7 @@ import { MCPConfigEditor } from "./MCPConfigEditor";
 import { CapabilitySettings } from "./CapabilitySettings";
 import { ModelSettings } from "./ModelSettings";
 import { FeishuSettings } from "./FeishuSettings";
+import { SkillMarketPanel } from "./SkillMarketPanel";
 import { type IconName } from "./Icon";
 
 const settingGroups: Array<{
@@ -44,6 +45,12 @@ const settingGroups: Array<{
         label: "用量统计",
         icon: "sparkle",
         description: "查看近 30 天 Token 消耗与各会话用量排行。",
+      },
+      {
+        id: "skillMarket",
+        label: "技能市场",
+        icon: "sparkle",
+        description: "浏览并安装官方技能市场里的技能。",
       },
       {
         id: "experiments",
@@ -414,6 +421,8 @@ export function AgentSettings() {
             </section>
           ) : tab === "usage" ? (
             <UsageSettings />
+          ) : tab === "skillMarket" ? (
+            <SkillMarketPanel key={selected} />
           ) : tab === "experiments" ? (
             <ComputerUseSettings />
           ) : tab === "capabilities" ? (
