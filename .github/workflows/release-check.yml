@@ -33,12 +33,11 @@ jobs:
   desktop-build:
     strategy:
       fail-fast: false
+      # Desktop installers ship Apple Silicon only; Intel Macs stay on v0.10.1.
       matrix:
         include:
           - arch: arm64
             runner: macos-15
-          - arch: x64
-            runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     env:
       EA_DESKTOP_NODE_VERSION: v24.21.0

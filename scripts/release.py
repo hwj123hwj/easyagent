@@ -29,7 +29,8 @@ def version_key(tag):
 
 def desktop_assets(tag):
     version_key(tag)
-    return tuple(f"EasyAgent-{tag[1:]}-{arch}.dmg" for arch in ("arm64", "x64"))
+    # Desktop installers ship Apple Silicon only; Intel Macs stay on v0.10.1.
+    return (f"EasyAgent-{tag[1:]}-arm64.dmg",)
 
 
 def required_assets(tag):
