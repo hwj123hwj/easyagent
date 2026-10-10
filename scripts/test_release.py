@@ -89,8 +89,9 @@ class AssetsTest(unittest.TestCase):
         self.assertEqual(release.required_assets('v0.1.0'), release.ASSETS)
         for tag in ('v0.2.0-alpha.1', 'v0.2.0-beta.1', 'v0.2.0-rc.1', 'v0.2.0', 'v1.2.3'):
             with self.subTest(tag=tag):
+                # Apple Silicon only; the Intel DMG was dropped from v0.11.0.
                 self.assertEqual(release.required_assets(tag), release.ASSETS + (
-                    f'EasyAgent-{tag[1:]}-arm64.dmg', f'EasyAgent-{tag[1:]}-x64.dmg'))
+                    f'EasyAgent-{tag[1:]}-arm64.dmg',))
 
     def test_each_missing_desktop_asset_rejects_manifest_and_publish(self):
         release.manifest(self.directory, self.tag, self.sha)

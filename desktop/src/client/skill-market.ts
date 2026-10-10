@@ -8,6 +8,19 @@
 
 import { apiRequest, authHeaders, getBaseUrl } from "../store";
 
+export interface MarketPreviewThumbnail {
+  url: string;
+  is_long?: boolean;
+}
+
+export interface MarketExampleFile {
+  name: string;
+  url: string;
+  size?: number;
+  mime_type?: string;
+  extension?: string;
+}
+
 export interface MarketSkill {
   id: number;
   name: string;
@@ -23,6 +36,13 @@ export interface MarketSkill {
   section_id?: number | null;
   section_name?: string | null;
   icon_url?: string | null;
+  // Showcase fields; browse responses may omit them (older servers) — the
+  // detail view fetches /skills/market/skills/{id} to fill them in.
+  rich_description?: string | null;
+  preview_images?: string[];
+  preview_thumbnails?: MarketPreviewThumbnail[];
+  usage_example?: string | null;
+  example_files?: MarketExampleFile[];
 }
 
 export interface MarketSearchResult {
@@ -78,11 +98,14 @@ export async function marketSearch(params: {
   if (params.sort) usp.set("sort", params.sort);
   if (params.page && params.page > 1) usp.set("page", String(params.page));
   if (params.section) usp.set("section", String(params.section));
-  const qs = usp.toString();
-  return apiRequest<MarketSearchResult>(
-    "GET",
-    "/skills/market/search" + (qs ? "?" + qs : ""),
-  );
+        const qs = usp.toString();
+        const res = await apiRequest<MarketSearchResult>(
+          "GET",
+          "/skills/market/search" + (qs ? "?" + qs : ""),
+        );
+        // Older server builds may omit fields; degrade to an empty page
+        // instead of crashing the panel.
+        return { skills: res.skills ?? [], total: res.total ?? 0, page: res.page ?? 1 };
 }
 
 export async function marketSections(): Promise<MarketSection[]> {
@@ -91,6 +114,18 @@ export async function marketSections(): Promise<MarketSection[]> {
     "/skills/market/sections",
   );
   return res.sections ?? [];
+}
+
+/** Full detail for one skill, including showcase fields. */
+export async function marketSkillDetail(id: number): Promise<MarketSkill> {
+  const res = await apiRequest<MarketSkill>("GET", `/skills/market/skills/${id}`);
+  return {
+    ...res,
+    tags: res.tags ?? [],
+    preview_images: res.preview_images ?? [],
+    preview_thumbnails: res.preview_thumbnails ?? [],
+    example_files: res.example_files ?? [],
+  };
 }
 
 export async function marketInstalled(): Promise<InstalledSkill[]> {

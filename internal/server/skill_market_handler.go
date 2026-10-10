@@ -35,27 +35,48 @@ type marketSkillJSON struct {
 	SectionID    *int     `json:"section_id"`
 	SectionName  *string  `json:"section_name"`
 	IconURL      *string  `json:"icon_url"`
+	// Showcase fields for the detail view; slices are always non-nil so
+	// clients can iterate without nil checks.
+	RichDescription   *string                         `json:"rich_description"`
+	PreviewImages     []string                        `json:"preview_images"`
+	PreviewThumbnails []*skillmarket.PreviewThumbnail `json:"preview_thumbnails"`
+	UsageExample      *string                         `json:"usage_example"`
+	ExampleFiles      []skillmarket.ExampleFile       `json:"example_files"`
 }
 
 func toMarketSkillJSON(s skillmarket.SkillItem) marketSkillJSON {
 	if s.Tags == nil {
 		s.Tags = []string{}
 	}
+	if s.PreviewImages == nil {
+		s.PreviewImages = []string{}
+	}
+	if s.PreviewThumbnails == nil {
+		s.PreviewThumbnails = []*skillmarket.PreviewThumbnail{}
+	}
+	if s.ExampleFiles == nil {
+		s.ExampleFiles = []skillmarket.ExampleFile{}
+	}
 	return marketSkillJSON{
-		ID:           s.ID,
-		Name:         s.Name,
-		DisplayName:  s.DisplayName,
-		Description:  s.Description,
-		Category:     s.Category,
-		Tags:         s.Tags,
-		Version:      s.Version,
-		InstallCount: s.InstallCount,
-		Featured:     s.Featured,
-		SizeBytes:    s.TarballSize,
-		SHA256:       s.SHA256,
-		SectionID:    s.SectionID,
-		SectionName:  s.SectionName,
-		IconURL:      s.IconURL,
+		ID:                s.ID,
+		Name:              s.Name,
+		DisplayName:       s.DisplayName,
+		Description:       s.Description,
+		Category:          s.Category,
+		Tags:              s.Tags,
+		Version:           s.Version,
+		InstallCount:      s.InstallCount,
+		Featured:          s.Featured,
+		SizeBytes:         s.TarballSize,
+		SHA256:            s.SHA256,
+		SectionID:         s.SectionID,
+		SectionName:       s.SectionName,
+		IconURL:           s.IconURL,
+		RichDescription:   s.RichDescription,
+		PreviewImages:     s.PreviewImages,
+		PreviewThumbnails: s.PreviewThumbnails,
+		UsageExample:      s.UsageExample,
+		ExampleFiles:      s.ExampleFiles,
 	}
 }
 
