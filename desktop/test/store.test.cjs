@@ -457,3 +457,18 @@ test('question replies send structured answers and failed submission preserves t
   assert.equal(useStore.getState().sessions.s.confirmations.length,0);
  } finally {global.window.piAPI=api;useStore.setState(before);}
 });
+
+test('file review targets the exact task snapshot without changing the conversation', () => {
+  const before = useStore.getState();
+  try {
+    useStore.setState({selectedProfile:'qa-host',activeSessionId:'s',sessions:{s:view()},reviewTarget:undefined});
+    useStore.getState().openRunReview('s','earlier-run','deleted.txt');
+    assert.deepEqual(useStore.getState().reviewTarget,{profileId:'qa-host',sessionId:'s',runId:'earlier-run',path:'deleted.txt'});
+    assert.equal(useStore.getState().workspace.rightView,'review');
+    assert.equal(useStore.getState().workspace.rightOpen,true);
+    assert.equal(useStore.getState().activeSessionId,'s');
+    useStore.getState().openRunReview('inactive','wrong-run');
+    assert.equal(useStore.getState().reviewTarget.runId,'earlier-run');
+    assert.equal(useStore.getState().drafts,before.drafts);
+  } finally { useStore.setState(before); }
+});

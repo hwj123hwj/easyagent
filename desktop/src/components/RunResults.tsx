@@ -1,88 +1,192 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { apiRequest, useStore, type SessionView } from "../store";
-import { exportFile, type RunFileSet } from "../client/file-delivery";
+import type { RunFileSet } from "../client/file-delivery";
+import { changeLabel, runTime, summarizeDiffs } from "../client/file-review";
 import { Icon } from "./Icon";
-export function RunResults({ view }: { view: SessionView }) {
+
+export function ChangeStats({
+  additions,
+  deletions,
+  partial = false,
+}: {
+  additions: number;
+  deletions: number;
+  partial?: boolean;
+}) {
+  return (
+    <span
+      className="change-stats"
+      title={
+        partial
+          ? "仅已统计的文本文件；部分文件无法计算行数"
+          : "新增与删除的行数"
+      }
+    >
+      <span className="change-added">+{additions}</span>
+      <span className="change-removed">−{deletions}</span>
+      {partial && <span className="change-partial">部分</span>}
+    </span>
+  );
+}
+
+function RunCard({
+  run,
+  sessionId,
+  latest,
+}: {
+  run: RunFileSet;
+  sessionId: string;
+  latest: boolean;
+}) {
   const profile = useStore((s) => s.selectedProfile);
-  const [runs, setRuns] = useState<RunFileSet[]>([]),
+  const revision = useStore((s) => s.reviewRevision);
+  const [open, setOpen] = useState(latest),
+    [all, setAll] = useState(false);
+  const [snapshot, setSnapshot] = useState<RunFileSet>(),
     [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const listId = useId();
+  useEffect(() => {
+    setOpen(latest);
+  }, [latest]);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setError("");
+    void apiRequest<RunFileSet>(
+      "GET",
+      `/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(run.run_id)}/files`,
+    )
+      .then((data) => {
+        if (alive) setSnapshot(data);
+      })
+      .catch((e) => {
+        if (alive) setError(e.message);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, sessionId, run.run_id, profile, revision, attempt]);
+  const stats = useMemo(
+    () => (snapshot ? summarizeDiffs(snapshot.files) : undefined),
+    [snapshot],
+  );
+  const files = snapshot?.files ?? run.files;
+  const review = (path?: string) =>
+    useStore.getState().openRunReview(sessionId, run.run_id, path);
+  return (
+    <article className="file-change-card">
+      <div className="file-change-head">
+        <button
+          className="file-change-toggle"
+          aria-expanded={open}
+          aria-controls={listId}
+          onClick={() => setOpen(!open)}
+        >
+          <Icon name={open ? "chevron-down" : "chevron-right"} size={14} />
+          <Icon name="diff" size={16} />
+          <span>{files.length} 个文件已更改</span>
+        </button>
+        {stats && stats.diffs.size > 0 && <ChangeStats {...stats} />}
+        <time className="file-change-time" dateTime={run.started_at}>
+          {runTime(run.started_at)}
+        </time>
+        <button className="file-change-review" onClick={() => review()}>
+          查看变更
+          <Icon name="chevron-right" size={13} />
+        </button>
+      </div>
+      {open && (
+        <div id={listId} className="file-change-list">
+          {files.slice(0, all ? files.length : 3).map((file) => {
+            const diff = stats?.diffs.get(file.path);
+            return (
+              <button
+                key={file.path}
+                className="file-change-row"
+                title={file.path}
+                onClick={() => review(file.path)}
+              >
+                <Icon name="file" size={15} />
+                <span className="file-change-path">{file.path}</span>
+                <span className={`file-change-kind kind-${file.kind}`}>
+                  {changeLabel(file)}
+                </span>
+                {diff ? (
+                  <ChangeStats {...diff} />
+                ) : (
+                  <span className="file-change-size">
+                    {file.binary
+                      ? "二进制"
+                      : `${(file.size / 1024).toFixed(1)} KiB`}
+                  </span>
+                )}
+                <Icon name="chevron-right" size={12} />
+              </button>
+            );
+          })}
+          {files.length > 3 && (
+            <button className="file-change-more" onClick={() => setAll(!all)}>
+              {all ? "收起文件列表" : `再显示 ${files.length - 3} 个文件`}
+              <Icon name={all ? "chevron-down" : "chevron-right"} size={12} />
+            </button>
+          )}
+          {error && (
+            <div className="file-change-error" role="alert">
+              变更详情加载失败
+              <button onClick={() => setAttempt((n) => n + 1)}>重试</button>
+            </div>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+export function RunResults({ view }: { view: SessionView }) {
+  const profile = useStore((s) => s.selectedProfile),
+    revision = useStore((s) => s.reviewRevision);
+  const [result, setResult] = useState<{ key: string; runs: RunFileSet[] }>();
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const key = `${profile}:${view.meta.id}`;
   useEffect(() => {
     let alive = true;
-    setRuns([]);
+    setError("");
     void apiRequest<RunFileSet[]>(
       "GET",
       `/sessions/${encodeURIComponent(view.meta.id)}/run-files`,
     )
-      .then((data) => {
-        if (alive) setRuns(data);
+      .then((runs) => {
+        if (alive) setResult({ key, runs });
       })
-      .catch(() => {});
+      .catch((e) => {
+        if (alive) setError(e.message);
+      });
     return () => {
       alive = false;
     };
-  }, [profile, view.meta.id, view.run?.state]);
-  const changed = runs.filter(
-    (run) => run.complete && run.files.some((file) => file.kind !== "deleted"),
-  );
-  if (!changed.length) return null;
+  }, [key, view.meta.id, view.run?.state, revision, attempt]);
+  const changed = (result?.key === key ? result.runs : [])
+    .filter((run) => run.complete && run.files.length)
+    .slice(-20);
+  if (!changed.length && !error) return null;
   return (
-    <section className="run-results" aria-label="任务生成的文件">
-      {changed.slice(-20).map((run) => (
-        <details key={run.run_id} open={run.run_id === view.run?.run_id}>
-          <summary>
-            <Icon name="file" size={15} />
-            本轮文件 · {run.files.filter((f) => f.kind !== "deleted").length}
-            <small>
-              {run.started_at && new Date(run.started_at).toLocaleTimeString()}
-            </small>
-          </summary>
-          {run.files
-            .filter((file) => file.kind !== "deleted")
-            .map((file) => (
-              <div className="run-file-row" key={file.path}>
-                <button
-                  className="run-file-name"
-                  title={run.workspace + "/" + file.path}
-                  onClick={() =>
-                    useStore
-                      .getState()
-                      .openFileTab(run.workspace + "/" + file.path)
-                  }
-                >
-                  <Icon name="file" size={15} />
-                  {file.path}
-                </button>
-                <small>
-                  {file.kind === "created" ? "新增" : "修改"} ·{" "}
-                  {(file.size / 1024).toFixed(1)} KiB
-                </small>
-                <button
-                  className="btn"
-                  onClick={() =>
-                    void exportFile(
-                      view.meta.id,
-                      run.workspace + "/" + file.path,
-                    ).catch((e) => setError(e.message))
-                  }
-                >
-                  导出
-                </button>
-              </div>
-            ))}
-          <p className="settings-note">
-            {run.files.some((f) => f.attribution === "observed")
-              ? "包含任务期间观察到的文件，来源以审阅页为准。"
-              : "来自文件工具的执行记录。"}
-          </p>
-          <button
-            className="btn"
-            onClick={() => useStore.getState().openWorkspaceView("review")}
-          >
-            审阅与撤回
-          </button>
-        </details>
+    <section className="run-results" aria-label="任务文件变更">
+      {changed.map((run, i) => (
+        <RunCard
+          key={`${key}:${run.run_id}`}
+          run={run}
+          sessionId={view.meta.id}
+          latest={i === changed.length - 1}
+        />
       ))}
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <div className="file-change-error" role="alert">
+          文件变更加载失败
+          <button onClick={() => setAttempt((n) => n + 1)}>重试</button>
+        </div>
+      )}
     </section>
   );
 }
