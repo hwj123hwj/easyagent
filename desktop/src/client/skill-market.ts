@@ -78,11 +78,14 @@ export async function marketSearch(params: {
   if (params.sort) usp.set("sort", params.sort);
   if (params.page && params.page > 1) usp.set("page", String(params.page));
   if (params.section) usp.set("section", String(params.section));
-  const qs = usp.toString();
-  return apiRequest<MarketSearchResult>(
-    "GET",
-    "/skills/market/search" + (qs ? "?" + qs : ""),
-  );
+        const qs = usp.toString();
+        const res = await apiRequest<MarketSearchResult>(
+          "GET",
+          "/skills/market/search" + (qs ? "?" + qs : ""),
+        );
+        // Older server builds may omit fields; degrade to an empty page
+        // instead of crashing the panel.
+        return { skills: res.skills ?? [], total: res.total ?? 0, page: res.page ?? 1 };
 }
 
 export async function marketSections(): Promise<MarketSection[]> {
