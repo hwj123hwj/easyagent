@@ -286,6 +286,9 @@ interface StoreState {
 
   // ── Workspace layout ──
   workspace: WorkspaceUiState;
+  reviewTarget?: { profileId: string; sessionId: string; runId: string; path?: string };
+  reviewRevision: number;
+  openRunReview: (sessionId: string, runId: string, path?: string) => void;
   toggleSidebar: () => void;
   toggleWorkspaceRight: () => void;
   toggleWorkspaceView: (view: RightView) => void;
@@ -703,6 +706,7 @@ export const useStore = create<StoreState>((set, get) => ({
   },
   commands: localCommands,
   workspace: loadWorkspaceUi(),
+  reviewRevision: 0,
   pickFolder: async () => {
     if (
       get().profiles.find((p) => p.id === get().selectedProfile)?.kind !==
@@ -869,6 +873,11 @@ export const useStore = create<StoreState>((set, get) => ({
       persistWorkspaceUi(workspace);
       return { workspace };
     });
+  },
+  openRunReview: (sessionId, runId, path) => {
+    if (sessionId !== get().activeSessionId) return;
+    set({ reviewTarget: { profileId: get().selectedProfile, sessionId, runId, path } });
+    get().openWorkspaceView("review");
   },
   openWorkspaceView: (view) => {
     set((s) => {
