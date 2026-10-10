@@ -4,6 +4,7 @@ import {
   marketSections,
   marketInstalled,
   marketInstallStart,
+  marketSkillDetail,
   marketUninstall,
   subscribeInstallJob,
   formatBytes,
@@ -12,6 +13,7 @@ import {
   type InstalledSkill,
   type InstallJobState,
 } from "../client/skill-market";
+import { copyText } from "../client/clipboard";
 import { Icon } from "./Icon";
 import { useT } from "../i18n/useT";
 import type { TranslationKey } from "../i18n/i18n";
@@ -52,16 +54,17 @@ function tileInitials(name: string): string {
   return (latin.length > 0 ? latin.slice(0, 2) : chars.slice(0, 1)).join("");
 }
 
-function SkillTile({ name, iconUrl }: { name: string; iconUrl?: string | null }) {
+function SkillTile({ name, iconUrl, large }: { name: string; iconUrl?: string | null; large?: boolean }) {
   const [broken, setBroken] = useState(false);
+  const sizeClass = large ? " skill-market-tile-lg" : "";
   if (iconUrl && !broken) {
-    return <img className="skill-market-tile" src={iconUrl} alt="" onError={() => setBroken(true)} />;
+    return <img className={`skill-market-tile${sizeClass}`} src={iconUrl} alt="" onError={() => setBroken(true)} />;
   }
   const hue = tileHue(name);
   const initials = tileInitials(name);
   return (
     <span
-      className={`skill-market-tile skill-market-tile-fallback${[...initials].length > 1 ? " has-two" : ""}`}
+      className={`skill-market-tile skill-market-tile-fallback${sizeClass}${[...initials].length > 1 ? " has-two" : ""}`}
       style={{
         background: `linear-gradient(135deg, hsl(${hue} 46% 52%), hsl(${(hue + 42) % 360} 52% 38%))`,
       }}
@@ -69,6 +72,245 @@ function SkillTile({ name, iconUrl }: { name: string; iconUrl?: string | null })
     >
       {initials}
     </span>
+  );
+}
+
+// ── Detail view (opened by clicking a card) ─────────────────────────────────
+
+function SkillMarketDetail({
+  skill,
+  installed,
+  installs,
+  confirmName,
+  onBack,
+  onInstall,
+  onUninstallConfirm,
+  onCancelUninstall,
+  onUninstall,
+}: {
+  skill: MarketSkill;
+  installed: boolean;
+  installs: InstallState | undefined;
+  confirmName: string | null;
+  onBack: () => void;
+  onInstall: () => void;
+  onUninstallConfirm: () => void;
+  onCancelUninstall: () => void;
+  onUninstall: () => void;
+}) {
+  const t = useT();
+  const st = installs ?? { kind: "idle" as const };
+  const usageExample = (skill.usage_example ?? "").trim();
+  const previews = skill.preview_images ?? [];
+  const files = skill.example_files ?? [];
+  const richDescription = (skill.rich_description ?? "").trim();
+  const [copied, setCopied] = useState(false);
+  const [lightbox, setLightbox] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (lightbox === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightbox(null);
+      if (e.key === "ArrowLeft") setLightbox((c) => (c === null ? c : (c - 1 + previews.length) % previews.length));
+      if (e.key === "ArrowRight") setLightbox((c) => (c === null ? c : (c + 1) % previews.length));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox, previews.length]);
+
+  const copyUsage = async () => {
+    try {
+      await copyText(usageExample);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Copy is a convenience; the prompt stays selectable if it fails.
+    }
+  };
+
+  const isInstalled = installed;
+
+  return (
+    <div className="skill-market-detail">
+      <button className="skill-market-back" onClick={onBack}>
+        <Icon name="arrow-left" /> {t("common.back")}
+      </button>
+
+      <div className="skill-market-detail-head">
+        <SkillTile name={skill.display_name || skill.name} iconUrl={skill.icon_url} large />
+        <div className="skill-market-detail-titlerow">
+          <h2 className="skill-market-detail-name">{skill.display_name || skill.name}</h2>
+          <span className="skill-market-detail-version">v{skill.version}</span>
+          {skill.featured && (
+            <span className="skill-market-featured-tag">
+              <Icon name="star" /> {t("settings.skillMarket.featured")}
+            </span>
+          )}
+        </div>
+        <div className="skill-market-detail-action">
+          {st.kind === "running" ? (
+            <div className="skill-market-progress" aria-busy="true">
+              <div className="skill-market-progress-bar">
+                <div
+                  className="skill-market-progress-fill"
+                  style={{ width: st.pct === null ? "40%" : `${st.pct}%` }}
+                  data-indeterminate={st.pct === null || undefined}
+                />
+              </div>
+              <span className="skill-market-progress-label">
+                {PHASE_LABEL[st.phase] ? t(PHASE_LABEL[st.phase]) : st.phase}
+                {st.pct !== null ? ` ${st.pct}%` : ""}
+              </span>
+            </div>
+          ) : confirmName === skill.name ? (
+            <span className="skill-market-confirm">
+              <button className="danger" onClick={onUninstall}>
+                {t("settings.skillMarket.confirmUninstall")}
+              </button>
+              <button onClick={onCancelUninstall}>{t("common.cancel")}</button>
+            </span>
+          ) : isInstalled || st.kind === "succeeded" ? (
+            <span className="skill-market-installed-badge">
+              <Icon name="check" /> {t("settings.skillMarket.installedBadge")}
+            </span>
+          ) : (
+            <button className="skill-market-install-btn" onClick={onInstall}>
+              <Icon name="download" /> {t("settings.skillMarket.install")}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {st.kind === "failed" && <div className="skill-market-flash err">{st.message}</div>}
+      {st.kind === "succeeded" && !isInstalled && <div className="skill-market-flash ok">{t("settings.skillMarket.installDone")}</div>}
+
+      <p className="skill-market-detail-desc">{skill.description}</p>
+
+      {skill.tags.length > 0 && (
+        <div className="skill-market-card-tags">
+          {skill.tags.map((tag) => (
+            <span key={tag} className="skill-market-card-tag">#{tag}</span>
+          ))}
+        </div>
+      )}
+
+      <div className="skill-market-detail-meta">
+        <span>
+          <Icon name="download" /> {t("settings.skillMarket.installs", { count: skill.install_count })}
+        </span>
+        {formatBytes(skill.size_bytes) && <span>{formatBytes(skill.size_bytes)}</span>}
+        {skill.section_name && <span>{skill.section_name}</span>}
+        {isInstalled && confirmName !== skill.name && (
+          <button className="ghost skill-market-detail-uninstall" onClick={onUninstallConfirm}>
+            <Icon name="delete" /> {t("settings.skillMarket.uninstall")}
+          </button>
+        )}
+      </div>
+
+      {usageExample && (
+        <section className="skill-market-detail-section" aria-labelledby="skill-market-usage-title">
+          <div className="skill-market-detail-section-head">
+            <div className="skill-market-detail-section-title">
+              <span className="skill-market-detail-section-icon"><Icon name="copy" /></span>
+              <div>
+                <h3 id="skill-market-usage-title">{t("settings.skillMarket.usageTitle")}</h3>
+                <p>{t("settings.skillMarket.usageSubtitle")}</p>
+              </div>
+            </div>
+            <button className="ghost skill-market-copy-btn" onClick={() => void copyUsage()}>
+              <Icon name={copied ? "check" : "copy"} /> {copied ? t("settings.skillMarket.usageCopied") : t("settings.skillMarket.usageCopy")}
+            </button>
+          </div>
+          <div className="skill-market-usage-prompt">{usageExample}</div>
+        </section>
+      )}
+
+      {previews.length > 0 && (
+        <section className="skill-market-detail-section" aria-labelledby="skill-market-preview-title">
+          <div className="skill-market-detail-section-head">
+            <div className="skill-market-detail-section-title">
+              <span className="skill-market-detail-section-icon"><Icon name="image" /></span>
+              <div>
+                <h3 id="skill-market-preview-title">{t("settings.skillMarket.previewTitle")}</h3>
+                <p>{t("settings.skillMarket.previewSubtitle")}</p>
+              </div>
+            </div>
+            <span className="skill-market-preview-count">
+              {previews.length === 1
+                ? t("settings.skillMarket.previewCountOne")
+                : t("settings.skillMarket.previewCountMany", { count: previews.length })}
+            </span>
+          </div>
+          <div className={`skill-market-previews count-${Math.min(previews.length, 3)}`}>
+            {previews.map((src, i) => (
+              <button key={src} className="skill-market-preview" onClick={() => setLightbox(i)}>
+                <img src={src} alt={t("settings.skillMarket.previewImageAlt", { name: skill.display_name || skill.name, index: i + 1 })} loading="lazy" />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {files.length > 0 && (
+        <section className="skill-market-detail-section" aria-labelledby="skill-market-files-title">
+          <div className="skill-market-detail-section-head">
+            <div className="skill-market-detail-section-title">
+              <span className="skill-market-detail-section-icon"><Icon name="file" /></span>
+              <div>
+                <h3 id="skill-market-files-title">{t("settings.skillMarket.filesTitle")}</h3>
+                <p>{t("settings.skillMarket.filesSubtitle")}</p>
+              </div>
+            </div>
+          </div>
+          <div className="skill-market-files">
+            {files.map((f) => (
+              <a key={f.url} className="skill-market-file" href={f.url} download={f.name} target="_blank" rel="noreferrer">
+                <Icon name="file" />
+                <span className="skill-market-file-name">{f.name}</span>
+                {formatBytes(f.size) && <span className="skill-market-file-size">{formatBytes(f.size)}</span>}
+                <span className="skill-market-file-download">
+                  <Icon name="download" /> {t("settings.skillMarket.fileDownload")}
+                </span>
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {richDescription && (
+        <div className="skill-market-detail-rich">{richDescription}</div>
+      )}
+
+      {lightbox !== null && previews[lightbox] && (
+        <div className="skill-market-lightbox" role="dialog" aria-modal="true" onClick={() => setLightbox(null)}>
+          <button className="skill-market-lightbox-close" aria-label={t("common.dismiss")} onClick={() => setLightbox(null)}>
+            <Icon name="x" />
+          </button>
+          {previews.length > 1 && (
+            <button
+              className="skill-market-lightbox-nav prev"
+              aria-label={t("settings.skillMarket.previous")}
+              onClick={(e) => { e.stopPropagation(); setLightbox((lightbox - 1 + previews.length) % previews.length); }}
+            >
+              <Icon name="chevron-right" className="flip-x" />
+            </button>
+          )}
+          <img src={previews[lightbox]} alt="" onClick={(e) => e.stopPropagation()} />
+          {previews.length > 1 && (
+            <button
+              className="skill-market-lightbox-nav next"
+              aria-label={t("settings.skillMarket.next")}
+              onClick={(e) => { e.stopPropagation(); setLightbox((lightbox + 1) % previews.length); }}
+            >
+              <Icon name="chevron-right" />
+            </button>
+          )}
+          {previews.length > 1 && (
+            <span className="skill-market-lightbox-counter">{lightbox + 1} / {previews.length}</span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -91,7 +333,9 @@ export function SkillMarketPanel() {
   // Install state keyed by skill id; one install per skill at a time.
   const [installs, setInstalls] = useState<Record<number, InstallState>>({});
   const [confirmName, setConfirmName] = useState<string | null>(null);
+  const [detail, setDetail] = useState<MarketSkill | null>(null);
   const searchSeq = useRef(0);
+  const detailSeq = useRef(0);
   const pageSize = useRef(0);
   const mounted = useRef(false);
   const starting = useRef(new Set<number>());
@@ -233,6 +477,21 @@ export function SkillMarketPanel() {
   const installedNames = new Set(installed.map((i) => i.name));
   const hasMore = view === "market" && !loading && skills.length < total;
 
+  // Open the detail view with the browse item, then merge in the full
+  // showcase payload (usage example, previews) once it arrives.
+  const openDetail = useCallback((s: MarketSkill) => {
+    const seq = ++detailSeq.current;
+    setConfirmName(null);
+    setDetail(s);
+    void marketSkillDetail(s.id)
+      .then((full) => {
+        if (mounted.current && seq === detailSeq.current) setDetail(full);
+      })
+      .catch(() => {
+        // The browse item still renders fine without showcase fields.
+      });
+  }, []);
+
   const renderCardActions = (s: MarketSkill) => {
     const st = installs[s.id] ?? { kind: "idle" as const };
     const isInstalled = installedNames.has(s.name);
@@ -283,6 +542,33 @@ export function SkillMarketPanel() {
       </button>
     );
   };
+
+  if (detail) {
+    return (
+      <div className="settings-section skill-market">
+        {error && (
+          <div className="skill-market-error" role="alert">
+            <Icon name="alert" />
+            <span>{error}</span>
+            <button onClick={() => setError(null)} aria-label={t("common.dismiss")}>
+              <Icon name="x" />
+            </button>
+          </div>
+        )}
+        <SkillMarketDetail
+          skill={detail}
+          installed={installedNames.has(detail.name)}
+          installs={installs[detail.id]}
+          confirmName={confirmName}
+          onBack={() => { setDetail(null); setConfirmName(null); }}
+          onInstall={() => void install(detail)}
+          onUninstallConfirm={() => setConfirmName(detail.name)}
+          onCancelUninstall={() => setConfirmName(null)}
+          onUninstall={() => void uninstall(detail.name)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="settings-section skill-market">
@@ -375,7 +661,19 @@ export function SkillMarketPanel() {
               {skills.map((s) => {
                 const st = installs[s.id] ?? { kind: "idle" as const };
                 return (
-                  <article key={s.id} className={`skill-market-card${s.featured ? " featured" : ""}`}>
+                  <article
+                    key={s.id}
+                    className={`skill-market-card${s.featured ? " featured" : ""}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openDetail(s)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openDetail(s);
+                      }
+                    }}
+                  >
                     {s.featured && (
                       <span className="skill-market-featured-badge">
                         <Icon name="star" /> {t("settings.skillMarket.featured")}
@@ -416,7 +714,7 @@ export function SkillMarketPanel() {
                           <span className="skill-market-card-size">{formatBytes(s.size_bytes)}</span>
                         )}
                       </div>
-                      <div className="skill-market-card-actions">{renderCardActions(s)}</div>
+                      <div className="skill-market-card-actions" onClick={(e) => e.stopPropagation()}>{renderCardActions(s)}</div>
                     </div>
                   </article>
                 );

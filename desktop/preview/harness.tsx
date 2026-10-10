@@ -90,6 +90,19 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   if (path.startsWith("/skills/market/sections")) return reply({ sections: SECTIONS });
   if (path.startsWith("/skills/market/installed")) return reply({ installed: INSTALLED });
+  if (/^\/skills\/market\/skills\/\d+/.test(path)) {
+    return reply({
+      ...SKILLS[0],
+      usage_example: "帮我制作一套介绍猎豹移动董事长傅盛的板书风 PPT，包含他的个人经历、猎豹移动的发展历程、几次关键转型和 AI 方向，整体像白板手写，配一些彩色插画。",
+      preview_images: [
+        "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 640 360'%3E%3Crect width='640' height='360' fill='%23f5f2ea'/%3E%3Ctext x='320' y='190' font-size='42' font-family='serif' fill='%23222' text-anchor='middle'%3E傅盛 · 板书风 PPT%3C/text%3E%3C/svg%3E",
+        "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 640 360'%3E%3Crect width='640' height='360' fill='%23eef3f7'/%3E%3Ctext x='320' y='190' font-size='42' font-family='serif' fill='%23222' text-anchor='middle'%3E第 2 页 · 发展历程%3C/text%3E%3C/svg%3E",
+      ],
+      example_files: [
+        { name: "board-style-demo.pptx", url: "https://example.test/board-style-demo.pptx", size: 1048576, mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" },
+      ],
+    });
+  }
   if (path.startsWith("/skills/market/search")) {
     const q = new URL(path, "http://x").searchParams;
     const page = Number(q.get("page") || "1");
@@ -103,7 +116,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 useStore.setState({ lang: "zh" });
 
 const route = new URLSearchParams(location.search).get("route") || "market";
-if (route === "dark" || route === "dark-skeleton") {
+if (route === "dark" || route === "dark-skeleton" || route === "dark-detail") {
   document.documentElement.setAttribute("data-theme", "dark");
 }
 if (route === "skeleton" || route === "dark-skeleton") {
@@ -122,12 +135,17 @@ root.render(
   </StrictMode>,
 );
 
-// Switch to the installed-skills view once the panel has rendered.
-if (route === "installed") {
+// Switch to the installed-skills view / open a card's detail view.
+if (route === "installed" || route === "detail" || route === "dark-detail") {
   setTimeout(() => {
-    const btn = [...document.querySelectorAll(".skill-market-sort button")].find(
-      (b) => b.textContent?.includes("已安装"),
-    ) as HTMLButtonElement | undefined;
-    btn?.click();
+    if (route === "installed") {
+      const btn = [...document.querySelectorAll(".skill-market-sort button")].find(
+        (b) => b.textContent?.includes("已安装"),
+      ) as HTMLButtonElement | undefined;
+      btn?.click();
+      return;
+    }
+    const card = document.querySelector<HTMLElement>(".skill-market-card");
+    card?.click();
   }, 400);
 }

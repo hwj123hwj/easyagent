@@ -41,6 +41,8 @@ func skillMarketTestServer(t *testing.T) (*Server, string) {
 		Version:     "1.2.3",
 		SHA256:      &[]string{hex.EncodeToString(digest[:])}[0],
 		TarballSize: int64(buf.Len()),
+		UsageExample: &[]string{"帮我制作一套板书风 PPT"}[0],
+		PreviewImages: []string{"https://example.test/preview-1.png"},
 	}
 
 	mux := http.NewServeMux()
@@ -127,6 +129,9 @@ func TestSkillMarketRESTSearchDetailSections(t *testing.T) {
 	w = marketReq(t, srv, "GET", "/skills/market/skills/42", nil)
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Contains(t, w.Body.String(), `"version":"1.2.3"`)
+	// Showcase fields pass through to the detail wire for the desktop UI.
+	require.Contains(t, w.Body.String(), `"usage_example":"帮我制作一套板书风 PPT"`)
+	require.Contains(t, w.Body.String(), `"preview_images":["https://example.test/preview-1.png"]`)
 
 	w = marketReq(t, srv, "GET", "/skills/market/skills/99", nil)
 	require.Equal(t, http.StatusNotFound, w.Code)

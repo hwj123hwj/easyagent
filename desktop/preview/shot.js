@@ -33,9 +33,11 @@ app.whenReady().then(async () => {
         const t0 = Date.now();
         const check = () => {
           const real = document.querySelectorAll('.skill-market-card:not(.skel)').length;
+          const detail = !!document.querySelector('.skill-market-detail');
           const empty = !!document.querySelector('.skill-market-empty');
-          if ((real > 0 && Date.now() - t0 > 900) || empty || Date.now() - t0 > 6000) {
-            setTimeout(() => resolve(JSON.stringify({ real, empty, ms: Date.now() - t0 })), 400);
+          const detailSettled = detail && Date.now() - t0 > 1500;
+          if ((real > 0 && Date.now() - t0 > 900) || detailSettled || empty || Date.now() - t0 > 6000) {
+            setTimeout(() => resolve(JSON.stringify({ real, detail, empty, ms: Date.now() - t0 })), 400);
           } else setTimeout(check, 100);
         };
         check();
