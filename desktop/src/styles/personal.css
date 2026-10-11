@@ -265,7 +265,7 @@ textarea::placeholder {
 .personal-transcript {
   max-width: 816px;
   margin: 0 auto;
-  padding: 28px 24px 38px;
+  padding: 28px 24px 12px;
   min-height: 100%;
 }
 .transcript-row {
@@ -473,7 +473,7 @@ textarea::placeholder {
   width: 60%;
 }
 .personal-composer {
-  padding: 14px 24px 18px;
+  padding: 8px 24px 16px;
   border: 0;
   background: var(--bg);
 }
@@ -995,10 +995,10 @@ textarea::placeholder {
     font-size: 12px;
   }
   .personal-transcript {
-    padding: 24px 16px;
+    padding: 24px 16px 12px;
   }
   .personal-composer {
-    padding: 12px 14px 16px;
+    padding: 8px 14px 14px;
   }
   .personal-input-wrap .prompt-input {
     font-size: 16px;
