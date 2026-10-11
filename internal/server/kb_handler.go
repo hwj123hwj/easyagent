@@ -57,13 +57,13 @@ type kbTagsResponse struct {
 }
 
 type kbHealthResponse struct {
-	TotalEntries          int               `json:"total_entries"`
-	Categories            int               `json:"categories"`
-	Tags                  int               `json:"tags"`
-	EntriesMissingTitle   []kbEntryJSON     `json:"entries_missing_title"`
-	EntriesMissingSummary []kbEntryJSON     `json:"entries_missing_summary"`
-	EntriesMissingTags    []kbEntryJSON     `json:"entries_missing_tags"`
-	DuplicateGroups       []kbDupGroupJSON  `json:"duplicate_groups"`
+	TotalEntries          int                `json:"total_entries"`
+	Categories            int                `json:"categories"`
+	Tags                  int                `json:"tags"`
+	EntriesMissingTitle   []kbEntryJSON      `json:"entries_missing_title"`
+	EntriesMissingSummary []kbEntryJSON      `json:"entries_missing_summary"`
+	EntriesMissingTags    []kbEntryJSON      `json:"entries_missing_tags"`
+	DuplicateGroups       []kbDupGroupJSON   `json:"duplicate_groups"`
 	TagClusters           []kbTagClusterJSON `json:"tag_clusters"`
 }
 

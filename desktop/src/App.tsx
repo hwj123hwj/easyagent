@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useStore, type RightView } from "./store";
+import { useStore, WORKSPACE_SIZE_LIMITS, type RightView } from "./store";
 import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
 import { UpdateBanner } from "./components/UpdateBanner";
@@ -36,8 +36,8 @@ export function App() {
   const mobile = viewportWidth < 769;
   const sidebarWidth = mobile
     ? workspace.sidebarWidth
-    : Math.min(workspace.sidebarWidth, Math.max(200, Math.min(280, viewportWidth * 0.22)));
-  const sessionWidth = viewportWidth - (!mobile && workspace.sidebarOpen ? sidebarWidth + 5 : 0);
+    : WORKSPACE_SIZE_LIMITS.sidebarWidth.default;
+  const sessionWidth = viewportWidth - (!mobile && workspace.sidebarOpen ? sidebarWidth : 0);
   const floatingWorkbench = !mobile && workspace.rightOpen && !!workspace.rightView && !settingsOpen && sessionWidth < 845;
   const rightWidth = floatingWorkbench
     ? Math.min(workspace.rightWidth, 520, sessionWidth - 24)
@@ -188,15 +188,6 @@ export function App() {
               <ErrorBoundary label="sidebar">
                 <Sidebar />
               </ErrorBoundary>
-              {isElectron && (
-                <Resizer
-                  axis="x"
-                  sign={1}
-                  title={t("sidebar.resize")}
-                  getValue={() => sidebarWidth}
-                  onChange={(v) => setWorkspaceSize("sidebarWidth", v)}
-                />
-              )}
             </>
           ) : (
             <>

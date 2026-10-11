@@ -1,27 +1,27 @@
-/* 青夜个人工作区；延续 Web 的颜色、密度与阅读比例。 */
+/* 青夜个人工作区；透光微冷黑背景 + 细腻半透边框 + 清新青翠 Accent。 */
 :root,
 :root[data-theme="dark"] {
-  --bg: #101b1c;
-  --bg-elev: #162526;
-  --bg-raised: #1c2e2f;
-  --bg-sunken: #0d1816;
-  --bg-hover: #213333;
-  --bg-active: #203c39;
-  --border: #304746;
-  --border-strong: #526f6c;
-  --text: #e5efeb;
-  --text-dim: #acbeb6;
-  --text-muted: #acbeb6;
-  --text-faint: #8fa79b;
-  --accent: #82d5ca;
-  --accent-hover: #a3e5dc;
-  --accent-text: #0c2421;
-  --accent-weak: #203c39;
-  --accent-border: #3a5953;
-  --green: #82d5ca;
-  --red: #ffa5a0;
-  --amber: #e7c583;
-  --blue: #82d5ca;
+  --bg: #131718;
+  --bg-elev: #181d1f;
+  --bg-raised: #1e2426;
+  --bg-sunken: #0e1112;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(78, 205, 196, 0.12);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --text: #edf2f0;
+  --text-dim: #9aa8a3;
+  --text-muted: #83938e;
+  --text-faint: #62726d;
+  --accent: #4ecdc4;
+  --accent-hover: #6ee7b7;
+  --accent-text: #081a17;
+  --accent-weak: rgba(78, 205, 196, 0.12);
+  --accent-border: rgba(78, 205, 196, 0.32);
+  --green: #4ecdc4;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --blue: #5ba4e6;
   --shadow: none;
   --shadow-sm: none;
   --shadow-lg: none;
@@ -173,7 +173,7 @@ textarea::placeholder {
   color: inherit;
 }
 .sidebar-head {
-  padding: 22px 18px 16px;
+  padding: 14px 14px 10px;
 }
 .brand-mark {
   display: none;
@@ -185,7 +185,7 @@ textarea::placeholder {
   letter-spacing: -0.03em;
 }
 .sidebar-head-actions {
-  margin-top: 20px;
+  margin-top: 12px;
 }
 .btn-new,
 .btn-new-project {
@@ -195,10 +195,16 @@ textarea::placeholder {
   box-shadow: none;
 }
 .session-item {
-  border-radius: 8px;
+  border-radius: 6px;
+  padding: 5px 8px;
+  min-height: 32px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 .session-item.active {
-  background: var(--accent-weak);
+  background: var(--bg-active);
+  border-color: var(--accent-border);
 }
 .session-open {
   display: block;
@@ -210,10 +216,10 @@ textarea::placeholder {
   text-align: left;
 }
 .sidebar-search {
-  margin: 6px 18px 18px;
+  margin: 4px 14px 10px;
 }
 .session-list {
-  padding: 0 12px;
+  padding: 0 8px;
 }
 .sidebar-foot {
   border-top: 1px solid var(--border);
@@ -263,7 +269,10 @@ textarea::placeholder {
   min-height: 100%;
 }
 .transcript-row {
-  padding-bottom: 28px;
+  padding-bottom: 24px;
+}
+.transcript-row:last-of-type {
+  padding-bottom: 4px;
 }
 .personal-reply {
   line-height: 1.85;
@@ -290,6 +299,9 @@ textarea::placeholder {
 }
 .personal-reply .md > p {
   margin: 0 0 16px;
+}
+.personal-reply .md > :last-child {
+  margin-bottom: 8px;
 }
 .personal-reply .md h1,
 .personal-reply .md h2,
