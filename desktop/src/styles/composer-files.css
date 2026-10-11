@@ -1,7 +1,7 @@
 /* The composer follows the reading column and adapts to its own chat pane. */
 .personal-composer {
   min-width: 0;
-  padding: 12px 20px 14px;
+  padding: 8px 20px 14px;
 }
 
 .personal-composer .promptbar-inner {
