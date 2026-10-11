@@ -181,30 +181,26 @@ export function Sidebar() {
       >
         <div className="session-row">
           <span className={`status-dot ${v.meta.status}`} />
-          <>
-            <span className="session-title" title={v.meta.title}>
-              {v.meta.pinned && <Icon name="circle-check" size={12} />}
-              {v.meta.forked_from && (
-                <span title="从此会话分叉" style={{ display: 'inline-flex', verticalAlign: 'middle', marginRight: 4, opacity: 0.85 }}>
-                  <Icon name="git-branch" size={11} />
-                </span>
-              )}
-              {v.meta.title}
+          <span className="session-title" title={v.meta.title}>
+            {v.meta.pinned && <Icon name="circle-check" size={12} />}
+            {v.meta.forked_from && (
+              <span title="从此会话分叉" style={{ display: 'inline-flex', verticalAlign: 'middle', marginRight: 4, opacity: 0.85 }}>
+                <Icon name="git-branch" size={11} />
+              </span>
+            )}
+            {v.meta.title}
+          </span>
+          {!!unreadSessions[v.meta.id] && (
+            <span className="unread-badge" title={`${unreadSessions[v.meta.id]} 条新结果`}>
+              {unreadSessions[v.meta.id]}
             </span>
-            {!!unreadSessions[v.meta.id] && (
-              <span className="unread-badge" title={`${unreadSessions[v.meta.id]} 条新结果`}>
-                {unreadSessions[v.meta.id]}
-              </span>
-            )}
-            {v.meta.application && (
-              <span className={`session-badge ${v.meta.application}`}>
-                {v.meta.application}
-              </span>
-            )}
-          </>
-        </div>
-        <div className="session-row">
-          <span className="session-sub">{relTime(t, v.meta.updatedAt)}</span>
+          )}
+          {v.meta.application && (
+            <span className={`session-badge ${v.meta.application}`}>
+              {v.meta.application}
+            </span>
+          )}
+          <span className="session-time">{relTime(t, v.meta.updatedAt)}</span>
         </div>
       </button>
       <details className="session-preferences">
@@ -447,18 +443,7 @@ export function Sidebar() {
       </div>
 
       <div className="sidebar-foot">
-        <Icon name="shield" size={14} />
-        <span className="sidebar-foot-label">个人 Agent</span>
         <div className="sidebar-foot-actions">
-          <button
-            className="sidebar-foot-action"
-            title="飞书机器人"
-            aria-label="飞书机器人"
-            onClick={() => useStore.getState().openSettings(true, "feishu")}
-          >
-            <Icon name="feishu" size={15} />
-            <span>飞书</span>
-          </button>
           <button
             className="sidebar-foot-action"
             title="设置"
@@ -467,6 +452,15 @@ export function Sidebar() {
           >
             <Icon name="settings" size={15} />
             <span>设置</span>
+          </button>
+          <button
+            className="sidebar-foot-action"
+            title="飞书机器人"
+            aria-label="飞书机器人"
+            onClick={() => useStore.getState().openSettings(true, "feishu")}
+          >
+            <Icon name="feishu" size={15} />
+            <span>飞书</span>
           </button>
         </div>
         {/* Mobile: check-for-update button */}

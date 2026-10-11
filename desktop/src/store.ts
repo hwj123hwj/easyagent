@@ -194,7 +194,7 @@ export interface WorkspaceUiState {
 
 /** Clamp ranges for the draggable regions. */
 export const WORKSPACE_SIZE_LIMITS = {
-  sidebarWidth: { min: 200, max: 480, default: 224 },
+  sidebarWidth: { min: 200, max: 480, default: 260 },
   rightWidth: { min: 340, max: 900, default: 440 },
   bottomHeight: { min: 120, max: 720, default: 280 },
   fileTreeWidth: { min: 160, max: 480, default: 220 },
@@ -451,7 +451,7 @@ function loadWorkspaceUi(): WorkspaceUiState {
       return {
         ...base,
         sidebarOpen: p.sidebarOpen ?? true,
-        sidebarWidth: clampSize(p.sidebarWidth, "sidebarWidth"),
+        sidebarWidth: WORKSPACE_SIZE_LIMITS.sidebarWidth.default,
         rightOpen: !!p.rightOpen && rightView != null,
         rightView,
         bottomOpen: !!p.bottomOpen,

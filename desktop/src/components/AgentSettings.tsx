@@ -43,19 +43,19 @@ const settingGroups: Array<{
       {
         id: "usage",
         label: "用量统计",
-        icon: "sparkle",
+        icon: "activity",
         description: "查看近 30 天 Token 消耗与各会话用量排行。",
       },
       {
         id: "skillMarket",
         label: "技能市场",
-        icon: "sparkle",
+        icon: "download",
         description: "浏览并安装官方技能市场里的技能。",
       },
       {
         id: "experiments",
         label: "实验",
-        icon: "sparkle",
+        icon: "wrench",
         description: "实验性功能开关：Computer use 等能力。",
       },
     ],
@@ -72,13 +72,13 @@ const settingGroups: Array<{
       {
         id: "mcp",
         label: "MCP 工具",
-        icon: "wrench",
+        icon: "link",
         description: "为当前主机接入工具服务，管理信任与授权。",
       },
       {
         id: "capabilities",
         label: "技能与工作流",
-        icon: "sparkle",
+        icon: "code",
         description: "查看当前项目实际加载的能力与工作流运行记录。",
       },
       {

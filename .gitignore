@@ -20,6 +20,7 @@ Thumbs.db
 
 # Reviews (local only)
 docs/reviews/
+.impeccable/
 
 # Runtime data
 data/

@@ -6136,13 +6136,7 @@ body.resizing .resizer {
   }
 }
 
-/* ── Tablet (769-1024px): keep most desktop layout, slightly narrower ────── */
-
-@media (max-width: 1024px) and (min-width: 769px) {
-  .app {
-    --sidebar-w: 220px !important;
-  }
-}
+/* ── Tablet (769-1024px): keep fixed desktop sidebar width ────── */
 
 .unread-badge {
   display: inline-flex;
