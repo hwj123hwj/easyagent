@@ -11,8 +11,8 @@
 .settings-navigation {
   display: flex;
   flex-direction: column;
-  flex: 0 0 200px;
-  padding: 16px 10px 14px;
+  flex: 0 0 240px;
+  padding: 16px 12px 14px;
   border-right: 1px solid var(--border);
   background: var(--bg-elev);
   overflow-y: auto;
@@ -114,7 +114,7 @@
 .feishu-empty h2 { display: flex; align-items: center; gap: 10px; }
 .feishu-empty code { overflow-wrap: anywhere; }
 @media (max-width: 900px) {
-  .settings-navigation { flex-basis: 200px; }
+  .settings-navigation { flex-basis: 220px; }
   .settings-content { padding: 30px 28px 48px; }
 }
 @media (max-width: 600px) {
