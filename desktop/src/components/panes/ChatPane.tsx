@@ -584,7 +584,7 @@ function ToolGroup({
                 rawInput={item.rawInput}
                 details={item.details}
                 terminalOutput={item.terminalOutput}
-                defaultOpen={item.status === "failed" || density === "verbose"}
+                defaultOpen={density === "verbose"}
                 forceOpen={item.id === foundItem}
                 onOpenFile={(path) => useStore.getState().openFileTab(path)}
               />
