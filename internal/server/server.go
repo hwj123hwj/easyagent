@@ -39,21 +39,24 @@ func (s *Server) SetVersion(v string) {
 // Server provides HTTP REST + SSE endpoints for the agent.
 // It routes requests to AgentSessions via the App's SessionRegistry.
 type Server struct {
-	activity        activityGate
-	runs            *runRegistry
-	marketJobs      *marketJobRegistry
-	queueMu         sync.Mutex
-	queues          map[string]*messageQueue
-	ctx             context.Context
-	cancel          context.CancelFunc
-	app             *app.App
-	slashCmds       *slashcmd.Registry
-	externalTools   []agent.ExternalToolDef
-	toolMu          sync.Mutex
-	extraRoutes     *http.ServeMux // optional extra routes (e.g. music audio proxy)
-	apiKey          string         // if non-empty, requires Bearer token auth on all endpoints
-	terminalEnabled bool
-	terminalSlots   chan struct{}
+	activity          activityGate
+	runs              *runRegistry
+	marketJobs        *marketJobRegistry
+	queueMu           sync.Mutex
+	queues            map[string]*messageQueue
+	ctx               context.Context
+	cancel            context.CancelFunc
+	app               *app.App
+	slashCmds         *slashcmd.Registry
+	externalTools     []agent.ExternalToolDef
+	toolMu            sync.Mutex
+	extraRoutes       *http.ServeMux // optional extra routes (e.g. music audio proxy)
+	apiKey            string         // if non-empty, requires Bearer token auth on all endpoints
+	terminalEnabled   bool
+	terminalSlots     chan struct{}
+	baseURL           string                                          // 本机自呼地址（ListenAndServe 时归一化），进程内飞书桥接回调核心 API 用
+	localBridge       feishuBridge                                    // 非 systemd 托管主机上随 serve 运行的进程内飞书桥接
+	localBridgeRunner func(ctx context.Context, baseURL string) error // 测试注入；nil 用真实实现
 
 	wfMu      sync.Mutex
 	wfReg     *workflow.Registry
@@ -296,8 +299,22 @@ func (s *Server) Handler() http.Handler {
 
 // ListenAndServe starts the HTTP server on the given address.
 func (s *Server) ListenAndServe(addr string) error {
+	s.baseURL = normalizeLocalBaseURL(addr)
 	slog.Info("starting easyagent server", "listen", addr)
 	return s.serveUntilSignal(addr)
+}
+
+// normalizeLocalBaseURL 把监听地址转成进程内桥接可自呼的 loopback URL。
+// 通配地址（0.0.0.0/::/空 host）按 127.0.0.1 处理。
+func normalizeLocalBaseURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://" + addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // ─── GET /health ──────────────────────────────────────────────────────────────

@@ -67,7 +67,7 @@ export function FeishuSettings() {
           {/* 扫码绑定区域：快捷零门槛 */}
           {!status.managed && <section className="feishu-section" aria-labelledby="feishu-qr-title">
             <h2 id="feishu-qr-title">快速绑定（扫码登录）</h2>
-            <p className="feishu-hint">使用移动端飞书 App 扫描二维码，即可自动创建并绑定机器人，获取应用凭据。保存后需另行启动或重启飞书桥接。</p>
+            <p className="feishu-hint">使用移动端飞书 App 扫描二维码，即可自动创建并绑定机器人，获取应用凭据。保存后点击「启动飞书桥接」即可收发消息。</p>
             {status.app_id && (
               <p style={{ color: "var(--color-text-secondary, #888)", fontSize: "13px" }}>
                 当前已配置机器人 App ID: <code>{status.app_id}</code>
@@ -124,6 +124,30 @@ export function FeishuSettings() {
             )}
             {state.qrAuthorized && <button className="btn primary" disabled={state.saving} onClick={() => void controller.confirmQR()}>{state.saving ? "正在保存…" : "确认保存授权凭据"}</button>}
           </section>}
+
+          {/* 本机桥接：非 systemd 托管主机，桥接跑在本地 Agent 进程内 */}
+          {!status.managed && status.local_mode && (
+            <section className="feishu-section" aria-labelledby="feishu-local-bridge-title">
+              <h2 id="feishu-local-bridge-title">飞书桥接（本机）</h2>
+              <p className="feishu-hint">
+                桥接运行在本地 Agent 进程内，凭据来自扫码绑定。当前状态：
+                {status.bridge?.running ? "运行中" : "已停止"}。
+                {status.bridge?.error && (
+                  <span style={{ color: "var(--color-danger, #e5484d)" }}>上次失败：{status.bridge.error}</span>
+                )}
+              </p>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={disabled || state.bridgeLoading}
+                onClick={() => void controller.restartBridge()}
+              >
+                <Icon name="refresh" size={14} />
+                {state.bridgeLoading ? "正在启动…" : status.bridge?.running ? "重启飞书桥接" : "启动飞书桥接"}
+              </button>
+              <p className="feishu-hint" style={{ marginTop: "8px" }}>桥接随本地 Agent 一起退出；需要常驻时请改用 systemd 托管部署。</p>
+            </section>
+          )}
 
           {/* 远程 / Systemd 托管状态 */}
           {status.managed && (
