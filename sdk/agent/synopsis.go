@@ -7,11 +7,12 @@ package agent
 //  When a tool returns a large output (over threshold chars), the After hook
 //  automatically generates a deterministic synopsis (structure + excerpt) and
 //  replaces the LLM-facing Content with it. The full output is preserved in
-//  UserFacing (for the UI to display).
+//  UserFacing (for the UI to display), and optionally in a ToolOutputStore
+//  so the model can retrieve it via the full_output tool.
 //
 //  This prevents large tool outputs from consuming context window tokens.
 //  The synopsis gives the LLM enough information to decide if it needs to
-//  re-read the full output (e.g. via kb_read without overview mode).
+//  re-read the full output (e.g. via full_output).
 //
 //  Key differences from OpenViking:
 //  1. No external storage — synopsis replaces Content in-place, full text
@@ -28,44 +29,107 @@ import (
 )
 
 const (
-	synopsisThreshold   = 4000 // chars — outputs larger than this get a synopsis
-	synopsisSkipMarker  = "[输出概览]" // if Content already contains this, skip double-synopsis
-	maxExcerptChars     = 600
-	maxHeadersShown     = 10
-	maxCodeSymbols      = 15
+	// DefaultSynopsisThreshold 与 read/grep/bash 自身的 51200 字符（50KB）
+	// 截断（sdk/tools DefaultMaxOutputLen）对齐：自带截断的工具不会触发
+	// 概览化，概览只处理 web_fetch 等没有自带截断的天然大输出，不再卡
+	// 编码场景的读文件与搜索结果。
+	DefaultSynopsisThreshold = 51200
+	synopsisSkipMarker       = "[输出概览]" // if Content already contains this, skip double-synopsis
+	maxExcerptChars          = 600
+	maxHeadersShown          = 10
+	maxCodeSymbols           = 15
+	defaultStoreEntries      = 16
 )
 
-// SynopsisAfterHook is an AfterToolCallHook that auto-synopsizes large outputs.
+// SynopsisSettings 控制 NewSynopsisAfterHook 的行为，零值字段沿用默认。
+type SynopsisSettings struct {
+	// Threshold 超过该字符数的工具输出被概览化；<=0 时用 DefaultSynopsisThreshold。
+	Threshold int
+	// ExemptTools 不做概览化的工具名。输出本身就是给模型看的内容的工具
+	// （read/grep 等）应豁免，概览化主要留给 bash/web_fetch 等天然大输出。
+	// nil 沿用默认豁免表；空 map 表示不豁免任何工具。
+	ExemptTools map[string]bool
+}
+
+// DefaultSynopsisSettings 返回默认设置：阈值 DefaultSynopsisThreshold，
+// 豁免 read / grep / read_many_files。
+func DefaultSynopsisSettings() SynopsisSettings {
+	return SynopsisSettings{
+		Threshold: DefaultSynopsisThreshold,
+		ExemptTools: map[string]bool{
+			"read":            true,
+			"grep":            true,
+			"read_many_files": true,
+		},
+	}
+}
+
+func (s SynopsisSettings) threshold() int {
+	if s.Threshold > 0 {
+		return s.Threshold
+	}
+	return DefaultSynopsisThreshold
+}
+
+func (s SynopsisSettings) exempt(toolName string) bool {
+	if s.ExemptTools == nil {
+		s = DefaultSynopsisSettings()
+	}
+	return s.ExemptTools[toolName]
+}
+
+// NewSynopsisAfterHook 构造自动概览化钩子。store 非 nil 时，概览化会把全文
+// 登记进 store 并在结尾给出 full_output 取回指引；nil 时保持旧行为
+// （全文只对用户可见）。
+func NewSynopsisAfterHook(settings SynopsisSettings, store *ToolOutputStore) AfterToolCallHook {
+	return func(_ context.Context, call ToolCallContext, result ToolResult) (ToolResult, error) {
+		if settings.exempt(call.ToolName) {
+			return result, nil // 工具输出本身就是给模型看的，不概览化
+		}
+		if len(result.Content) <= settings.threshold() {
+			return result, nil // small enough, no synopsis needed
+		}
+
+		// Skip if Content already appears to be a synopsis (avoid double-synopsis
+		// when a tool like kb_read overview=true already returned structured output)
+		if strings.Contains(result.Content, synopsisSkipMarker) {
+			return result, nil
+		}
+
+		// Preserve full output for the UI (only if not already set by the tool)
+		if result.UserFacing == "" {
+			result.UserFacing = result.Content
+		}
+
+		// Generate synopsis and replace LLM-facing content
+		ref := ""
+		if store != nil {
+			ref = store.Put(result.Content)
+		}
+		result.Content = generateSynopsis(result.Content, ref)
+
+		return result, nil
+	}
+}
+
+// SynopsisAfterHook 用默认设置且不带全文取回的自动概览化钩子。
 // Usage:
 //
 //	hooks.After = append(hooks.After, SynopsisAfterHook)
-func SynopsisAfterHook(_ context.Context, _ ToolCallContext, result ToolResult) (ToolResult, error) {
-	if len(result.Content) <= synopsisThreshold {
-		return result, nil // small enough, no synopsis needed
-	}
-
-	// Skip if Content already appears to be a synopsis (avoid double-synopsis
-	// when a tool like kb_read overview=true already returned structured output)
-	if strings.Contains(result.Content, synopsisSkipMarker) {
-		return result, nil
-	}
-
-	// Preserve full output for the UI (only if not already set by the tool)
-	if result.UserFacing == "" {
-		result.UserFacing = result.Content
-	}
-
-	// Generate synopsis and replace LLM-facing content
-	synopsis := GenerateSynopsis(result.Content)
-	result.Content = synopsis
-
-	return result, nil
+func SynopsisAfterHook(ctx context.Context, call ToolCallContext, result ToolResult) (ToolResult, error) {
+	return NewSynopsisAfterHook(DefaultSynopsisSettings(), nil)(ctx, call, result)
 }
 
 // GenerateSynopsis produces a deterministic synopsis of a large text output.
 // It detects content type (code, markdown, JSON, plain text) and extracts
 // the most relevant structural information.
 func GenerateSynopsis(content string) string {
+	return generateSynopsis(content, "")
+}
+
+// generateSynopsis 生成概览；ref 非空时结尾给出 full_output 取回指引，
+// 替代「告知后可取全文」但无处可取的旧文案。
+func generateSynopsis(content, ref string) string {
 	var b strings.Builder
 
 	originalLen := len(content)
@@ -91,7 +155,11 @@ func GenerateSynopsis(content string) string {
 	b.WriteString("\n\n📎 结尾摘录:\n")
 	b.WriteString(truncateToLastN(content, maxExcerptChars/2))
 
-	b.WriteString(fmt.Sprintf("\n\n💡 完整内容已对用户可见（%d 字符）。如需查看完整内容请告知。", originalLen))
+	if ref != "" {
+		b.WriteString(fmt.Sprintf("\n\n💡 如需完整内容，调用 full_output 工具取回（ref=\"%s\"）。", ref))
+	} else {
+		b.WriteString(fmt.Sprintf("\n\n💡 完整内容已对用户可见（%d 字符）。如需查看完整内容请告知。", originalLen))
+	}
 
 	return b.String()
 }

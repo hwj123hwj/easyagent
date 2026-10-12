@@ -510,6 +510,11 @@ func (s *AgentSession) buildAgent(ctx context.Context, registry *providers.Regis
 	// Build tools via Application interface
 	toolList := s.application.BuildTools(s.toolBuildOptions(cwd))
 
+	// 输出概览化机制：大输出被概览替代后，full_output 让模型能按 ref 取回
+	// 全文（概览结尾给出 ref）。store 与钩子共享同一实例。
+	synopsisStore := agent.NewToolOutputStore(0)
+	toolList = append(toolList, agent.NewFullOutputTool(synopsisStore))
+
 	// Wire the batch tool with a tool registry so it can look up and
 	// execute sibling tools. The registry is a simple map built from
 	// the tool list itself (no external dependency needed).
@@ -597,8 +602,13 @@ func (s *AgentSession) buildAgent(ctx context.Context, registry *providers.Regis
 
 	// Register the auto-synopsis hook: large tool outputs are automatically
 	// replaced with a structural synopsis, saving context window tokens.
-	// The full output is preserved in UserFacing for the UI.
-	lifecycleHooks.After = append(lifecycleHooks.After, agent.SynopsisAfterHook)
+	// The full output is preserved in UserFacing for the UI, and in the
+	// synopsis store for the model to fetch via full_output.
+	synopsisSettings := agent.DefaultSynopsisSettings()
+	if cfg.SynopsisThreshold > 0 {
+		synopsisSettings.Threshold = cfg.SynopsisThreshold
+	}
+	lifecycleHooks.After = append(lifecycleHooks.After, agent.NewSynopsisAfterHook(synopsisSettings, synopsisStore))
 
 	return agent.New(agent.Options{
 		Model:              model,

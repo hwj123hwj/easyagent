@@ -89,6 +89,10 @@ type Config struct {
 	// Tool output
 	MaxOutputLen int
 
+	// 工具输出概览化阈值（字符）：超过该长度的大输出替换为结构概览，
+	// 模型可用 full_output 按 ref 取回全文。0 用内置默认（30000）。
+	SynopsisThreshold int
+
 	// Tool filtering
 	AllowedTools []string
 	BlockedTools []string
@@ -146,7 +150,7 @@ func Default() Config {
 		EnableComputerUse:      false, // opt-in experimental
 		ComputerApprovalPolicy: "ask",
 
-		MaxOutputLen: 30000,
+		MaxOutputLen: 51200,
 
 		KBRepoPath:         "", // empty → defaults to ~/agent-lessons at runtime
 		SkillMarketEnabled: true,
@@ -265,6 +269,9 @@ func (c *Config) LoadFromEnv() {
 	// Tool output
 	if n := getEnvInt("EA_MAX_OUTPUT_LEN", c.MaxOutputLen); n > 0 {
 		c.MaxOutputLen = n
+	}
+	if n := getEnvInt("EA_SYNOPSIS_THRESHOLD", c.SynopsisThreshold); n > 0 {
+		c.SynopsisThreshold = n
 	}
 
 	// Execution backend
@@ -417,9 +424,11 @@ type yamlConfig struct {
 	SSHPort       int    `yaml:"ssh_port,omitempty"`
 	SSHWorkDir    string `yaml:"ssh_work_dir,omitempty"`
 
-	MaxOutputLen int      `yaml:"max_output_len,omitempty"`
-	AllowedTools []string `yaml:"allowed_tools,omitempty"`
-	BlockedTools []string `yaml:"blocked_tools,omitempty"`
+	MaxOutputLen int `yaml:"max_output_len,omitempty"`
+
+	SynopsisThreshold int      `yaml:"synopsis_threshold,omitempty"`
+	AllowedTools      []string `yaml:"allowed_tools,omitempty"`
+	BlockedTools      []string `yaml:"blocked_tools,omitempty"`
 
 	MaxTurns int           `yaml:"max_turns,omitempty"`
 	Timeout  time.Duration `yaml:"timeout,omitempty"`
@@ -525,6 +534,9 @@ func (c *Config) LoadFromYAML(path string) error {
 	}
 	if yc.MaxOutputLen > 0 {
 		c.MaxOutputLen = yc.MaxOutputLen
+	}
+	if yc.SynopsisThreshold > 0 {
+		c.SynopsisThreshold = yc.SynopsisThreshold
 	}
 	if len(yc.AllowedTools) > 0 {
 		c.AllowedTools = yc.AllowedTools
