@@ -332,7 +332,8 @@ test("QR authorization requires explicit confirmation and never claims the bridg
   await controller.confirmQR();
   assert.equal(calls.filter(path => path.endsWith("/confirm")).length, 1);
   assert.equal(controller.getSnapshot().qr, null);
-  assert.match(controller.getSnapshot().notice, /另行启动或重启/);
+  assert.match(controller.getSnapshot().notice, /点击下方「启动飞书桥接」/);
+  assert.doesNotMatch(controller.getSnapshot().notice, /已启动|运行中/);
 });
 
 test("superseded begin response and malicious authorization URLs are rejected", async () => {

@@ -166,6 +166,25 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 			http.Error(w, `{"error":"飞书配置需要先设置 EA_API_KEY"}`, http.StatusForbidden)
 			return
 		}
+		if r.URL.Path == "/settings/feishu/bridge/restart" && r.Method == "POST" {
+			// 本机桥接跑在 serve 进程内；systemd 托管的主机继续走 PUT 保存重启。
+			if f.envFile != "" {
+				http.Error(w, `{"error":"此主机的飞书桥接由 systemd 托管，请使用「保存并重启桥接」"}`, http.StatusConflict)
+				return
+			}
+			if s.baseURL == "" {
+				http.Error(w, `{"error":"服务尚未开始监听，无法启动桥接"}`, http.StatusServiceUnavailable)
+				return
+			}
+			status, err := s.localBridge.restart(s.baseURL, s.localBridgeRun())
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(status)
+			return
+		}
 		if f.envFile == "" || f.ownerFile == "" {
 			if r.Method == "GET" && r.URL.Path == "/settings/feishu" {
 				// Even if systemd is not managing the bridge, expose saved local credentials if present
@@ -185,6 +204,7 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 					"app_id":            appID,
 					"secret_configured": secretConfigured,
 					"local_mode":        true,
+					"bridge":            s.localBridge.status(),
 				})
 				return
 			}
@@ -242,6 +262,7 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 	mux.HandleFunc("GET /settings/feishu", handler)
 	mux.HandleFunc("PUT /settings/feishu", handler)
 	mux.HandleFunc("GET /settings/feishu/pairing", handler)
+	mux.HandleFunc("POST /settings/feishu/bridge/restart", handler)
 
 	registerFeishuQR(mux, s.apiKey, f.envFile != "" || f.ownerFile != "")
 }

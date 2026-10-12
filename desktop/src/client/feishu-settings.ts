@@ -1,3 +1,9 @@
+export interface FeishuBridgeState {
+  running: boolean;
+  started_at?: string;
+  error?: string;
+}
+
 export interface FeishuStatus {
   managed: boolean;
   local_mode?: boolean;
@@ -8,6 +14,7 @@ export interface FeishuStatus {
   pairing_expires?: string;
   services?: Record<string, { state: string; autostart: string }>;
   linger?: string;
+  bridge?: FeishuBridgeState;
 }
 
 export interface FeishuPairing {
@@ -36,6 +43,7 @@ interface SettingsState {
   saving: boolean;
   pairingLoading: boolean;
   copying: boolean;
+  bridgeLoading: boolean;
   error: string;
   errorSource: "read" | "action" | null;
   notice: string;
@@ -46,6 +54,7 @@ const emptyState = (): SettingsState => ({
   status: null, appId: "", secret: "", pairing: null,
   qr: null, qrLoading: false, qrPolling: false, qrAuthorized: false,
   loading: false, saving: false, pairingLoading: false, copying: false,
+  bridgeLoading: false,
   error: "", errorSource: null, notice: "",
 });
 
@@ -253,13 +262,34 @@ export class FeishuSettingsController {
       await this.request("POST", "/settings/feishu/qr/confirm", { device_code: qr.device_code });
       if (!this.current(epoch) || revision !== this.qrRevision) return;
       this.hideQR();
-      this.set({ saving: false, notice: "已保存授权凭据。需另行启动或重启飞书桥接后才能收发消息。" });
+      this.set({ saving: false, notice: "已保存授权凭据。点击下方「启动飞书桥接」即可收发消息。" });
       await this.refresh();
     } catch (error) {
       if (this.current(epoch) && revision === this.qrRevision)
         this.set({ error: (error as Error).message || "保存授权失败", errorSource: "action" });
     } finally {
       if (this.current(epoch)) this.set({ saving: false });
+    }
+  }
+
+  /** 非 systemd 托管主机：在本机 serve 进程内启动/重启飞书桥接。 */
+  async restartBridge() {
+    if (!this.alive || !this.connected || this.state.bridgeLoading) return;
+    const epoch = this.epoch;
+    this.set({ bridgeLoading: true, error: "", errorSource: null, notice: "" });
+    try {
+      const status = await this.request<FeishuStatus>("POST", "/settings/feishu/bridge/restart");
+      if (!this.current(epoch)) return;
+      this.applyStatus(status);
+      this.set({
+        notice: status.bridge?.running
+          ? "飞书桥接已在本机启动。长连接就绪后即可收发消息。"
+          : "桥接启动指令已下发，请稍后刷新状态。",
+      });
+    } catch (error) {
+      if (this.current(epoch)) this.set({ error: (error as Error).message || "桥接启动失败", errorSource: "action" });
+    } finally {
+      if (this.current(epoch)) this.set({ bridgeLoading: false });
     }
   }
 
