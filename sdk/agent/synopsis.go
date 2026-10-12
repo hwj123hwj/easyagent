@@ -29,11 +29,11 @@ import (
 )
 
 const (
-	// DefaultSynopsisThreshold 与 read/grep/bash 自身的 30000 字符截断
-	// （sdk/tools DefaultMaxOutputLen）对齐：自带截断的工具不会触发概览化，
-	// 概览只处理 web_fetch 等没有自带截断的天然大输出，不再卡编码场景的
-	// 读文件与搜索结果。
-	DefaultSynopsisThreshold = 30000
+	// DefaultSynopsisThreshold 与 read/grep/bash 自身的 51200 字符（50KB）
+	// 截断（sdk/tools DefaultMaxOutputLen）对齐：自带截断的工具不会触发
+	// 概览化，概览只处理 web_fetch 等没有自带截断的天然大输出，不再卡
+	// 编码场景的读文件与搜索结果。
+	DefaultSynopsisThreshold = 51200
 	synopsisSkipMarker       = "[输出概览]" // if Content already contains this, skip double-synopsis
 	maxExcerptChars          = 600
 	maxHeadersShown          = 10

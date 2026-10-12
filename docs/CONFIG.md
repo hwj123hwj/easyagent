@@ -53,8 +53,8 @@ Web 页面可加载不代表 API 已获授权。远程使用需要登录；WebSo
 | `EA_ENABLE_WEB` | `false` | 启用网页抓取工具 |
 | `EA_ENABLE_WEB_SEARCH` | `false` | 启用搜索工具 |
 | `EA_WEB_TIMEOUT_SECONDS` | `30` | 网页请求超时 |
-| `EA_MAX_OUTPUT_LEN` | `30000` | 工具输出长度上限 |
-| `EA_SYNOPSIS_THRESHOLD` | `30000` | 输出概览化阈值：超过该长度的大输出对模型替换为结构概览（可用 `full_output` 工具按 ref 取回全文）。read/grep 等内容型工具豁免 |
+| `EA_MAX_OUTPUT_LEN` | `51200` | 工具输出长度上限（50KB，对齐 pi） |
+| `EA_SYNOPSIS_THRESHOLD` | `51200` | 输出概览化阈值：超过该长度的大输出对模型替换为结构概览（可用 `full_output` 工具按 ref 取回全文）。read/grep 等内容型工具豁免 |
 | `EA_ALLOWED_TOOLS` / `EA_BLOCKED_TOOLS` | 空 | 逗号分隔的工具过滤名单 |
 | `EA_PROMPT_TEMPLATE` | 空 | 自定义系统提示模板 |
 

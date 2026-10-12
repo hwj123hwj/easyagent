@@ -150,7 +150,7 @@ func Default() Config {
 		EnableComputerUse:      false, // opt-in experimental
 		ComputerApprovalPolicy: "ask",
 
-		MaxOutputLen: 30000,
+		MaxOutputLen: 51200,
 
 		KBRepoPath:         "", // empty → defaults to ~/agent-lessons at runtime
 		SkillMarketEnabled: true,
@@ -424,11 +424,11 @@ type yamlConfig struct {
 	SSHPort       int    `yaml:"ssh_port,omitempty"`
 	SSHWorkDir    string `yaml:"ssh_work_dir,omitempty"`
 
-	MaxOutputLen int      `yaml:"max_output_len,omitempty"`
+	MaxOutputLen int `yaml:"max_output_len,omitempty"`
 
 	SynopsisThreshold int      `yaml:"synopsis_threshold,omitempty"`
 	AllowedTools      []string `yaml:"allowed_tools,omitempty"`
-	BlockedTools []string `yaml:"blocked_tools,omitempty"`
+	BlockedTools      []string `yaml:"blocked_tools,omitempty"`
 
 	MaxTurns int           `yaml:"max_turns,omitempty"`
 	Timeout  time.Duration `yaml:"timeout,omitempty"`
