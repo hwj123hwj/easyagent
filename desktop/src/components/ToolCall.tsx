@@ -299,9 +299,6 @@ export function ToolCall({
   const [open, setOpen] = useState(defaultOpen);
   useEffect(() => { if (forceOpen) setOpen(true); }, [forceOpen]);
   const [copyStatus, setCopyStatus] = useState("");
-  useEffect(() => {
-    if (status === "failed") setOpen(true);
-  }, [status]);
   const t = useT();
   const hasBody =
     !!rawInput ||
