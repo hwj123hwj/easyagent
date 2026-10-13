@@ -125,6 +125,7 @@ type openAIStreamToolCall struct {
 }
 
 type openAIStreamChunk struct {
+	Error json.RawMessage `json:"error,omitempty"`
 	Usage *struct {
 		PromptTokens        int `json:"prompt_tokens"`
 		CompletionTokens    int `json:"completion_tokens"`
@@ -236,6 +237,8 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 
 	textAccum := strings.Builder{}
 	textBlockStarted := false
+	terminalSeen := false
+	var upstreamErr error
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -249,6 +252,7 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 			continue
 		}
 		if strings.HasPrefix(payload, "[DONE]") {
+			terminalSeen = true
 			break
 		}
 
@@ -258,6 +262,19 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 		}
 		if chunk.Usage != nil {
 			partial.Usage = ai.Usage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens, CachedInputTokens: chunk.Usage.PromptTokensDetails.CachedTokens}
+		}
+		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
+			var detail struct {
+				Message string `json:"message"`
+			}
+			_ = json.Unmarshal(chunk.Error, &detail)
+			upstreamErr = errors.New("upstream stream failed")
+			if detail.Message != "" {
+				upstreamErr = fmt.Errorf("upstream stream failed: %s", detail.Message)
+			}
+			// 显式业务错误不能被 finish_reason / [DONE] 或空流重试覆盖。
+			// 先退出读取，再统一收集 partial，避免丢掉已到达的文本和工具参数。
+			break
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -304,6 +321,9 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 
 		// --- finish_reason ---
 		if choice.FinishReason != nil {
+			if *choice.FinishReason != "" {
+				terminalSeen = true
+			}
 			switch *choice.FinishReason {
 			case "stop":
 				partial.StopReason = ai.StopReasonStop
@@ -353,7 +373,10 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 
 	// 流异常结束（含空闲超时）：报错而非伪装成正常完成。
 	// 终止事件与结果由调用方统一处理（可能先重试）。
-	resultErr := scanner.Err()
+	resultErr := upstreamErr
+	if resultErr == nil {
+		resultErr = scanner.Err()
+	}
 	if resultErr != nil {
 		if wd.Tripped() {
 			resultErr = idleTimeoutError(streamIdleTimeout)
@@ -365,6 +388,11 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 	// 不装作正常完成（空消息会污染会话），交给调用方重试/报错
 	if !received {
 		return false, nil
+	}
+	// 正常 EOF 只说明 HTTP body 关闭，不能证明模型已完成；兼容单独
+	// finish_reason 或 [DONE]，但两者都缺失时必须保留 partial 并报中断。
+	if !terminalSeen {
+		return received, errors.New("upstream stream ended without a terminal event")
 	}
 
 	if partial.StopReason == "" {

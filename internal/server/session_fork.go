@@ -47,7 +47,7 @@ func (s *Server) forkSession(w http.ResponseWriter, r *http.Request) {
 	// writes from other entrypoints and manual compaction.
 	s.runs.mu.Lock()
 	defer s.runs.mu.Unlock()
-	if state := s.runs.sessions[sourceID]; state != nil && state.run != nil && runActive(state.run) {
+	if state := s.runs.sessions[sourceID]; sessionBusy(state) {
 		writeError(w, 409, "会话正在运行，请等待完成后分叉")
 		return
 	}

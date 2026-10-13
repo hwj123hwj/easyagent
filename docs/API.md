@@ -75,6 +75,8 @@ GET /ws
 
 服务先落盘接受凭据，再返回 `accepted`（含 `request_id`、`run_id`、`state`、`duplicate`）。客户端在接受前保留草稿；响应不确定时以同一 `request_id` 和原始 prompt 重试。相同 ID 的不同请求内容返回冲突；同一会话一次只能执行一个任务。
 
+会话的历史读取、工作区快照与工具准备也属于受理占位期，该阶段拒绝另一条消息和删除、分叉、权限切换等会话变更。并发重试同一请求等待这次受理的结果，准备失败且未执行的请求可继续以原 ID 重试。准备工作不持有所有会话共用的运行锁，其他会话仍可取消或审批已接受的任务。
+
 ```json
 {"type":"subscribe","session_id":"sess_123","run_id":"run_123","after_seq":12}
 {"type":"cancel","session_id":"sess_123","run_id":"run_123"}
@@ -84,6 +86,8 @@ GET /ws
 完成的 run 在 `status.run` 与恢复快照的 `run` 中携带 `user_entry_id` 和 `assistant_entry_id`（若有已落盘的最终文字回答）；后者可用于从回答分叉，包含该回答及此前工具结果。历史 assistant 消息包含 `entry_id` 与 `stop_reason`，带工具调用或错误/取消的中间输出不作为桌面回答分叉入口。分叉只复制会话记录，不回退工作目录文件。
 
 `event` 包含递增 `seq`、`run_id` 和 Agent `event`。重连发送 `subscribe`：可重放时返回 `replay`，否则返回 `snapshot`（历史 `messages`、当前 run、已投影事件及 `pending_confirmations`）。客户端按 seq 去重，不将恢复内容当成新请求。序号缺口应重新订阅；`reset:true` 表示历史完整重建，允许序号重新开始。`confirmation` 表示任务等待批准，超时拒绝。旧 run 的取消与批准请求会被拒绝，避免影响后续任务。
+
+历史消息的 `images` 保留数组形状，每张图片通过 `{"attachmentId":"history_...","sessionId":"sess_..."}` 引用会话内已保存的图片，避免在 HTTP / WebSocket 快照中累计内联图片数据。客户端按需请求带认证的 `/sessions/{sessionId}/attachments/{attachmentId}/raw?format=data_url`；引用只在该会话当前分支的祖先记录（包括压缩前记录及保留片段）包含图片时有效，不允许读取兄弟分支。分叉快照使用分叉会话自己的 `sessionId`。图片哈希不能替代认证。客户端仍须兼容旧服务返回的 `data_url` 图片；实时新消息继续使用已有上传附件引用。
 
 任务由会话持有，WS / SSE 连接关闭不会取消任务。服务重启后已接受而未完成的 run 标为 `interrupted`，相同 request ID 不重新执行。凭据保存于 `EA_DATA_DIR/requests`，完整聊天历史仍来自会话 JSONL；硬断电下的外部副作用不保证恰好一次。
 

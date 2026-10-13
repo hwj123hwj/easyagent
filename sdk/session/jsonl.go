@@ -159,9 +159,7 @@ func (s *JSONLStorage) Append(ctx context.Context, entry Entry) error {
 	// fsync to ensure crash-safe durability (without this, the OS buffer
 	// can lose or half-flush the last line on power failure).
 	if err := s.file.Sync(); err != nil {
-		// Sync failure is non-fatal on some platforms (e.g. network FS);
-		// log but don't block the append.
-		_ = err
+		return fmt.Errorf("sync session append: %w", err)
 	}
 	s.byID[entry.ID] = entry
 	switch entry.Type {
@@ -194,8 +192,12 @@ func (s *JSONLStorage) GetPathToRoot(ctx context.Context, leafID string) ([]Entr
 		if !ok {
 			return nil, fmt.Errorf("entry %q not found", leafID)
 		}
-		path = append([]Entry{entry}, path...)
+		path = append(path, entry)
 		leafID = entry.ParentID
+	}
+	// 沿父链收集后一次反转，避免逐项 prepend 对长会话产生 O(n²) 复制。
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
 	}
 	return path, nil
 }

@@ -10,14 +10,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/ai"
-	"github.com/hwj123hwj/easyagent/sdk/runtime"
 	"github.com/hwj123hwj/easyagent/sdk/tools"
 )
 
@@ -61,11 +59,13 @@ type sessionRun struct {
 	restored         bool
 	done             chan struct{}
 	cancel           context.CancelFunc
+	ready            chan struct{} // accepted boundary precedes tool approvals
 }
 
 type sessionRunState struct {
 	seq         uint64
 	run         *sessionRun
+	admission   *runAdmission
 	replay      []wsServerMessage
 	replayBytes int
 	subscribers map[*wsConn]struct{}
@@ -75,12 +75,13 @@ type runRegistry struct {
 	mu                  sync.Mutex
 	sessions            map[string]*sessionRunState
 	requests            map[string]*sessionRun
+	admissions          map[string]*runAdmission
 	requestOrder        []string
 	confirmationTimeout time.Duration
 }
 
 func newRunRegistry() *runRegistry {
-	return &runRegistry{sessions: make(map[string]*sessionRunState), requests: make(map[string]*sessionRun), confirmationTimeout: 2 * time.Minute}
+	return &runRegistry{sessions: make(map[string]*sessionRunState), requests: make(map[string]*sessionRun), admissions: make(map[string]*runAdmission), confirmationTimeout: 2 * time.Minute}
 }
 
 func newRunID(prefix string) string {
@@ -94,134 +95,6 @@ func newRunID(prefix string) string {
 type runAdmissionError struct{ code, message string }
 
 func (e *runAdmissionError) Error() string { return e.message }
-
-func (s *Server) startRun(sessionID, prompt, requestID string, values ...promptInputs) (*sessionRun, bool, error) {
-	inputs := promptInputs{}
-	if len(values) > 0 {
-		inputs = values[0]
-	}
-	g := s.runs
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if requestID != "" {
-		previous := g.requests[requestID]
-		if previous == nil {
-			var err error
-			previous, err = s.loadRunReceiptLocked(requestID)
-			if err != nil {
-				return nil, false, err
-			}
-		}
-		if previous != nil {
-			if previous.Prompt != prompt || !sameInputs(previous.Inputs, inputs) || (sessionID != "" && previous.SessionID != sessionID) {
-				return nil, false, &runAdmissionError{"request_conflict", "request_id 已用于另一条消息"}
-			}
-			return previous, true, nil
-		}
-	}
-	if strings.TrimSpace(prompt) == "" || len(prompt) > 128*1024 {
-		return nil, false, &runAdmissionError{"invalid_prompt", "prompt is empty"}
-	}
-	if len(requestID) > 128 {
-		return nil, false, &runAdmissionError{"invalid_request_id", "request_id 不能超过 128 字节"}
-	}
-	if s.app.DynamicWorkflows().ActiveActorSession(sessionID) {
-		return nil, false, &runAdmissionError{"workflow_busy", "此 Actor 正由工作流管理"}
-	}
-	if state := g.sessions[sessionID]; state != nil && state.run != nil && runActive(state.run) {
-		return nil, false, &runAdmissionError{"busy", "此会话正在处理消息，请等待完成或取消当前任务"}
-	}
-	release, ok := s.activity.begin()
-	if !ok {
-		return nil, false, &runAdmissionError{"updating", "服务正在更新，请稍后重试；消息尚未执行"}
-	}
-	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Minute)
-	sess, err := s.resolveSession(ctx, sessionID)
-	if err != nil {
-		cancel()
-		release()
-		return nil, false, err
-	}
-	if sess.Agent().State() == agent.StateRunning {
-		cancel()
-		release()
-		return nil, false, &runAdmissionError{"busy", "此会话正在处理另一入口的请求"}
-	}
-	baseline, err := sess.Session().BuildDisplayContext(ctx)
-	message, inputErr := s.buildPromptMessage(sess, prompt, inputs)
-	if inputErr != nil {
-		cancel()
-		release()
-		return nil, false, &runAdmissionError{"invalid_context", inputErr.Error()}
-	}
-	if err != nil {
-		cancel()
-		release()
-		return nil, false, err
-	}
-	// 与 runtime 的 busy guard 协作，不能在别的入口启动期间替换审批所有者。
-	if err := sess.TrySetConfirmFunc(s.confirmRunTool); err != nil {
-		cancel()
-		release()
-		if errors.Is(err, agent.ErrAgentBusy) {
-			return nil, false, &runAdmissionError{"busy", "此会话正在处理另一入口的请求"}
-		}
-		return nil, false, err
-	}
-	if requestID == "" {
-		requestID = newRunID("request_")
-	}
-	run := &sessionRun{Inputs: inputs, ID: newRunID("run_"), RequestID: requestID, SessionID: sess.SessionID(), Prompt: prompt, State: "running", StartedAt: time.Now(), baseline: serializeSessionContext(sess, baseline), pending: make(map[string]*pendingConfirmation), done: make(chan struct{}), cancel: cancel}
-	if err := s.saveRunReceipt(run); err != nil {
-		cancel()
-		release()
-		return nil, false, fmt.Errorf("无法保存消息接受凭据，消息尚未执行")
-	}
-	s.beginFiles(run, sess.Workspace())
-	unsubscribeFiles := sess.Agent().Subscribe(func(eventCtx context.Context, event agent.AgentEvent) {
-		if eventCtx.Value(runContextKey{}) != run {
-			return
-		}
-		switch e := event.(type) {
-		case agent.EventToolExecutionStart:
-			s.observeFiles(run, agent.AgentStreamEvent{Type: agent.StreamEventToolStart, ToolName: e.ToolName, ToolCallID: e.ToolCallID, ToolArgs: e.Args})
-		case agent.EventToolExecutionEnd:
-			s.observeFiles(run, agent.AgentStreamEvent{Type: agent.StreamEventToolEnd, ToolName: e.ToolName, ToolCallID: e.ToolCallID, IsError: e.IsError})
-		}
-	})
-	// 审批回调已在启动前安装，断线也不会把需要确认的工具变成自动放行。
-	stream, err := sess.PromptMessageStream(context.WithValue(ctx, runContextKey{}, run), message)
-	if err != nil {
-		unsubscribeFiles()
-		cancel()
-		release()
-		if removeErr := os.Remove(s.receiptPath(requestID)); removeErr != nil {
-			slog.Error("cannot remove rejected run receipt", "request_id", requestID, "error", removeErr)
-		}
-		if errors.Is(err, agent.ErrAgentBusy) {
-			return nil, false, &runAdmissionError{"busy", "此会话正在处理另一入口的请求"}
-		}
-		if errors.Is(err, runtime.ErrToolsUpdating) {
-			return nil, false, &runAdmissionError{"updating", err.Error()}
-		}
-		return nil, false, err
-	}
-	// Admission failures have not executed the message and must remain retryable
-	// with the same request_id; only accepted executions enter the registry.
-	state := g.sessionLocked(run.SessionID)
-	state.run = run
-	run.DisplayPrompt = message.DisplayText
-	run.Attachments = s.resolvePromptAttachments(run.SessionID, run.Inputs.Attachments)
-	state.replay, state.replayBytes = nil, 0
-	g.requests[requestID] = run
-	g.requestOrder = append(g.requestOrder, requestID)
-	g.pruneRequestsLocked()
-	// Existing subscribers need an authoritative new-run boundary before its deltas,
-	// including turns admitted by the server-owned queue.
-	g.publishLocked(state, wsServerMessage{Type: "accepted", SessionID: run.SessionID, RunID: run.ID, RequestID: run.RequestID, State: run.State, Prompt: displayRunPrompt(run), Run: cloneRun(run)})
-	go func() { defer unsubscribeFiles(); s.consumeRun(ctx, run, stream, release) }()
-	return run, false, nil
-}
 
 func runActive(run *sessionRun) bool {
 	return run.State == "running" || run.State == "waiting_confirmation"
@@ -424,6 +297,13 @@ func (s *Server) confirmRunTool(ctx context.Context, request agent.ConfirmationR
 	if !ok {
 		return agent.ConfirmDecision{Reason: "此执行入口没有交互审批通道"}
 	}
+	if run.ready != nil {
+		select {
+		case <-run.ready:
+		case <-ctx.Done():
+			return agent.ConfirmDecision{Reason: "任务已取消，操作未执行"}
+		}
+	}
 	pending := &pendingConfirmation{ID: newRunID("confirm_"), ToolCallID: request.ToolCallID, ToolName: request.ToolName, Description: request.Description, Args: request.Args, decision: make(chan agent.ConfirmDecision, 1)}
 	s.runs.mu.Lock()
 	state := s.runs.sessionLocked(run.SessionID)
@@ -592,7 +472,7 @@ func (s *Server) invalidateRunSnapshot(sessionID string) {
 	s.runs.mu.Lock()
 	defer s.runs.mu.Unlock()
 	state := s.runs.sessions[sessionID]
-	if state == nil || state.run != nil && runActive(state.run) {
+	if state == nil || sessionBusy(state) {
 		return
 	}
 	sess, err := s.resolveSession(s.ctx, sessionID)
@@ -617,14 +497,18 @@ func (s *Server) rejectActiveRun(w http.ResponseWriter, sessionID string) bool {
 	s.runs.mu.Lock()
 	defer s.runs.mu.Unlock()
 	state := s.runs.sessions[sessionID]
-	if state != nil && state.run != nil && runActive(state.run) {
+	if sessionBusy(state) {
 		writeError(w, http.StatusConflict, "此会话正在执行任务，请先取消或等待完成")
 		return true
 	}
 	return false
 }
 
-func serializeRunMessages(messages []ai.Message) []map[string]any {
+func serializeRunMessages(messages []ai.Message, sessionIDs ...string) []map[string]any {
+	sessionID := ""
+	if len(sessionIDs) > 0 {
+		sessionID = sessionIDs[0]
+	}
 	result := make([]map[string]any, 0, len(messages))
 	for _, message := range messages {
 		entry := map[string]any{"role": string(message.Role()), "content": ""}
@@ -637,7 +521,11 @@ func serializeRunMessages(messages []ai.Message) []map[string]any {
 				}
 				if block.Type == "image" && block.Image != nil {
 					images, _ := entry["images"].([]map[string]string)
-					entry["images"] = append(images, map[string]string{"data_url": "data:" + block.Image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(block.Image.Data)})
+					image := map[string]string{"attachmentId": historyImageID(block.Image), "sessionId": sessionID}
+					if sessionID == "" {
+						image = map[string]string{"data_url": "data:" + block.Image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(block.Image.Data)}
+					}
+					entry["images"] = append(images, image)
 				}
 			}
 			entry["content"] = text
@@ -720,7 +608,9 @@ func runHTTPError(w http.ResponseWriter, err error) {
 		if admission.code == "updating" {
 			code = http.StatusServiceUnavailable
 		}
-		writeError(w, code, err.Error())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "code": admission.code})
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())

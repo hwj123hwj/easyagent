@@ -302,6 +302,7 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 		// PromptStream 的 stream consumer：转发 text delta 事件到 channel
 		consume := func(stream *ai.EventStream) (ai.StreamAssistantMessage, error) {
 			var streamMsg ai.StreamAssistantMessage
+			var streamErr error
 			var thinkingStart time.Time
 			var thinkingDuration time.Duration
 			finishThinking := func() {
@@ -318,11 +319,6 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 			}
 			defer finishThinking()
 			for event := range stream.Events() {
-				select {
-				case <-ctx.Done():
-					return streamMsg, ctx.Err()
-				default:
-				}
 				switch e := event.(type) {
 				case ai.EventThinkingDelta:
 					if thinkingStart.IsZero() {
@@ -331,7 +327,6 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 					select {
 					case ch <- AgentStreamEvent{Type: StreamEventThinkingDelta, TextDelta: e.Delta, Timestamp: time.Now().UnixMilli()}:
 					case <-ctx.Done():
-						return streamMsg, ctx.Err()
 					}
 				case ai.EventToolCallStart:
 					finishThinking()
@@ -340,28 +335,39 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 					select {
 					case ch <- AgentStreamEvent{Type: StreamEventTextDelta, TextDelta: e.Delta}:
 					case <-ctx.Done():
-						return streamMsg, ctx.Err()
 					}
 				case ai.EventDone:
 					finishThinking()
 					streamMsg = e.Message
 					streamMsg.ThinkingDurationMS = thinkingDuration.Milliseconds()
 				case ai.EventError:
-					select {
-					case ch <- AgentStreamEvent{Type: StreamEventError, Error: e.Error}:
-					case <-ctx.Done():
-						return streamMsg, ctx.Err()
-					}
+					streamErr = fmt.Errorf("llm error: %s", e.Error)
 				}
 			}
-			return streamMsg, nil
+			finishThinking()
+			result, err := streamConsumptionResult(ctx, stream, streamMsg, streamErr)
+			result.ThinkingDurationMS = thinkingDuration.Milliseconds()
+			return result, err
 		}
 
 		lastAssistant, err := runAgentLoop(ctx, a, provider, consume)
-		if err != nil {
-			ch <- AgentStreamEvent{Type: StreamEventError, Error: err.Error()}
+		// 消费者取消后可能停止读取，终态仍优先送入可用缓冲，但不能让
+		// 已结束的 provider/Agent 因无人接收终态而一直占用会话。
+		sendTerminal := func(event AgentStreamEvent) {
+			select {
+			case ch <- event:
+				return
+			default:
+			}
+			select {
+			case ch <- event:
+			case <-ctx.Done():
+			}
 		}
-		ch <- AgentStreamEvent{Type: StreamEventDone, FinalMessage: lastAssistant, Usage: lastAssistant.Usage}
+		if err != nil {
+			sendTerminal(AgentStreamEvent{Type: StreamEventError, Error: err.Error()})
+		}
+		sendTerminal(AgentStreamEvent{Type: StreamEventDone, FinalMessage: lastAssistant, Usage: lastAssistant.Usage})
 
 		a.mu.Lock()
 		a.state = StateIdle

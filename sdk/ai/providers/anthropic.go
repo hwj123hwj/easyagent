@@ -184,6 +184,7 @@ func (p *AnthropicProvider) handleSSE(ctx context.Context, stream *ai.EventStrea
 	// 追踪每个 tool_use content block index → ToolCall 在 partial.ToolCalls 中的位置
 	toolCallIndexMap := map[int]int{}
 	toolCallCounter := 0
+	terminalSeen := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -195,6 +196,13 @@ func (p *AnthropicProvider) handleSSE(ctx context.Context, stream *ai.EventStrea
 		if strings.HasPrefix(line, "data: ") {
 			data := strings.TrimPrefix(line, "data: ")
 			p.handleSSEEvent(ctx, stream, partial, currentEvent, data, blockTypes, toolCallIndexMap, &toolCallCounter)
+			if partial.StopReason == ai.StopReasonError {
+				return len(partial.ToolCalls) > 0 || partial.Text != "" || partial.Thinking != "", errors.New(partial.ErrorMsg)
+			}
+			if currentEvent == "message_stop" {
+				terminalSeen = true
+				break
+			}
 			currentEvent = ""
 		}
 	}
@@ -211,15 +219,13 @@ func (p *AnthropicProvider) handleSSE(ctx context.Context, stream *ai.EventStrea
 		}
 		return received, err
 	}
-	if partial.StopReason == "" {
-		// 空流：上游可能被 LB 掐断（连 message_stop 都没发），
-		// 不装作正常完成（空消息会污染会话），交给调用方重试/报错
-		if !received {
-			return false, nil
-		}
-		partial.StopReason = ai.StopReasonStop
-		_ = stream.Push(ctx, ai.EventDone{Reason: partial.StopReason, Message: *partial})
-		stream.SetResult(*partial, nil)
+	if !received {
+		return false, nil
+	}
+	// message_delta 的 stop_reason 不是传输终态；未收到 message_stop
+	// 就结束的 body 属于中断，不能合成 Done 或丢弃已收到的用量。
+	if !terminalSeen {
+		return received, errors.New("upstream stream ended without message_stop terminal event")
 	}
 	return received, nil
 }
@@ -373,6 +379,9 @@ func (p *AnthropicProvider) handleSSEEvent(
 		}
 
 	case "message_stop":
+		if partial.StopReason == "" {
+			partial.StopReason = ai.StopReasonStop
+		}
 		_ = stream.Push(ctx, ai.EventDone{Reason: partial.StopReason, Message: *partial})
 		stream.SetResult(*partial, nil)
 
@@ -390,8 +399,7 @@ func (p *AnthropicProvider) handleSSEEvent(
 		}
 		partial.StopReason = ai.StopReasonError
 		partial.ErrorMsg = errMsg
-		_ = stream.Push(ctx, ai.EventError{Reason: "error", Error: errMsg})
-		stream.SetResult(*partial, fmt.Errorf("API error: %s", errMsg))
+		// 交给 Stream 的统一失败收尾发一次错误并关闭，不等待下一帧/EOF。
 	}
 }
 

@@ -276,6 +276,10 @@ func (s *Server) getAttachmentRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.HasPrefix(attID, historyImagePrefix) {
+		s.getHistoryImage(w, r, sessionID, attID)
+		return
+	}
 	metaPath, err := s.attachmentMetaPath(sessionID, attID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

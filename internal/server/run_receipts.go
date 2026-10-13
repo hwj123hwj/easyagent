@@ -154,10 +154,10 @@ func (s *Server) hydrateRestoredRun(run *sessionRun) error {
 	return nil
 }
 
-// loadRunReceiptLocked restores only proof of acceptance. Active receipts are
+// loadRunReceipt restores only proof of acceptance. Active receipts are
 // terminally interrupted: a human may send a new request, but retries of the
 // accepted request cannot cause a second execution after a core restart.
-func (s *Server) loadRunReceiptLocked(requestID string) (*sessionRun, error) {
+func (s *Server) loadRunReceipt(requestID string) (*sessionRun, error) {
 	data, err := os.ReadFile(s.receiptPath(requestID))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -175,13 +175,7 @@ func (s *Server) loadRunReceiptLocked(requestID string) (*sessionRun, error) {
 			return nil, fmt.Errorf("无法保存中断状态；为避免重复执行，消息尚未执行")
 		}
 	}
-	s.runs.requests[requestID] = run
-	s.runs.requestOrder = append(s.runs.requestOrder, requestID)
-	s.runs.pruneRequestsLocked()
-	state := s.runs.sessionLocked(run.SessionID)
-	if state.run == nil {
-		state.run = run
-	}
+
 	return run, nil
 }
 

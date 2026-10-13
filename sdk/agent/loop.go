@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -50,20 +51,16 @@ func RunLoop(ctx context.Context, a *Agent) (ai.AssistantMessage, error) {
 	// RunLoop 的 stream consumer：只关注 EventDone 和 EventError
 	consume := func(stream *ai.EventStream) (ai.StreamAssistantMessage, error) {
 		var streamMsg ai.StreamAssistantMessage
+		var streamErr error
 		for event := range stream.Events() {
-			select {
-			case <-ctx.Done():
-				return streamMsg, ctx.Err()
-			default:
-			}
 			switch e := event.(type) {
 			case ai.EventDone:
 				streamMsg = e.Message
 			case ai.EventError:
-				return streamMsg, fmt.Errorf("llm error: %s", e.Error)
+				streamErr = fmt.Errorf("llm error: %s", e.Error)
 			}
 		}
-		return streamMsg, nil
+		return streamConsumptionResult(ctx, stream, streamMsg, streamErr)
 	}
 
 	return runAgentLoop(ctx, a, provider, consume)
@@ -94,9 +91,10 @@ func runAgentLoop(ctx context.Context, a *Agent, provider interface {
 	// 如果有 session storage，从 session 恢复历史
 	if a.session != nil {
 		sessionHistory, err := a.session.BuildContext(ctx)
-		if err == nil && len(sessionHistory) > 0 {
-			history = sessionHistory
+		if err != nil {
+			return lastAssistant, fmt.Errorf("build session context: %w", err)
 		}
+		history = sessionHistory
 	}
 
 	var recoveryErr error
@@ -117,6 +115,9 @@ func runAgentLoop(ctx context.Context, a *Agent, provider interface {
 
 		result, updatedHistory, err := processTurn(ctx, a, provider, consume, history, pending)
 		if err != nil {
+			if result.assistant.StopReason != "" {
+				return result.assistant, err
+			}
 			return lastAssistant, err
 		}
 
@@ -195,7 +196,9 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 	// 只保存本轮新增的 pending 消息到 session（避免 O(n²)）
 	if a.session != nil {
 		for _, msg := range pending {
-			_ = a.session.AppendMessage(ctx, msg)
+			if err := a.session.AppendMessage(ctx, msg); err != nil {
+				return turnResult{}, history, fmt.Errorf("persist pending message: %w", err)
+			}
 		}
 	}
 
@@ -211,14 +214,29 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 	}
 
 	// 消费事件流
-	streamMsg, err := consume(stream)
-	if err != nil {
-		return turnResult{}, history, err
-	}
+	streamMsg, streamErr := consume(stream)
 
 	message, err := a.handleAssistantMessage(streamMsg)
 	if err != nil {
 		return turnResult{}, history, err
+	}
+	if streamErr != nil {
+		message.StopReason = ai.StopReasonError
+		if errors.Is(streamErr, context.Canceled) || errors.Is(streamErr, context.DeadlineExceeded) {
+			message.StopReason = ai.StopReasonAborted
+		}
+		message.ErrorMsg = streamErr.Error()
+		// 断流中的工具声明尚未被接受，也未执行，不能作为正式 tool-call
+		// 进入下次请求；保留已收到的文本、思考与用量供展示和核算。
+		message.ToolCalls = nil
+		if a.session != nil && (message.Text != "" || message.Thinking != "" || message.Usage != (ai.Usage{})) {
+			saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if err := a.session.AppendMessage(saveCtx, message); err != nil {
+				streamErr = errors.Join(streamErr, fmt.Errorf("persist partial assistant: %w", err))
+			}
+		}
+		return turnResult{assistant: message}, history, streamErr
 	}
 
 	a.emit(ctx, EventContextUsage{Usage: estimateContext(a.llmRequest(append(append([]ai.Message{}, history...), message)), message.Usage)})
@@ -228,7 +246,10 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 
 	// 保存到 session
 	if a.session != nil {
-		_ = a.session.AppendMessage(ctx, message)
+		// 有副作用的工具必须等 assistant 调用记录成功落盘后才能执行。
+		if err := a.session.AppendMessage(ctx, message); err != nil {
+			return turnResult{assistant: message}, history, fmt.Errorf("persist assistant message: %w", err)
+		}
 	}
 
 	// 如果 LLM 返回 error/aborted，终止循环

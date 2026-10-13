@@ -38,7 +38,7 @@ func (s *Server) getContextSnapshot(w http.ResponseWriter, r *http.Request) {
 // Display compaction records as records, rather than rendering the synthetic
 // summary header as if it were a new user message.
 func serializeSessionContext(sess *runtime.AgentSession, messages []ai.Message) []map[string]any {
-	rows := serializeRunMessages(messages)
+	rows := serializeRunMessages(messages, sess.SessionID())
 	ids, err := sess.Session().BuildContextEntryIDs(context.Background())
 	if err == nil && len(ids) == len(rows) {
 		for i := range rows {
