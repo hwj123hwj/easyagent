@@ -236,3 +236,10 @@ func TestRecoverPendingToolResults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, again, 4)
 }
+
+func TestAppendToolResultCarriesImages(t *testing.T) {
+	a := &Agent{}
+	images := []ai.ImageBlock{{MediaType: "image/png", Data: []byte{1, 2, 3}}}
+	result := a.appendToolResult(ai.ToolCall{ID: "shot"}, ToolResult{Content: "screenshot", Images: images})
+	require.Equal(t, images, result.Images)
+}

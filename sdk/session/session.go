@@ -82,10 +82,13 @@ func (s *Session) buildContextEntries(ctx context.Context, applyMicro bool) ([]E
 		}
 	}
 	replacements := make(map[string]string)
+	clearImages := make(map[string]bool)
+	originalImages := make(map[string][]ai.ImageBlock)
 	for _, entry := range entries[start:] {
 		if applyMicro && entry.Type == EntryTypeMicroCompaction {
 			for _, replacement := range entry.ToolReplacements {
 				replacements[replacement.EntryID] = replacement.Content
+				clearImages[replacement.EntryID] = clearImages[replacement.EntryID] || replacement.ClearImages
 			}
 		}
 		if len(entryToMessages(entry)) > 0 {
@@ -98,6 +101,7 @@ func (s *Session) buildContextEntries(ctx context.Context, applyMicro bool) ([]E
 		for _, entry := range entries {
 			if entry.Type == EntryTypeMessage && entry.Tool != nil {
 				replacements[entry.ID] = entry.Tool.Content
+				originalImages[entry.ID] = entry.Tool.Images
 			}
 		}
 	}
@@ -105,6 +109,12 @@ func (s *Session) buildContextEntries(ctx context.Context, applyMicro bool) ([]E
 		if content, ok := replacements[entry.ID]; ok && entry.Tool != nil {
 			tool := *entry.Tool
 			tool.Content = content
+			if applyMicro && clearImages[entry.ID] {
+				tool.Images = nil
+			}
+			if !applyMicro {
+				tool.Images = originalImages[entry.ID]
+			}
 			result[i].Tool = &tool
 		}
 	}

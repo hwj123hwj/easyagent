@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/hwj123hwj/easyagent/sdk/ai"
 )
 
 type Tool interface {
@@ -25,6 +27,7 @@ type ToolResult struct {
 	UserFacing string
 	Details    any
 	IsError    bool
+	Images     []ai.ImageBlock // Optional model-facing images, persisted with the tool result.
 }
 
 // DisplayText 返回适合展示给用户的内容：优先 UserFacing，为空则 fallback 到 Content。

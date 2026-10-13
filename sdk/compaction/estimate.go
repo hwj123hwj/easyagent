@@ -19,9 +19,13 @@ func EstimateTokens(msgs []ai.Message) int {
 
 func estimateMessageTokens(msg ai.Message) int {
 	var text string
+	imageTokens := 0
 	switch m := msg.(type) {
 	case ai.UserMessage:
 		for _, block := range m.Content {
+			if block.Type == "image" {
+				imageTokens += 4096
+			}
 			if block.Type == "text" {
 				text += block.Text
 			}
@@ -36,8 +40,9 @@ func estimateMessageTokens(msg ai.Message) int {
 		}
 	case ai.ToolResultMessage:
 		text = m.Content
+		imageTokens = len(m.Images) * 4096
 	}
-	return max(1, len(text)/4)
+	return max(1, len(text)/4) + imageTokens
 }
 
 // EstimateTextTokens 估算纯文本的 token 数。

@@ -52,7 +52,8 @@ func (s *Server) getComputerSettings(w http.ResponseWriter, r *http.Request) {
 			view.Granted = granted
 			view.Missing = missing
 		} else {
-			view.Missing = []string{"helper 探测失败"}
+			view.Available = false
+			view.Missing = missing
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -100,10 +101,10 @@ func (s *Server) updateComputerSettings(w http.ResponseWriter, r *http.Request) 
 // this from the settings button click, satisfying that constraint.
 func (s *Server) requestComputerPermissions(w http.ResponseWriter, r *http.Request) {
 	if !computer.Available() {
-		writeError(w, http.StatusServiceUnavailable, "computer use helper 不可用（仅支持 macOS，且需要 easyagent-cua-helper）")
+		writeError(w, http.StatusServiceUnavailable, "电脑控制不可用，请使用 macOS 14+ 桌面安装包")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	if err := computer.RequestPermissions(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

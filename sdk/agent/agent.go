@@ -469,7 +469,7 @@ func (a *Agent) appendToolResult(call ai.ToolCall, result ToolResult) ai.ToolRes
 	if content == "" {
 		content = "ok"
 	}
-	return ai.ToolResultMessage{ToolCallID: call.ID, Content: content, IsError: result.IsError, Details: result.Details}
+	return ai.ToolResultMessage{ToolCallID: call.ID, Content: content, IsError: result.IsError, Details: result.Details, Images: result.Images}
 }
 
 func (a *Agent) llmRequest(messages []ai.Message) ai.StreamRequest {

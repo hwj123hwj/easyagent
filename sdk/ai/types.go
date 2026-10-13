@@ -57,11 +57,12 @@ func (AssistantMessage) Role() Role     { return RoleAssistant }
 func (AssistantMessage) messageMarker() {}
 
 type ToolResultMessage struct {
-	DurationMS int64  `json:"duration_ms,omitempty"`
-	ToolCallID string `json:"tool_call_id"`
-	Content    string `json:"content"`
-	IsError    bool   `json:"is_error,omitempty"`
-	Details    any    `json:"details,omitempty"` // structured附加数据（如 PlayDetails），可选
+	Images     []ImageBlock `json:"images,omitempty"`
+	DurationMS int64        `json:"duration_ms,omitempty"`
+	ToolCallID string       `json:"tool_call_id"`
+	Content    string       `json:"content"`
+	IsError    bool         `json:"is_error,omitempty"`
+	Details    any          `json:"details,omitempty"` // structured附加数据（如 PlayDetails），可选
 }
 
 func (ToolResultMessage) Role() Role     { return RoleTool }

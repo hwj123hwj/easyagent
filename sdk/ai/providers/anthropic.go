@@ -52,9 +52,10 @@ func (p *AnthropicProvider) StreamSimple(ctx context.Context, req ai.SimpleStrea
 // ─── Anthropic API 请求/响应结构 ──────────────────────────────────────────────────
 
 type anthropicImageSource struct {
+	URL       string `json:"url,omitempty"`
 	Type      string `json:"type"` // "base64"
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
 }
 
 type anthropicContentBlock struct {
@@ -494,10 +495,22 @@ func convertToAnthropicMessages(msgs []ai.Message) []anthropicMessage {
 			result = append(result, anthropicMessage{Role: "assistant", Content: blocks})
 
 		case ai.ToolResultMessage:
+			contents := []anthropicContentBlock{{Type: "text", Text: m.Content}}
+			for _, image := range m.Images {
+				mediaType := image.MediaType
+				if mediaType == "" {
+					mediaType = "image/png"
+				}
+				if len(image.Data) > 0 {
+					contents = append(contents, anthropicContentBlock{Type: "image", Source: &anthropicImageSource{Type: "base64", MediaType: mediaType, Data: base64.StdEncoding.EncodeToString(image.Data)}})
+				} else if image.URL != "" {
+					contents = append(contents, anthropicContentBlock{Type: "image", Source: &anthropicImageSource{Type: "url", URL: image.URL}})
+				}
+			}
 			block := anthropicContentBlock{
 				Type:      "tool_result",
 				ToolUseID: m.ToolCallID,
-				Content:   []anthropicContentBlock{{Type: "text", Text: m.Content}},
+				Content:   contents,
 				IsError:   m.IsError,
 			}
 			// Merge consecutive tool results into a single user message

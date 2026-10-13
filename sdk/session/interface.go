@@ -36,8 +36,9 @@ type CompactionRecord struct {
 
 // ToolResultReplacement changes model context without rewriting the source message.
 type ToolResultReplacement struct {
-	EntryID string `json:"entry_id"`
-	Content string `json:"content"`
+	ClearImages bool   `json:"clear_images,omitempty"`
+	EntryID     string `json:"entry_id"`
+	Content     string `json:"content"`
 }
 
 type Entry struct {

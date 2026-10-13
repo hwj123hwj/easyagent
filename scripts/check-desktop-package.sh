@@ -46,7 +46,12 @@ signature=$(codesign --display --verbose=4 "$APP" 2>&1)
 [[ "$signature" == *"Identifier=com.easyagent.desktop"* && "$signature" == *"Signature=adhoc"* \
    && "$signature" == *"Sealed Resources version=2"* && "$signature" != *"Info.plist=not bound"* ]] \
   || { echo 'Installer lacks a complete ad hoc app signature and resource seal' >&2; exit 1; }
-for binary in "$APP/Contents/MacOS/EasyAgent" "$RESOURCES/easyagent" "$RESOURCES/runtime/bin/node"; do
+HELPER_APP="$RESOURCES/cua-helper/EasyAgent Computer Use.app"
+HELPER="$HELPER_APP/Contents/MacOS/easyagent-cua-helper"
+[[ $(plutil -extract CFBundleIdentifier raw -o - "$HELPER_APP/Contents/Info.plist") == com.easyagent.cua-helper ]]
+[[ $(plutil -extract CFBundleShortVersionString raw -o - "$HELPER_APP/Contents/Info.plist") == "$VERSION" ]]
+codesign --verify --deep --strict "$HELPER_APP"
+for binary in "$HELPER" "$APP/Contents/MacOS/EasyAgent" "$RESOURCES/easyagent" "$RESOURCES/runtime/bin/node"; do
   [[ -f "$binary" && -x "$binary" && $(lipo -archs "$binary") == "$MACH_ARCH" ]] \
     || { echo "Installer has an invalid $ARCH executable: $binary" >&2; exit 1; }
 done
@@ -66,6 +71,7 @@ for license in Node-LICENSE ZCODE-LICENSE ZCODE-NOTICE.md ZCODE-THIRD-PARTY-NOTI
 done
 [[ -s "$RESOURCES/workflow-runtime.mjs" ]]
 if [[ $(node -p process.arch) == "$ARCH" ]]; then
+  python3 scripts/test_cua_helper.py "$HELPER"
   [[ $("$RESOURCES/easyagent" --version) == "easyagent v$VERSION" ]]
   "$RESOURCES/runtime/bin/node" -e 'if(Number(process.versions.node.split(".")[0])<22)throw Error("Unsupported bundled Node version")'
   "$RESOURCES/runtime/bin/node" "$RESOURCES/workflow-runtime.mjs" --check

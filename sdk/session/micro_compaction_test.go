@@ -119,3 +119,26 @@ func TestMicroCompactionRecoversCursorWithoutLeafRecord(t *testing.T) {
 	require.Len(t, msgs, 2)
 	require.Equal(t, "cleared", msgs[0].(ai.ToolResultMessage).Content)
 }
+
+func TestImageMicroCompactionSurvivesRestartAndKeepsDisplay(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "shot.jsonl")
+	storage := NewJSONLStorage(path)
+	require.NoError(t, storage.Init())
+	sess := New(storage)
+	images := []ai.ImageBlock{{MediaType: "image/png", Data: []byte{1, 2, 3}}}
+	require.NoError(t, sess.AppendMessage(ctx, ai.ToolResultMessage{ToolCallID: "shot", Content: "screenshot", Images: images}))
+	// Also persist an image-only change, with unchanged text.
+	require.NoError(t, sess.AppendMicroCompaction(ctx, []ai.Message{ai.ToolResultMessage{ToolCallID: "shot", Content: "screenshot"}}))
+	require.NoError(t, storage.Close())
+	storage = NewJSONLStorage(path)
+	require.NoError(t, storage.Init())
+	defer storage.Close()
+	sess = New(storage)
+	contextMessages, err := sess.BuildContext(ctx)
+	require.NoError(t, err)
+	require.Empty(t, contextMessages[0].(ai.ToolResultMessage).Images)
+	display, err := sess.BuildDisplayContext(ctx)
+	require.NoError(t, err)
+	require.Equal(t, images, display[0].(ai.ToolResultMessage).Images)
+}

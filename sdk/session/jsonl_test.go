@@ -469,3 +469,19 @@ func TestReloadRecoversDurableToolResultWithoutLeaf(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "call", leaf)
 }
+
+func TestToolImagePersistsAcrossReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "images.jsonl")
+	storage := NewJSONLStorage(path)
+	require.NoError(t, storage.Init())
+	tool := ai.ToolResultMessage{ToolCallID: "shot", Content: "screenshot", Images: []ai.ImageBlock{{MediaType: "image/png", Data: []byte{1, 2, 3}}}}
+	require.NoError(t, storage.Append(context.Background(), Entry{Type: EntryTypeMessage, Tool: &tool}))
+	require.NoError(t, storage.Close())
+	reopened := NewJSONLStorage(path)
+	require.NoError(t, reopened.Init())
+	defer reopened.Close()
+	entries, err := reopened.GetPathToRoot(context.Background(), "")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, tool.Images, entries[0].Tool.Images)
+}
