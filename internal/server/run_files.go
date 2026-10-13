@@ -217,7 +217,11 @@ func (s *Server) snapshotFiles(root string) (map[string]fileState, []string) {
 	return files, skipped
 }
 func (s *Server) beginFiles(run *sessionRun, root string) {
-	before, skipped := s.snapshotFiles(root)
+	scan := s.workspaceSnapshot
+	if scan == nil {
+		scan = s.snapshotFiles
+	}
+	before, skipped := scan(root)
 	run.files = &runFiles{RunID: run.ID, SessionID: run.SessionID, Workspace: root, StartedAt: run.StartedAt, Before: before, Owned: map[string]bool{}, Skipped: skipped, calls: map[string][]string{}, toolAfter: map[string]fileState{}, Undone: map[string]bool{}}
 	if err := s.saveFiles(run.files); err != nil {
 		run.files = nil

@@ -41,6 +41,7 @@ func (s *Server) SetVersion(v string) {
 type Server struct {
 	activity          activityGate
 	runs              *runRegistry
+	workspaceSnapshot func(string) (map[string]fileState, []string) // nil uses the default scanner
 	marketJobs        *marketJobRegistry
 	queueMu           sync.Mutex
 	queues            map[string]*messageQueue
