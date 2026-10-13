@@ -216,7 +216,7 @@ export function ComputerUseSettings() {
         <StatusRow label="可用性" value={availabilityLabel} />
         <StatusRow
           label="请求系统权限"
-          description="在 macOS 系统设置中为 EasyAgent / EasyAgent Computer Use 授权辅助功能和屏幕录制。"
+          description="在 macOS 系统设置中分别为 EasyAgent 授权辅助功能和屏幕录制。"
           action={
             <button
               className="btn"
@@ -252,6 +252,14 @@ export function ComputerUseSettings() {
           description={undefined}
         />
       </div>
+
+      {!settings.granted && settings.available && (
+        <p style={{ fontSize: 12, opacity: 0.75, marginTop: 12, lineHeight: 1.6 }}>
+          如果系统开关已打开，但这里仍显示缺少权限：当前安装包使用测试签名，升级后旧授权可能不再匹配。
+          请在辅助功能和屏幕录制中移除旧 EasyAgent 条目，再点「+」添加 /Applications/EasyAgent.app，并退出重开应用。
+          屏幕录制与辅助功能是两项独立授权。
+        </p>
+      )}
 
       {error && (
         <div style={{ color: "var(--red)", fontSize: 13, marginTop: 12 }}>{error}</div>

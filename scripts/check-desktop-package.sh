@@ -25,11 +25,22 @@ DMG="$OUTPUT/EasyAgent-$VERSION-$ARCH.dmg"
 hdiutil verify "$DMG"
 STAGE=$(python3 -c 'import tempfile; print(tempfile.mkdtemp(prefix="easyagent-installer-check.", suffix=".noindex"))')
 MOUNTED=0
+# LaunchServices/TCC may still hold an installer briefly after inspection.
+# Retry normal detach only; never force-unmount a volume used by another process.
+detach_installer() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if hdiutil detach "$1" >/dev/null; then return 0; fi
+    if [[ "$attempt" != 5 ]]; then sleep "$attempt"; fi
+  done
+  echo "Installer is still busy; retained for inspection: $1" >&2
+  return 1
+}
 cleanup() {
   local status=0
   if [[ "$MOUNTED" == 1 ]]; then
     python3 "$SCRIPT_DIR/unregister-desktop-apps.py" "$STAGE/mount/EasyAgent.app" || status=$?
-    hdiutil detach "$STAGE/mount" >/dev/null || return 1
+    detach_installer "$STAGE/mount" || return 1
   fi
   rm -rf "$STAGE"
   return "$status"
@@ -71,7 +82,7 @@ for license in Node-LICENSE ZCODE-LICENSE ZCODE-NOTICE.md ZCODE-THIRD-PARTY-NOTI
 done
 [[ -s "$RESOURCES/workflow-runtime.mjs" ]]
 if [[ $(node -p process.arch) == "$ARCH" ]]; then
-  python3 scripts/test_cua_helper.py "$HELPER"
+  python3 scripts/test_cua_helper.py "$HELPER" --no-tcc
   [[ $("$RESOURCES/easyagent" --version) == "easyagent v$VERSION" ]]
   "$RESOURCES/runtime/bin/node" -e 'if(Number(process.versions.node.split(".")[0])<22)throw Error("Unsupported bundled Node version")'
   "$RESOURCES/runtime/bin/node" "$RESOURCES/workflow-runtime.mjs" --check
