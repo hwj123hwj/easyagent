@@ -677,6 +677,15 @@ test("image history keeps distinct anchors and the reducer is independent of the
  assert.equal(user.entryId,"entry");
  assert.equal(new Set(user.images.map(image => image.id)).size,2);
 });
+test("history image references preserve authenticated lazy reads and accept old inline snapshots", () => {
+ const projection = historyProjection([{role:"user",content:"images",images:[{attachmentId:"history_hash",sessionId:"forked-session"},{data_url:"data:image/png;base64,AA"}]}]);
+ const images = projection.transcript[0].images;
+ assert.equal(images.length,2);
+ assert.equal(images[0].attachmentId,"history_hash");
+ assert.equal(images[0].sessionId,"forked-session");
+ assert.equal(images[0].url,undefined);
+ assert.equal(images[1].url,"data:image/png;base64,AA");
+});
 test("live image references use authenticated session API; terminal status supplies precise fork anchor", () => {
  let projection = reduceEnvelope(emptyProjection(),{type:"accepted",session_id:"session",run_id:"run",state:"running",prompt:"look",run:{attachments:[{id:"att",name:"image.png",mime_type:"image/png"}]}});
  assert.deepEqual(projection.transcript[0].images,[{id:"att",name:"image.png",attachmentId:"att",sessionId:"session"}]);

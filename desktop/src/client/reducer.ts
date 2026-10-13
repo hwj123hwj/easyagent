@@ -77,8 +77,8 @@ export function historyProjection(messages: StoredMessage[]): RunProjection {
         text: displayText(message.content),
         entryId: message.entry_id,
         images: message.images
-          ?.filter((img) => typeof img?.data_url === "string" && img.data_url)
-          .map((img, index) => ({ url: img.data_url, name: "附件图片", id: `${prefix}-img-${index}` })),
+          ?.filter((img) => !!img?.data_url || !!(img?.attachmentId && img?.sessionId))
+          .map((img, index) => ({ url: img.data_url, attachmentId: img.attachmentId, sessionId: img.sessionId, name: "附件图片", id: `${prefix}-img-${index}` })),
       });
     if (message.role !== "assistant") return;
     if (message.thinking)

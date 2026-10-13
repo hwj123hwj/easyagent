@@ -624,7 +624,11 @@ func (s *Server) rejectActiveRun(w http.ResponseWriter, sessionID string) bool {
 	return false
 }
 
-func serializeRunMessages(messages []ai.Message) []map[string]any {
+func serializeRunMessages(messages []ai.Message, sessionIDs ...string) []map[string]any {
+	sessionID := ""
+	if len(sessionIDs) > 0 {
+		sessionID = sessionIDs[0]
+	}
 	result := make([]map[string]any, 0, len(messages))
 	for _, message := range messages {
 		entry := map[string]any{"role": string(message.Role()), "content": ""}
@@ -637,7 +641,11 @@ func serializeRunMessages(messages []ai.Message) []map[string]any {
 				}
 				if block.Type == "image" && block.Image != nil {
 					images, _ := entry["images"].([]map[string]string)
-					entry["images"] = append(images, map[string]string{"data_url": "data:" + block.Image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(block.Image.Data)})
+					image := map[string]string{"attachmentId": historyImageID(block.Image), "sessionId": sessionID}
+					if sessionID == "" {
+						image = map[string]string{"data_url": "data:" + block.Image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(block.Image.Data)}
+					}
+					entry["images"] = append(images, image)
 				}
 			}
 			entry["content"] = text
