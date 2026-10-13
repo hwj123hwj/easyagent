@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -225,19 +226,23 @@ func RegisterBuiltins(registry *slashcmd.Registry) {
 				return slashcmd.CommandResult{Output: fmt.Sprintf("Current model: %s/%s", provider, modelID)}, nil
 			}
 
-			var newModel, newProvider string
-			if parts := strings.SplitN(newInput, ":", 2); len(parts) == 2 {
-				newProvider = parts[0]
-				newModel = parts[1]
-			} else {
-				newModel = newInput
+			// 网关模型 ID 普遍含斜杠（openai/workbuddy/kimi-k3），先按可用
+			// 模型目录精确匹配全名；未命中才走冒号拆分/继承当前 provider，
+			// 且未知的模型直接报错，避免「切换成功、下次请求 404」。
+			var available []slashcmd.ModelInfo
+			if ctx.App != nil {
+				available = ctx.App.AvailableModels()
+			}
+			newProvider, newModel, err := resolveModelSwitch(newInput, available)
+			if err != nil {
+				return slashcmd.CommandResult{}, err
 			}
 
 			if err := ctx.Session.SwitchModel(ctx.Ctx, newModel, newProvider); err != nil {
 				return slashcmd.CommandResult{}, fmt.Errorf("switch model: %w", err)
 			}
 			newP, newM := ctx.Session.ModelInfo()
-			return slashcmd.CommandResult{Output: fmt.Sprintf("Switched: %s/%s → %s/%s", provider, modelID, newP, newM)}, nil
+			return slashcmd.CommandResult{Output: fmt.Sprintf("Switched: %s → %s", modelLabel(provider, modelID), modelLabel(newP, newM))}, nil
 		},
 	})
 
@@ -268,7 +273,7 @@ func RegisterBuiltins(registry *slashcmd.Registry) {
 				}
 				b.WriteString(fmt.Sprintf("%s%s/%s\n", marker, m.Provider, m.ModelID))
 			}
-			b.WriteString("\nUse /model <provider:model> to switch")
+			b.WriteString("\nUse /model <model-id> to switch — 粘贴上面任意 ID 即可（也支持 provider:model）")
 			return slashcmd.CommandResult{Output: b.String()}, nil
 		},
 	})
@@ -456,4 +461,77 @@ func formatHelp(registry *slashcmd.Registry) string {
 	}
 
 	return b.String()
+}
+
+// resolveModelSwitch 把 /model 参数解析成目标 (provider, modelID)。
+//
+// 网关模型 ID 普遍含斜杠（如 openai/workbuddy/kimi-k3），用户从 /models
+// 列表复制的就是展示全名 Provider/ModelID，因此解析顺序：
+//  1. 全名精确匹配（含斜杠原样采用，不再拼接 provider）
+//  2. provider:model 冒号形式
+//  3. 裸名在 ModelID 上唯一命中时采用
+//
+// available 为空（非编码应用等拿不到目录）时保持旧行为：冒号拆分，裸名
+// 继承当前 provider。目录存在但未命中时报错并列出候选，避免「切换成功、
+// 下次请求 404」。
+func resolveModelSwitch(input string, available []slashcmd.ModelInfo) (string, string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", "", errors.New("model name is empty")
+	}
+	if len(available) == 0 {
+		if parts := strings.SplitN(input, ":", 2); len(parts) == 2 {
+			return parts[0], parts[1], nil
+		}
+		return "", input, nil
+	}
+
+	byFull := make(map[string]slashcmd.ModelInfo, len(available))
+	byModel := make(map[string][]slashcmd.ModelInfo, len(available))
+	for _, m := range available {
+		byFull[m.Provider+"/"+m.ModelID] = m
+		byModel[m.ModelID] = append(byModel[m.ModelID], m)
+	}
+	if m, ok := byFull[input]; ok {
+		return m.Provider, m.ModelID, nil
+	}
+	if parts := strings.SplitN(input, ":", 2); len(parts) == 2 {
+		if m, ok := byFull[input]; ok {
+			return m.Provider, m.ModelID, nil
+		}
+		for _, m := range available {
+			if m.Provider == parts[0] && m.ModelID == parts[1] {
+				return m.Provider, m.ModelID, nil
+			}
+		}
+		return "", "", unknownModelErr(input, available)
+	}
+	if matches := byModel[input]; len(matches) == 1 {
+		return matches[0].Provider, matches[0].ModelID, nil
+	} else if len(matches) > 1 {
+		return "", "", fmt.Errorf("model %q is ambiguous across providers; use provider:model", input)
+	}
+	return "", "", unknownModelErr(input, available)
+}
+
+func unknownModelErr(input string, available []slashcmd.ModelInfo) error {
+	const maxCandidates = 8
+	names := make([]string, 0, len(available))
+	for _, m := range available {
+		if len(names) >= maxCandidates {
+			names = append(names, "…")
+			break
+		}
+		names = append(names, m.Provider+"/"+m.ModelID)
+	}
+	return fmt.Errorf("unknown model %q; available: %s", input, strings.Join(names, ", "))
+}
+
+// modelLabel 渲染模型展示名：模型 ID 已含 provider 前缀（如
+// openai/workbuddy/*）时不重复拼接，避免 openai/openai/… 的观感。
+func modelLabel(provider, modelID string) string {
+	if strings.HasPrefix(modelID, provider+"/") {
+		return modelID
+	}
+	return provider + "/" + modelID
 }
