@@ -159,9 +159,7 @@ func (s *JSONLStorage) Append(ctx context.Context, entry Entry) error {
 	// fsync to ensure crash-safe durability (without this, the OS buffer
 	// can lose or half-flush the last line on power failure).
 	if err := s.file.Sync(); err != nil {
-		// Sync failure is non-fatal on some platforms (e.g. network FS);
-		// log but don't block the append.
-		_ = err
+		return fmt.Errorf("sync session append: %w", err)
 	}
 	s.byID[entry.ID] = entry
 	switch entry.Type {
