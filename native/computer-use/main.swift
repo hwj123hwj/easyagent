@@ -357,6 +357,11 @@ func run() async throws {
     default: throw HelperError("命令需要 status / request-permissions / tool")
     }
 }
+// Establish the public AppKit/WindowServer connection before single-window capture.
+// A CLI process has no NSApplication by default; the filter otherwise asserts CGS_REQUIRE_INIT.
+let helperApplication = NSApplication.shared
+helperApplication.setActivationPolicy(.prohibited)
+
 Task { @MainActor in
     do { try await run(); exit(0) }
     catch {
