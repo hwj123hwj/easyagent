@@ -174,3 +174,16 @@ test('history row IDs reused by another session do not reuse its measured height
   f.switchTo(longView('different', 100)); f.el.scrollHeight = 10000; f.render();
   assert.ok(f.renderedRows().includes('row-99'), 'another session must use its own estimates');
 });
+
+
+test('saved reading intent survives an empty loading view until history arrives', () => {
+  const f = fixture();
+  f.switchTo(longView('restoring', 100)); f.el.scrollHeight = 10000; f.render();
+  let pane = f.render(); pane.onWheel({ deltaY: -8000 });
+  f.el.scrollTop = 1000; pane.onScroll(); f.render();
+  f.switchTo(longView('other', 1000)); f.el.scrollHeight = 100000; f.render();
+  f.switchTo(longView('restoring', 0)); f.el.scrollHeight = 600; f.render(); f.render();
+  f.switchTo(longView('restoring', 100)); f.el.scrollHeight = 10000; f.render();
+  assert.ok(f.renderedRows().includes('row-10'));
+  assert.equal(f.el.scrollTop, 1000, 'empty loading DOM must not erase the saved reading position');
+});

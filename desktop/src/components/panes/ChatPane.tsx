@@ -161,7 +161,7 @@ export function ChatPane({ view }: { view: SessionView }) {
   useLayoutEffect(() => {
     const el = container.current;
     if (!el) return;
-    if (previous.current !== positionKey) {
+    if (previous.current !== positionKey || restoring) {
       jumpingToLatest.current = false;
       pendingHeightAdjustment.current = 0;
       const saved = positions.get(positionKey);
@@ -176,8 +176,8 @@ export function ChatPane({ view }: { view: SessionView }) {
     lastScrollTop.current = el.scrollTop;
     syncViewport(el);
     setJump(!follow.current);
-    positions.set(positionKey, { top: el.scrollTop, follow: follow.current });
-  }, [positionKey, view.transcript, offsets, syncViewport]);
+    if (hasRows) positions.set(positionKey, { top: el.scrollTop, follow: follow.current });
+  }, [positionKey, view.transcript, offsets, syncViewport, restoring, hasRows]);
   useEffect(() => {
     const el = container.current;
     if (!el) return;
