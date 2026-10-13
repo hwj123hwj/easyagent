@@ -129,7 +129,7 @@ export class FeishuSettingsController {
   }
 
   async refresh(quiet = false) {
-    if (!this.alive || !this.connected || this.state.loading || this.state.saving) return;
+    if (!this.alive || !this.connected || this.state.loading || this.state.saving || this.state.bridgeLoading) return;
     const epoch = this.epoch, revision = ++this.statusRevision;
     this.set({ loading: true, ...(!quiet ? { error: "", errorSource: null } : {}) });
     try {
@@ -276,9 +276,13 @@ export class FeishuSettingsController {
   async restartBridge() {
     if (!this.alive || !this.connected || this.state.bridgeLoading) return;
     const epoch = this.epoch;
-    this.set({ bridgeLoading: true, error: "", errorSource: null, notice: "" });
+    this.statusRevision++; // A pre-restart poll must not overwrite the new state.
+    this.set({ bridgeLoading: true, loading: false, error: "", errorSource: null, notice: "" });
     try {
-      const status = await this.request<FeishuStatus>("POST", "/settings/feishu/bridge/restart");
+      const response = await this.request<FeishuStatus | FeishuBridgeState>("POST", "/settings/feishu/bridge/restart");
+      const status: FeishuStatus = "running" in response
+        ? { ...(this.state.status ?? { managed: false, local_mode: true }), bridge: response }
+        : response;
       if (!this.current(epoch)) return;
       this.applyStatus(status);
       this.set({

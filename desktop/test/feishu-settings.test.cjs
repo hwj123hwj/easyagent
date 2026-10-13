@@ -347,3 +347,20 @@ test("superseded begin response and malicious authorization URLs are rejected", 
   assert.equal(invalid.getSnapshot().qr, null);
   assert.match(invalid.getSnapshot().error, /无效/);
 });
+
+ test("bridge restart preserves credentials for full and legacy replies and rejects stale polls", async () => {
+  for (const legacy of [false, true]) {
+    const poll = deferred(), restart = deferred(); let gets = 0;
+    const local = { managed: false, local_mode: true, app_id: "cli_qa", secret_configured: true, bridge: { running: false } };
+    const controller = new FeishuSettingsController(async method => method === "POST" ? restart.promise : ++gets === 1 ? local : poll.promise, async () => {});
+    controller.activate(true); await controller.refresh();
+    const reading = controller.refresh(true), starting = controller.restartBridge();
+    const bridge = { running: true, started_at: "2026-10-13T01:00:00Z" };
+    restart.resolve(legacy ? bridge : { ...local, bridge }); await starting;
+    poll.resolve(local); await reading;
+    assert.deepEqual(controller.getSnapshot().status, { ...local, bridge });
+    assert.equal(controller.getSnapshot().loading, false);
+    assert.match(controller.getSnapshot().notice, /已在本机启动/);
+    controller.dispose();
+  }
+});

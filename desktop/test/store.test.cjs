@@ -472,3 +472,43 @@ test('file review targets the exact task snapshot without changing the conversat
     assert.equal(useStore.getState().drafts,before.drafts);
   } finally { useStore.setState(before); }
 });
+
+test("compaction tracks sessions independently, retains progress and cleans up failures", async () => {
+  const before = useStore.getState(), api = window.piAPI;
+  let resolveA, rejectB, posts = 0;
+  window.piAPI = { request: async (method, path) => {
+    if (method === "GET") return {};
+    posts++;
+    return path.includes("/a/") ? new Promise(resolve => resolveA = resolve) : new Promise((_, reject) => rejectB = reject);
+  } };
+  try {
+    useStore.setState({ selectedProfile: "qa", sessions: { a: { ...view(), meta: { ...view().meta, id: "a" } }, b: { ...view(), meta: { ...view().meta, id: "b" } } }, compacting: {}, activeSessionId: "a" });
+    const first = useStore.getState().compactSession("a");
+    assert.match(useStore.getState().sessions.a.commandOutput, /正在压缩/);
+    await assert.rejects(useStore.getState().compactSession("a"), /正在压缩/);
+    useStore.setState({ activeSessionId: "b" });
+    assert.equal(useStore.getState().compacting.b, undefined);
+    const second = useStore.getState().compactSession("b");
+    assert.equal(posts, 2);
+    rejectB(new Error("mock provider unavailable"));
+    await assert.rejects(second, /unavailable/);
+    assert.equal(useStore.getState().compacting.b, undefined);
+    assert.equal(useStore.getState().compacting.a, true);
+    assert.match(useStore.getState().sessions.b.commandOutput, /压缩失败/);
+    resolveA({ summary: "summary a" }); await first;
+    assert.equal(useStore.getState().sessions.a.commandOutput, "summary a");
+    assert.deepEqual(useStore.getState().compacting, {});
+  } finally { window.piAPI = api; useStore.setState(before); }
+});
+test("late compaction from an old profile cannot overwrite the new profile session", async () => {
+  const before = useStore.getState(), api = window.piAPI; let resolve;
+  window.piAPI = { request: () => new Promise(done => resolve = done) };
+  try {
+    useStore.setState({ selectedProfile: "old", sessions: { s: view() }, compacting: {} });
+    const pending = useStore.getState().compactSession("s");
+    useStore.setState({ selectedProfile: "new", sessions: { s: view() }, compacting: { s: true } });
+    resolve({ summary: "old summary" }); await pending;
+    assert.equal(useStore.getState().sessions.s.commandOutput, undefined);
+    assert.equal(useStore.getState().compacting.s, true);
+  } finally { window.piAPI = api; useStore.setState(before); }
+});

@@ -23,6 +23,7 @@ export function PromptBar({
   const commands = useStore((s) => s.commands);
   const id = view.meta.id,
     pending = useStore((s) => !!s.pending[id]),
+    compacting = useStore((s) => !!s.compacting[id]),
     connected = useStore((s) => s.connected),
     loading = useStore((s) => s.loadingSession === id);
   const text = useStore((s) => s.drafts[id] || ""),
@@ -129,12 +130,7 @@ export function PromptBar({
       }
       case "compact": {
         if (busy) throw new Error("任务完成后才能压缩上下文");
-        const value = await apiRequest<any>(
-          "POST",
-          `/sessions/${targetId}/compact`,
-          { custom_instructions: args },
-        );
-        await useStore.getState().refreshSessionInfo(targetId);
+        const value = await useStore.getState().compactSession(targetId, args);
         return value.summary || "上下文已压缩";
       }
       default:
@@ -168,7 +164,7 @@ export function PromptBar({
     return { output: result.output, sessionId: result.session_id || targetId };
   }
   async function submit() {
-    if ((!text.trim() && !hasInputs) || pending || commandBusy || loading || uploadBusy) return;
+    if ((!text.trim() && !hasInputs) || pending || commandBusy || compacting || loading || uploadBusy) return;
     let targetId = id;
     const captured = text,
       version = revision.current,
@@ -228,7 +224,7 @@ export function PromptBar({
     <div className="promptbar personal-composer">
       <div className="promptbar-inner">
         <ConversationQueue view={view} />
-        {inspect && <ContextInspector key={id} view={view} onBusy={setCommandBusy} onClose={() => { setInspect(false); input.current?.focus(); }} />}
+        {inspect && <ContextInspector key={id} view={view} onClose={() => { setInspect(false); input.current?.focus(); }} />}
         <div className="confirmation-list">
           {view.confirmations.map((confirmation) => (
             confirmation.tool_name === "ask_user_question" ? (
@@ -362,10 +358,10 @@ export function PromptBar({
             }}
           />
           <div className="composer-actions">
-            <ComposerStatus onInspect={id === "__new__" ? undefined : () => setInspect(true)} view={view} disabled={!connected || busy || pending || loading || commandBusy} onStart={onStart} onError={setError} />
+            <ComposerStatus onInspect={id === "__new__" ? undefined : () => setInspect(true)} view={view} disabled={!connected || busy || pending || loading || commandBusy || compacting} onStart={onStart} onError={setError} />
             <ModelPicker
               value={view.meta.model}
-              disabled={!connected || busy || pending || modelBusy}
+              disabled={!connected || busy || pending || modelBusy || compacting}
               onChange={async (value) => {
                 setModelBusy(true);
                 try {
@@ -423,19 +419,20 @@ export function PromptBar({
             {(
               <button
                 className="composer-send"
-                title={busy ? "加入待发队列，当前任务结束后执行" : "发送消息"}
+                title={compacting ? "正在压缩上下文，请稍候" : commandBusy ? "正在执行命令，请稍候" : busy ? "加入待发队列，当前任务结束后执行" : "发送消息"}
                 aria-label={busy ? "加入待发队列" : "发送消息"}
                 disabled={
                   (!text.trim() && !hasInputs) ||
                   uploadBusy ||
                   pending ||
                   commandBusy ||
+                  compacting ||
                   loading ||
                   (!connected && !parseCommand(text))
                 }
                 onClick={() => void submit()}
               >
-                {pending ? (
+                {pending || commandBusy || compacting ? (
                   <span className="spinner-xs" />
                 ) : (
                   <Icon name="send" size={19} />
@@ -445,8 +442,14 @@ export function PromptBar({
           </div>
         </div>
         <div className="composer-foot">
-          <span>
-            {pending
+          <span role="status">
+            {compacting
+              ? "正在压缩上下文，请稍候；可切换到其他会话继续工作"
+              : commandBusy
+                ? "正在执行命令，请稍候"
+                : loading
+                  ? "正在恢复会话…"
+                  : pending
               ? "等待服务确认接收，草稿仍保留"
               : busy
                 ? "Agent 正在" +

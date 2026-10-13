@@ -263,6 +263,8 @@ interface StoreState {
   draftInputs: Record<string, DraftInputs>;
   setDraftInputs: (id: string, value: DraftInputs, profileId?: string) => void;
   pending: Record<string, boolean>;
+  compacting: Record<string, boolean>;
+  compactSession: (id: string, instructions?: string) => Promise<{ summary?: string }>;
   setDraft: (id: string, text: string) => void;
   setCommandOutput: (id: string, output: string, profileId?: string) => void;
   connectProfile: (id: string, token?: string) => Promise<void>;
@@ -533,6 +535,7 @@ export const useStore = create<StoreState>((set, get) => ({
     } catch {}
   },
   pending: {},
+  compacting: {},
   setDraft: (id, text) => {
     set((s) => ({ drafts: { ...s.drafts, [id]: text } }));
     try {
@@ -616,6 +619,7 @@ export const useStore = create<StoreState>((set, get) => ({
         drafts: storedDrafts[id] || {},
         draftInputs: storedInputs[id] || {},
         pending: {},
+        compacting: {},
         models: [],
         currentModel: undefined,
         modelSource: undefined,
@@ -1434,6 +1438,26 @@ export const useStore = create<StoreState>((set, get) => ({
     });
   },
 
+  compactSession: async (id, instructions = "") => {
+    if (get().compacting[id]) throw new Error("此会话正在压缩上下文，请稍候");
+    const epoch = connectionEpoch, profile = get().selectedProfile;
+    const current = () => epoch === connectionEpoch && profile === get().selectedProfile;
+    set(s => ({ compacting: { ...s.compacting, [id]: true } }));
+    get().setCommandOutput(id, "正在压缩上下文…", profile);
+    try {
+      const result = await apiRequest<{ summary?: string }>("POST", `/sessions/${encodeURIComponent(id)}/compact`, { custom_instructions: instructions });
+      if (current()) {
+        get().setCommandOutput(id, result.summary || "上下文已压缩", profile);
+        await get().refreshSessionInfo(id);
+      }
+      return result;
+    } catch (error) {
+      if (current()) get().setCommandOutput(id, "上下文压缩失败：" + (error as Error).message, profile);
+      throw error;
+    } finally {
+      if (current()) set(s => { const compacting = { ...s.compacting }; delete compacting[id]; return { compacting }; });
+    }
+  },
   refreshSessionInfo: async (id) => {
     const epoch = connectionEpoch;
     const info = await apiRequest<SessionInfo>("GET", `/sessions/${encodeURIComponent(id)}/info`);
