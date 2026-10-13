@@ -169,11 +169,12 @@ func appState() throws -> [String: Any] {
     func walk(_ node: AXUIElement, _ depth: Int) -> [String: Any] {
         remaining -= 1
         let role = attribute(node, kAXRoleAttribute) as? String ?? "unknown"
+        let subrole = attribute(node, kAXSubroleAttribute) as? String ?? ""
         var result: [String: Any] = ["role": role]
         for name in [kAXTitleAttribute, kAXDescriptionAttribute] {
             if let value = attribute(node, name) as? String, !value.isEmpty { result[name] = String(value.prefix(500)) }
         }
-        if role != "AXSecureTextField", let value = attribute(node, kAXValueAttribute) as? String {
+        if role != "AXSecureTextField" && subrole != "AXSecureTextField", let value = attribute(node, kAXValueAttribute) as? String {
             result["value"] = String(value.prefix(1000))
         }
         var point = CGPoint.zero, size = CGSize.zero
@@ -216,6 +217,7 @@ func screenshot(_ input: [String: Any]) async throws -> [String: Any] {
     return ["path": url.path, "width": image.width, "height": image.height, "x": bounds.minX, "y": bounds.minY,
             "coordinates": "pixel = screen point; add x/y to image coordinates; primary display only"]
 }
+@MainActor
 func run() async throws {
     let args = Array(CommandLine.arguments.dropFirst())
     switch args.first {
