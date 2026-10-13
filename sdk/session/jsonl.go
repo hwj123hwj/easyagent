@@ -194,8 +194,12 @@ func (s *JSONLStorage) GetPathToRoot(ctx context.Context, leafID string) ([]Entr
 		if !ok {
 			return nil, fmt.Errorf("entry %q not found", leafID)
 		}
-		path = append([]Entry{entry}, path...)
+		path = append(path, entry)
 		leafID = entry.ParentID
+	}
+	// 沿父链收集后一次反转，避免逐项 prepend 对长会话产生 O(n²) 复制。
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
 	}
 	return path, nil
 }
