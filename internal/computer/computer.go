@@ -234,7 +234,7 @@ func (t *Tool) Validate(params json.RawMessage) (json.RawMessage, error) {
 	if err := json.Unmarshal(params, &input); err != nil {
 		return nil, fmt.Errorf("computer 参数解析失败: %w", err)
 	}
-	if input.Action != "list_apps" && (strings.TrimSpace(input.BundleID) == "" || input.PID <= 0 || input.PID > 2147483647 || input.WindowID <= 0 || input.WindowID > 4294967295) {
+	if (input.Action == "screenshot" || input.Action == "get_app_state" || input.Action == "perform_action") && (strings.TrimSpace(input.BundleID) == "" || input.PID <= 0 || input.PID > 2147483647 || input.WindowID <= 0 || input.WindowID > 4294967295) {
 		return nil, fmt.Errorf("先 list_apps，其他动作必须指定有效的 bundle_id、pid、window_id；不会使用前台应用")
 	}
 	switch input.Action {
