@@ -52,6 +52,27 @@ import type {
   UpdateState,
 } from "./types";
 
+// ── 会话错误终态持久化 ─────────────────────────────────────────────────────
+// meta.status 只存内存，会话列表重建/重启后会洗成 idle（#124）：把「最后一
+// 次运行的失败终态」落到 localStorage，列表重建时恢复；新一轮 run 启动或
+// 成功结束时清除。
+const lastFailurePrefix = "easyagent.lastFailure.";
+function loadLastFailure(sessionId: string): boolean {
+  try {
+    return localStorage.getItem(lastFailurePrefix + sessionId) === "error";
+  } catch {
+    return false;
+  }
+}
+function saveLastFailure(sessionId: string, failed: boolean): void {
+  try {
+    if (failed) localStorage.setItem(lastFailurePrefix + sessionId, "error");
+    else localStorage.removeItem(lastFailurePrefix + sessionId);
+  } catch {
+    /* 隐私模式等场景下不可写：静默降级为旧行为 */
+  }
+}
+
 // ── REST API helpers ──────────────────────────────────────────────────────
 
 let baseUrl = "http://127.0.0.1:8080";
@@ -985,6 +1006,8 @@ export const useStore = create<StoreState>((set, get) => ({
             : projection.phase === "error"
               ? "error"
               : "idle";
+          // 失败终态持久化：新 run 启动或成功结束都清除，错误保留到被处理
+          saveLastFailure(id, !nowActive && status === "error");
           const nextQueue =
             message.queue && message.queue.revision >= (v.queue?.revision || 0)
               ? message.queue
@@ -1137,7 +1160,8 @@ export const useStore = create<StoreState>((set, get) => ({
             id: sess.id,
             title,
             cwd,
-            status: "idle" as SessionRunStatus,
+            // 恢复持久化的失败终态：列表重建不洗掉错误标记（#124）
+            status: (loadLastFailure(sess.id) ? "error" : "idle") as SessionRunStatus,
             model: s.sessions[sess.id]?.meta.model,
             application,
             pinned: !!sess.pinned,
