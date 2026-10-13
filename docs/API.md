@@ -52,6 +52,10 @@ POST /chat/stream
 
 Server-Sent Events 流式输出，持续返回文本增量、工具与任务状态事件；增量块不保证对应单个 token。
 
+先返回 `session_id` 与 JSON `accepted`（`session_id`、`run_id`、`request_id`、`duplicate`），再发送具名 Agent 事件。正常结束有 `done`；失败或取消可能携带部分结果，但不能仅凭 `done` 或 HTTP 200 判断成功，应查询 `GET /sessions/{id}/run` 的 `run.state`（如 `completed`、`failed`、`cancelled`、`interrupted`）。取消时部分消息的 `stop_reason` 为 `aborted`，持久化失败仍会返回错误。
+
+关闭 SSE 仅停止订阅。主动停止任务需另发 `POST /sessions/{id}/run/cancel`，body 为接受时取得的 `{"run_id":"run_..."}`；返回 `{"cancelled":true}` 表示取消信号已提交，随后读取 run 状态确认收尾。不能用旧 run ID 取消后续任务。
+
 ```bash
 curl -N -X POST http://127.0.0.1:8080/chat/stream \
   -H "Content-Type: application/json" \
@@ -281,12 +285,16 @@ GET /health
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/settings/feishu` | 托管配置与服务状态，不返回 Secret |
+| GET | `/settings/feishu` | 托管配置与服务状态，或本机 `local_mode` / `bridge` 状态，不返回 Secret |
 | PUT | `/settings/feishu` | 保存 `app_id` / `app_secret` 并重启桥接；空 Secret 保留旧值 |
 | GET | `/settings/feishu/pairing` | 获取当前可用的私聊配对信息；响应禁止缓存 |
+| POST | `/settings/feishu/qr/begin` | 非托管主机开始扫码注册，返回授权 URL、设备码及轮询间隔 |
+| POST | `/settings/feishu/qr/poll` | 使用 `device_code` 轮询注册结果，不自动保存凭据 |
+| POST | `/settings/feishu/qr/confirm` | 使用当前 `device_code` 确认保存已完成注册的凭据 |
+| POST | `/settings/feishu/bridge/restart` | 非托管主机启动/重启进程内桥接；systemd 托管主机返回 409 |
 | POST | `/asr/transcribe` | 上传音频并转写，需配置语音服务 |
 
-飞书管理接口要求服务令牌（`EA_SERVER_API_KEY`，兼容 `EA_API_KEY`）和托管文件路径；使用前参见 [飞书接入](FEISHU.md)。
+飞书管理接口要求服务令牌（`EA_SERVER_API_KEY`，兼容 `EA_API_KEY`）；systemd 托管模式还需要托管文件路径，非托管模式使用已保存本机凭据。扫码注册不用于托管主机。使用前参见 [飞书接入](FEISHU.md)。
 
 ## 部署控制
 

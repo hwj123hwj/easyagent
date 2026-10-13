@@ -1,6 +1,12 @@
 # 飞书接入
 
-`easyagent-bridge` 通过飞书 WebSocket 长连接收取消息，再调用 EasyAgent 核心服务的 HTTP / SSE 接口。对话卡片随生成过程更新。核心服务运行、桥接进程 active、飞书已连接是三个不同状态，需要分别核验。
+飞书桥接通过 WebSocket 长连接收取消息，再调用 EasyAgent 核心的 HTTP / SSE 接口，卡片随生成过程更新。支持本机 serve 进程内桥接，以及独立的 `easyagent-bridge` 托管进程。核心服务运行、桥接运行和飞书已连接需要分别核验。
+
+## 此 Mac / 非托管主机
+
+连接此 Mac 后，在桌面「设置 → 飞书机器人」扫码绑定，并确认保存凭据，再点击启动/重启桥接。轮询扫码状态不会自动保存；服务接口 `POST /settings/feishu/bridge/restart` 使用已保存的本机凭据启动桥接，不需要另开终端。
+
+`GET /settings/feishu` 的 `local_mode:true`、`bridge.running` 和可选 `bridge.error` 用于查看进程内桥接状态。管理接口仍要求显式服务令牌，桌面托管核心自动提供。桥接随 serve 退出，重新启动核心后需再次启动桥接；需要独立常驻时使用下方 systemd 部署。托管主机使用自建应用凭据与配对，不走扫码注册。
 
 ## 网页配置（托管部署）
 
@@ -16,7 +22,7 @@ FEISHU_OWNER_STATE_FILE=/home/q/.config/easyagent/feishu-owner.json
 
 在 Web「设置」填写 App ID / App Secret，点击“保存并重启桥接”。Secret 不回显，留空保留现有密钥；首次配置后 App ID 固定。更换机器人需要重新配置使用者绑定，不同应用的 open_id 不能直接复用。
 
-管理 API 即使在本机也要求显式 Bearer 认证。未配置托管路径的部署会显示未托管状态；网页不会替你修改已有 owner 绑定。
+管理 API 即使在本机也要求显式 Bearer 认证。`managed:false` 表示没有 systemd 托管，不代表本机桥接不可用；已有 owner 绑定不会被自动修改。
 
 ## 手动运行
 
@@ -51,6 +57,8 @@ EA_SERVER_API_KEY=your-agent-server-key
 | 富文本消息无法解析 | 保留消息结构和错误日志用于回归测试；避免在日志中泄漏凭据或私聊内容 |
 
 文本与富文本由桥接解析；无法支持的消息应返回明确说明，不将解析失败占位文本当成用户任务。流式卡片首次内容尽早发送，后续合并短时间内更新，结束时写入最终状态。卡片显示“已完成”不应替代真实回答。
+
+普通入站消息按 App ID 与飞书消息 ID 生成稳定 `request_id`，重复投递和桥接重启后仍复用核心受理凭据，避免重复执行工具；该保证依赖核心的数据目录与请求记录保留，不是跨多个核心进程的互斥。系统生成的后续任务没有入站消息身份，会创建新请求。模型切换可直接使用 `/models` 中的完整 ID（含斜杠）；不存在的模型会立即报错，失败卡片显示错误摘要。
 
 ```bash
 systemctl --user status easyagent-core.service easyagent-bridge.service
