@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,4 +69,44 @@ func TestHistoryImagesUseBoundedSessionReferencesAcrossFork(t *testing.T) {
 	refs := serializeSessionContext(fork, history)[0]["images"].([]map[string]string)
 	require.Equal(t, forkID, refs[0]["sessionId"])
 	read(forkID, refs[0]["attachmentId"], "test-key", 200)
+}
+
+func TestHistoryImagesRemainReadableAfterFullCompactionButExcludeSiblingBranch(t *testing.T) {
+	s, _, _ := newRunTestServer(t)
+	sess, err := s.resolveSession(context.Background(), "")
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, sess.Session().AppendMessage(ctx, ai.NewTextUserMessage("shared root")))
+	root, err := sess.Session().Storage().GetLeaf(ctx)
+	require.NoError(t, err)
+	var pngData bytes.Buffer
+	require.NoError(t, png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	original := &ai.ImageBlock{MediaType: "image/png", Data: pngData.Bytes()}
+	require.NoError(t, sess.Session().AppendMessage(ctx, ai.UserMessage{Content: []ai.ContentBlock{{Type: "image", Image: original}}}))
+	messages, err := sess.Session().BuildDisplayContext(ctx)
+	require.NoError(t, err)
+	baseline := serializeSessionContext(sess, messages)
+	// 自动 full compaction 会替换逻辑上下文，但 run 的恢复基线仍显示此前图片。
+	require.NoError(t, sess.Session().AppendCompaction(ctx, "summary"))
+	compacted, err := sess.Session().BuildDisplayContext(ctx)
+	require.NoError(t, err)
+	require.Len(t, compacted, 1)
+	s.runs.mu.Lock()
+	s.runs.sessionLocked(sess.SessionID()).run = &sessionRun{ID: "compacted-run", SessionID: sess.SessionID(), State: "completed", baseline: baseline}
+	s.runs.mu.Unlock()
+	snapshot, err := s.runSnapshot(sess.SessionID(), 0, "", nil)
+	require.NoError(t, err)
+	refs := snapshot.Messages[1]["images"].([]map[string]string)
+	read := func(imageID string, status int) {
+		response := httptest.NewRecorder()
+		s.Handler().ServeHTTP(response, localReq(http.MethodGet, "/sessions/"+sess.SessionID()+"/attachments/"+imageID+"/raw", nil))
+		require.Equal(t, status, response.Code, response.Body.String())
+	}
+	read(refs[0]["attachmentId"], http.StatusOK)
+	// 同一 JSONL 中的兄弟分支依然保存原图，不能仅按 hash 搜索全部记录。
+	require.NoError(t, sess.Session().MoveTo(ctx, root, ""))
+	sibling := &ai.ImageBlock{MediaType: "image/png", Data: append(append([]byte{}, original.Data...), 1)}
+	require.NoError(t, sess.Session().AppendMessage(ctx, ai.UserMessage{Content: []ai.ContentBlock{{Type: "image", Image: sibling}}}))
+	read(refs[0]["attachmentId"], http.StatusNotFound)
+	read(historyImageID(sibling), http.StatusOK)
 }

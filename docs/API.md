@@ -87,7 +87,7 @@ GET /ws
 
 `event` 包含递增 `seq`、`run_id` 和 Agent `event`。重连发送 `subscribe`：可重放时返回 `replay`，否则返回 `snapshot`（历史 `messages`、当前 run、已投影事件及 `pending_confirmations`）。客户端按 seq 去重，不将恢复内容当成新请求。序号缺口应重新订阅；`reset:true` 表示历史完整重建，允许序号重新开始。`confirmation` 表示任务等待批准，超时拒绝。旧 run 的取消与批准请求会被拒绝，避免影响后续任务。
 
-历史消息的 `images` 保留数组形状，每张图片通过 `{"attachmentId":"history_...","sessionId":"sess_..."}` 引用会话内已保存的图片，避免在 HTTP / WebSocket 快照中累计内联图片数据。客户端按需请求带认证的 `/sessions/{sessionId}/attachments/{attachmentId}/raw?format=data_url`；引用只在该会话当前分支包含图片时有效，分叉快照使用分叉会话自己的 `sessionId`。图片哈希不能替代认证。客户端仍须兼容旧服务返回的 `data_url` 图片；实时新消息继续使用已有上传附件引用。
+历史消息的 `images` 保留数组形状，每张图片通过 `{"attachmentId":"history_...","sessionId":"sess_..."}` 引用会话内已保存的图片，避免在 HTTP / WebSocket 快照中累计内联图片数据。客户端按需请求带认证的 `/sessions/{sessionId}/attachments/{attachmentId}/raw?format=data_url`；引用只在该会话当前分支的祖先记录（包括压缩前记录及保留片段）包含图片时有效，不允许读取兄弟分支。分叉快照使用分叉会话自己的 `sessionId`。图片哈希不能替代认证。客户端仍须兼容旧服务返回的 `data_url` 图片；实时新消息继续使用已有上传附件引用。
 
 任务由会话持有，WS / SSE 连接关闭不会取消任务。服务重启后已接受而未完成的 run 标为 `interrupted`，相同 request ID 不重新执行。凭据保存于 `EA_DATA_DIR/requests`，完整聊天历史仍来自会话 JSONL；硬断电下的外部副作用不保证恰好一次。
 

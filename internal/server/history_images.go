@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
+	"github.com/hwj123hwj/easyagent/sdk/session"
 )
 
 const historyImagePrefix = "history_"
@@ -34,17 +35,23 @@ func (s *Server) getHistoryImage(w http.ResponseWriter, r *http.Request, session
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	messages, err := sess.Session().BuildDisplayContext(r.Context())
+	entries, err := sess.Session().Storage().GetPathToRoot(r.Context(), "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "cannot read image history")
 		return
 	}
-	for _, message := range messages {
-		user, ok := message.(ai.UserMessage)
-		if !ok {
+	// Full compaction replaces logical context, while an existing run baseline
+	// may still reference older images. Only this branch's ancestors and its
+	// retained compaction fragments are eligible, never sibling entries.
+	for i := 0; i < len(entries); i++ {
+		entry := entries[i]
+		if entry.Type == session.EntryTypeCompaction {
+			entries = append(entries, entry.Retained...)
+		}
+		if entry.User == nil {
 			continue
 		}
-		for _, block := range user.Content {
+		for _, block := range entry.User.Content {
 			if block.Type != "image" || block.Image == nil || historyImageID(block.Image) != imageID {
 				continue
 			}
