@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -494,7 +496,7 @@ func (h *Handler) handleAgentMessage(ctx context.Context, chatKey, messageID, te
 func (h *Handler) handleWithCard(ctx context.Context, chatKey, messageID, sessionID, text string, card *StreamingCardHandle) {
 	startTime := time.Now()
 
-	fullText, err := h.streamChat(ctx, sessionID, text, card)
+	fullText, err := h.streamChat(ctx, sessionID, text, card, h.messageRequestID(messageID))
 	elapsed := time.Since(startTime)
 	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -524,7 +526,7 @@ func (h *Handler) handleWithTextFallback(ctx context.Context, chatKey, messageID
 		slog.Warn("send processing message failed", "error", err)
 	}
 
-	fullText, err := h.streamChat(ctx, sessionID, text, nil)
+	fullText, err := h.streamChat(ctx, sessionID, text, nil, h.messageRequestID(messageID))
 	if err != nil {
 		slog.Error("stream chat failed", "error", err)
 		errMsg := "❌ 处理出错，请重试：`" + errorDetail(err) + "`"
@@ -544,12 +546,26 @@ func (h *Handler) handleWithTextFallback(ctx context.Context, chatKey, messageID
 
 // streamChat calls POST /chat/stream and collects the full response text.
 // Card updates are coalesced asynchronously so Feishu latency cannot block SSE reads.
-func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card *StreamingCardHandle) (string, error) {
+func (h *Handler) messageRequestID(messageID string) string {
+	if messageID == "" {
+		return "" // 系统生成的后续任务没有入站消息身份，须创建独立请求。
+	}
+	// 飞书重投会跨越桥接重启，进程内去重不足以阻止重复副作用。
+	// 按应用与消息生成稳定身份，复用核心的持久化接受凭据。
+	sum := sha256.Sum256([]byte(h.appID + "\x00" + messageID))
+	return "feishu_" + hex.EncodeToString(sum[:])
+}
+
+func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card *StreamingCardHandle, requestIDs ...string) (string, error) {
 	startTime := time.Now()
-	body, _ := json.Marshal(map[string]string{
+	values := map[string]string{
 		"prompt":     prompt,
 		"session_id": sessionID,
-	})
+	}
+	if len(requestIDs) > 0 && requestIDs[0] != "" {
+		values["request_id"] = requestIDs[0]
+	}
+	body, _ := json.Marshal(values)
 
 	url := fmt.Sprintf("%s/chat/stream", h.piAgentURL)
 	slog.Debug("SSE request", "url", url, "sessionID", sessionID)
@@ -569,6 +585,16 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 
 	slog.Debug("SSE response", "status", resp.StatusCode, "contentType", resp.Header.Get("Content-Type"))
 	if resp.StatusCode != http.StatusOK {
+		var failure struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&failure)
+		if resp.StatusCode == http.StatusConflict && failure.Code == "request_conflict" && sessionID != "" && values["request_id"] != "" {
+			// /new 后旧消息重投仍应回放原任务，不能拿新会话再执行。
+			// 只去掉会话约束；原身份与内容仍由核心校验，最多查询一次。
+			resp.Body.Close()
+			return h.streamChat(ctx, "", prompt, card, values["request_id"])
+		}
 		return "", fmt.Errorf("agent stream HTTP %d", resp.StatusCode)
 	}
 	if strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0]) != "text/event-stream" {

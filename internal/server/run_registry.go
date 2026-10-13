@@ -720,7 +720,9 @@ func runHTTPError(w http.ResponseWriter, err error) {
 		if admission.code == "updating" {
 			code = http.StatusServiceUnavailable
 		}
-		writeError(w, code, err.Error())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "code": admission.code})
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())

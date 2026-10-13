@@ -13,6 +13,11 @@ func StreamChatForTest(ctx context.Context, url, key, prompt string, client *htt
 	return h.streamChat(ctx, "", prompt, nil)
 }
 
+func StreamInboundChatForTest(ctx context.Context, url, key, appID, messageID, sessionID, prompt string, client *http.Client) (string, error) {
+	h := &Handler{appID: appID, piAgentURL: url, piAgentAPIKey: key, httpClient: client}
+	return h.streamChat(ctx, sessionID, prompt, nil, h.messageRequestID(messageID))
+}
+
 // StreamChatWithUpdatesForTest captures card progress without calling Feishu.
 func StreamChatWithUpdatesForTest(ctx context.Context, url, key, prompt string, client *http.Client, onUpdate func(string)) (string, error) {
 	card := testCard(func(r *http.Request) (*http.Response, error) {
