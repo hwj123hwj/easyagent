@@ -140,6 +140,6 @@ func TestComputerToolSchemaAndApproval(t *testing.T) {
 	require.ErrorContains(t, err, "action")
 
 	// Malformed control batches are rejected too.
-	_, err = tool.Validate(json.RawMessage(`{"action":"perform_action"}`))
+	_, err = tool.Validate(json.RawMessage(`{"action":"perform_action","bundle_id":"test.editor","pid":100,"window_id":200}`))
 	require.ErrorContains(t, err, "actions 数组")
 }
