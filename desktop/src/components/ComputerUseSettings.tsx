@@ -5,7 +5,7 @@ import { parseComputerSettings, type ComputerSettings } from "../client/computer
 
 const RISK_BANNER =
   "Computer use 功能属于测试阶段，而且对模型性能要求较高，请在知晓所有风险后开启。" +
-  "macOS 14 及以上的桌面安装包已内置电脑控制，无需配置 MCP。首次使用请授予辅助功能和屏幕录制权限；只读取和操作指定应用窗口，可在后台运行；你可继续使用其他应用。目标窗口的截图和状态会提供给当前会话的模型。";
+  "macOS 14 及以上的桌面安装包已内置电脑控制，无需配置 MCP。首次使用请授予辅助功能和屏幕录制权限；只读取和操作指定应用窗口，支持辅助功能控件的后台操作；未适配控件会报错。你可继续使用其他应用。目标窗口的截图和状态会提供给当前会话的模型。";
 
 function StatusRow({
   label,

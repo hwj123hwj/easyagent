@@ -183,8 +183,8 @@ func (t *Tool) Name() string { return "computer" }
 // Description tells the model when and how to use the tool.
 func (t *Tool) Description() string {
 	return "macOS 后台应用控制（实验）。先 list_apps 获取 bundle_id、pid、window_id；后续动作必须携带这三个目标标识。" +
-		"screenshot 只截指定窗口（即使被其他应用遮挡）；get_app_state 只读指定窗口；perform_action 向目标进程发送 click/type/key/scroll/wait，最多 " + fmt.Sprint(maxActionSteps) + " 个动作，遵守审批策略。" +
-		"坐标是目标窗口左上角为原点的逻辑像素。先观察再操作；输入前先点击目标窗口的可编辑区域。窗口关闭、身份变化或不支持后台操作时停止并报告，不能激活应用或改用全局键鼠。用户可继续使用其他应用，但不要同时编辑同一目标窗口。"
+		"screenshot 只截指定窗口（即使被其他应用遮挡）；get_app_state 只读指定窗口；perform_action 通过目标窗口的辅助功能控件执行 click/type/scroll，普通按键发往目标进程；支持 key/wait，最多 " + fmt.Sprint(maxActionSteps) + " 个动作，遵守审批策略。" +
+		"坐标是目标窗口左上角为原点的逻辑像素。先观察再操作；文本点击与随后的选择、输入应放在同一动作批，避免依赖应用焦点。未适配的控件会明确报错。窗口关闭、身份变化或不支持后台操作时停止并报告，不能激活应用或改用全局键鼠。用户可继续使用其他应用，但不要同时编辑同一目标窗口。"
 }
 
 // Parameters implements agent.Tool (map-based JSON Schema).
@@ -215,8 +215,8 @@ func (t *Tool) Parameters() map[string]any {
 						"y":    map[string]any{"type": "integer", "description": "click 系列必填：目标窗口内坐标 y"},
 						"text": map[string]any{"type": "string", "description": "type 必填：要输入的文本"},
 						"key":  map[string]any{"type": "string", "description": "key 必填：按键或组合键，如 cmd+s、enter"},
-						"dx":   map[string]any{"type": "integer", "description": "scroll 可选：水平滚动量"},
-						"dy":   map[string]any{"type": "integer", "description": "scroll 可选：垂直滚动量"},
+						"dx":   map[string]any{"type": "integer", "description": "scroll 可选：水平滚动量（正向右，按滚动区宽度换算位置增量）"},
+						"dy":   map[string]any{"type": "integer", "description": "scroll 可选：垂直滚动量（正向下，按滚动区高度换算位置增量）"},
 						"ms":   map[string]any{"type": "integer", "description": "wait 可选：等待毫秒数（<=5000）"},
 					},
 					"required": []string{"type"},
@@ -336,7 +336,7 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 			return agent.ToolResult{IsError: true, Content: "键鼠操作未完成: " + string(out)}, nil
 		}
 		t.recordControlledApp(out)
-		return agent.ToolResult{Content: fmt.Sprintf("已执行 %d 个目标窗口动作: %s", len(batch.Actions), out)}, nil
+		return agent.ToolResult{Content: fmt.Sprintf("已提交 %d 个目标窗口动作，请重新观察确认实际效果: %s", len(batch.Actions), out)}, nil
 	}
 	return agent.ToolResult{IsError: true, Content: fmt.Sprintf("未知 action %q", input.Action)}, nil
 }
