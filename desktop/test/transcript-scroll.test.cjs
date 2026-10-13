@@ -73,10 +73,17 @@ function fixture() {
       if (match) return match;
     }
   };
-  let tree;
+  let tree, renderedRows;
   const render = () => {
     cursor = 0; effects = [];
     tree = module.exports.ChatPane({ view });
+    renderedRows = [];
+    const collect = node => {
+      if (!node || typeof node !== "object") return;
+      if (node.props?.row) renderedRows.push(node.props.row.id);
+      for (const child of [node.props?.children].flat(Infinity)) collect(child);
+    };
+    collect(tree);
     const pane = find(tree, (node) => node.props?.className === 'pane-body personal-transcript-scroll');
     pane.props.ref.current = el;
     for (const fn of effects) fn();
@@ -85,6 +92,8 @@ function fixture() {
   render();
   return {
     el, frames, render,
+    switchTo: next => { view = next; },
+    renderedRows: () => renderedRows,
     hasJump: () => !!find(tree, (node) => node.props?.className === 'jump-latest'),
     jump: () => find(tree, (node) => node.props?.className === 'jump-latest').props.onClick(),
     measure: (id, height) => find(tree, (node) => node.props?.row)?.props.measure(id, height),
@@ -132,4 +141,49 @@ test('manual upward input cancels scheduled jump-to-latest frames', () => {
   f.el.scrollTop -= 24; const readingTop = f.el.scrollTop; pane.onScroll();
   while (f.frames.length) f.frames.shift()();
   assert.equal(f.el.scrollTop, readingTop);
+});
+
+function longView(id, count = 10000) {
+  return { meta: { id, cwd: '/qa' }, phase: 'idle', density: 'normal',
+    transcript: Array.from({ length: count }, (_, i) => ({ kind: 'assistant', id: 'row-' + i, text: 'answer' })) };
+}
+
+test('a cold long session mounts its tail immediately instead of rendering the previous session viewport', () => {
+  const f = fixture();
+  f.switchTo(longView('long'));
+  f.el.scrollHeight = 1000000;
+  f.render();
+  assert.ok(f.renderedRows().length < 25);
+  assert.ok(f.renderedRows().every(id => Number(id.slice(4)) > 9900), 'first render must start at the new session tail');
+});
+
+test('restored reading position selects the correct rows on the first render after switching', () => {
+  const f = fixture();
+  f.switchTo(longView('reading', 100)); f.el.scrollHeight = 10000; f.render();
+  let pane = f.render(); pane.onWheel({ deltaY: -8000 });
+  f.el.scrollTop = 1000; pane.onScroll(); f.render();
+  f.switchTo(longView('other', 1000)); f.el.scrollHeight = 100000; f.render(); f.render();
+  f.switchTo(longView('reading', 100)); f.el.scrollHeight = 10000; f.render();
+  assert.ok(f.renderedRows().includes('row-10'), 'saved reading rows mount without rendering the previous tail');
+  assert.equal(f.el.scrollTop, 1000);
+});
+
+test('history row IDs reused by another session do not reuse its measured heights', () => {
+  const f = fixture();
+  f.measure('row-0', 50000); f.render();
+  f.switchTo(longView('different', 100)); f.el.scrollHeight = 10000; f.render();
+  assert.ok(f.renderedRows().includes('row-99'), 'another session must use its own estimates');
+});
+
+
+test('saved reading intent survives an empty loading view until history arrives', () => {
+  const f = fixture();
+  f.switchTo(longView('restoring', 100)); f.el.scrollHeight = 10000; f.render();
+  let pane = f.render(); pane.onWheel({ deltaY: -8000 });
+  f.el.scrollTop = 1000; pane.onScroll(); f.render();
+  f.switchTo(longView('other', 1000)); f.el.scrollHeight = 100000; f.render();
+  f.switchTo(longView('restoring', 0)); f.el.scrollHeight = 600; f.render(); f.render();
+  f.switchTo(longView('restoring', 100)); f.el.scrollHeight = 10000; f.render();
+  assert.ok(f.renderedRows().includes('row-10'));
+  assert.equal(f.el.scrollTop, 1000, 'empty loading DOM must not erase the saved reading position');
 });

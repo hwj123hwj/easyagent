@@ -44,7 +44,7 @@ export function ChatPane({ view }: { view: SessionView }) {
     lastScrollTop = useRef(0),
     pendingHeightAdjustment = useRef(0),
     previous = useRef("");
-  const [viewport, setViewport] = useState({ top: 0, height: 600 }),
+  const [viewport, setViewport] = useState({ key: "", top: 0, height: 600, hasRows: false }),
     [version, setVersion] = useState(0),
     [jump, setJump] = useState(false);
   const rows = useMemo(() => {
@@ -58,12 +58,15 @@ export function ChatPane({ view }: { view: SessionView }) {
     }
     return result;
   }, [view.transcript]);
+  // Persist measurements per session/density; persisted history IDs repeat
+  // across sessions (history-0, history-1, ...).
+  const measurementKey = positionKey + "\0" + view.density + "\0";
   const offsets = useMemo(() => {
     const result = [0];
     for (const row of rows)
       result.push(
         result.at(-1)! +
-          (heights.current.get(row.id) ||
+          (heights.current.get(measurementKey + row.id) ||
             (row.kind === "group"
               ? Math.min(420, 80 + row.items.length * 40)
               : row.kind === "assistant"
@@ -71,7 +74,17 @@ export function ChatPane({ view }: { view: SessionView }) {
                 : 84)),
       );
     return result;
-  }, [rows, version]);
+  }, [rows, version, measurementKey]);
+  const hasRows = rows.length > 0;
+  const syncViewport = useCallback((el: HTMLDivElement) => {
+    const top = el.scrollTop, height = el.clientHeight;
+    setViewport(current => current.key === positionKey && current.top === top &&
+      current.height === height && current.hasRows === hasRows ? current :
+      { key: positionKey, top, height, hasRows });
+  }, [positionKey, hasRows]);
+  const rowIndices = useMemo(() => new Map(rows.map((row, i) => [row.id, i])), [rows]);
+  const layout = useRef({ offsets, rowIndices, measurementKey });
+  layout.current = { offsets, rowIndices, measurementKey };
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
@@ -102,10 +115,7 @@ export function ChatPane({ view }: { view: SessionView }) {
     if (index < 0) return;
     follow.current = false;
     container.current.scrollTop = Math.max(0, offsets[index] - 40);
-    setViewport({
-      top: container.current.scrollTop,
-      height: container.current.clientHeight,
-    });
+    syncViewport(container.current);
     setJump(true);
     const frame = requestAnimationFrame(() => {
       const item = Array.from(
@@ -117,13 +127,20 @@ export function ChatPane({ view }: { view: SessionView }) {
     });
     return () => cancelAnimationFrame(frame);
   }, [findOpen, match?.itemId, match?.offset]);
+  // Select the destination window before mounting Markdown/tools. Waiting for
+  // the layout effect renders the previous viewport first, then throws it away.
+  const restoring = viewport.key !== positionKey || (!viewport.hasRows && hasRows);
+  const saved = positions.get(positionKey);
+  const renderTop = restoring
+    ? ((saved?.follow ?? true) ? Math.max(0, offsets.at(-1)! - viewport.height) : saved!.top)
+    : viewport.top;
   let start = 0;
-  while (start < rows.length && offsets[start + 1] < viewport.top - 600)
+  while (start < rows.length && offsets[start + 1] < renderTop - 600)
     start++;
   let end = start;
   while (
     end < rows.length &&
-    offsets[end] < viewport.top + viewport.height + 600
+    offsets[end] < renderTop + viewport.height + 600
   )
     end++;
   const onScroll = useCallback(() => {
@@ -138,13 +155,13 @@ export function ChatPane({ view }: { view: SessionView }) {
         el.scrollHeight - el.scrollTop - el.clientHeight <= 2);
     lastScrollTop.current = el.scrollTop;
     setJump(!follow.current);
-    setViewport({ top: el.scrollTop, height: el.clientHeight });
+    syncViewport(el);
     positions.set(positionKey, { top: el.scrollTop, follow: follow.current });
-  }, [positionKey]);
+  }, [positionKey, syncViewport]);
   useLayoutEffect(() => {
     const el = container.current;
     if (!el) return;
-    if (previous.current !== positionKey) {
+    if (previous.current !== positionKey || restoring) {
       jumpingToLatest.current = false;
       pendingHeightAdjustment.current = 0;
       const saved = positions.get(positionKey);
@@ -157,21 +174,22 @@ export function ChatPane({ view }: { view: SessionView }) {
       el.scrollTop += pendingHeightAdjustment.current;
     pendingHeightAdjustment.current = 0;
     lastScrollTop.current = el.scrollTop;
-    setViewport({ top: el.scrollTop, height: el.clientHeight });
+    syncViewport(el);
     setJump(!follow.current);
-  }, [positionKey, view.transcript, offsets]);
+    if (hasRows) positions.set(positionKey, { top: el.scrollTop, follow: follow.current });
+  }, [positionKey, view.transcript, offsets, syncViewport, restoring, hasRows]);
   useEffect(() => {
     const el = container.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
       if (follow.current) el.scrollTop = el.scrollHeight;
-      setViewport({ top: el.scrollTop, height: el.clientHeight });
+      syncViewport(el);
     });
     observer.observe(el);
     // Result cards and expanded tools can resize independently of text deltas.
     if (el.firstElementChild) observer.observe(el.firstElementChild);
     return () => observer.disconnect();
-  }, []);
+  }, [syncViewport]);
   useEffect(() => {
     const listener = (event: Event) => {
       const path = (event as CustomEvent).detail?.path;
@@ -183,18 +201,20 @@ export function ChatPane({ view }: { view: SessionView }) {
   const measure = useCallback(
     (id: string, height: number) => {
       const el = container.current;
-      const i = rows.findIndex((r) => r.id === id);
-      const old = heights.current.get(id) ?? offsets[i + 1] - offsets[i];
+      const { offsets, rowIndices, measurementKey } = layout.current;
+      const i = rowIndices.get(id);
+      if (i === undefined) return;
+      const old = heights.current.get(measurementKey + id) ?? offsets[i + 1] - offsets[i];
       if (Math.abs(old - height) < 1) return;
       // First-mounted rows also replace estimates. Apply their correction
       // after the new spacers commit, so scrollTop is not clamped against the
       // previous scrollHeight and the current reading position stays put.
       if (el && !follow.current && i >= 0 && offsets[i + 1] <= el.scrollTop)
         pendingHeightAdjustment.current += height - old;
-      heights.current.set(id, height);
+      heights.current.set(measurementKey + id, height);
       setVersion((v) => v + 1);
     },
-    [rows, offsets],
+    [],
   );
   const loading = useStore((s) => s.loadingSession === view.meta.id);
   return (
@@ -335,7 +355,7 @@ export function ChatPane({ view }: { view: SessionView }) {
           <div style={{ height: offsets[start] }} aria-hidden="true" />
           {rows.slice(start, end).map((row) => (
             <MeasuredRow
-              key={row.id}
+              key={positionKey + "\0" + row.id}
               row={row}
               measure={measure}
               cwd={view.meta.cwd}
@@ -422,7 +442,7 @@ export function ChatPane({ view }: { view: SessionView }) {
     </div>
   );
 }
-function MeasuredRow({
+const MeasuredRow = memo(function MeasuredRow({
   row,
   measure,
   cwd,
@@ -472,7 +492,7 @@ function MeasuredRow({
       )}
     </div>
   );
-}
+});
 function ToolGroup({
   value,
   density,

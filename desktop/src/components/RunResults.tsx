@@ -95,7 +95,6 @@ function AggregatedRunCard({
   sessionId: string;
 }) {
   const profile = useStore((s) => s.selectedProfile);
-  const revision = useStore((s) => s.reviewRevision);
   const [open, setOpen] = useState(true);
   const [all, setAll] = useState(false);
   const [diffs, setDiffs] = useState<Map<string, { additions: number; deletions: number }>>();
@@ -169,7 +168,7 @@ function AggregatedRunCard({
     return () => {
       alive = false;
     };
-  }, [open, sessionId, runs, profile, revision, attempt]);
+  }, [open, sessionId, runs, profile, attempt]);
 
   const stats = useMemo(() => {
     if (!diffs) return undefined;
@@ -324,6 +323,10 @@ export function RunResults({ view }: { view: SessionView }) {
   useEffect(() => {
     let alive = true;
     setError("");
+    if (view.meta.id === "__new__") {
+      setResult(undefined);
+      return;
+    }
     void apiRequest<RunFileSet[]>(
       "GET",
       `/sessions/${encodeURIComponent(view.meta.id)}/run-files`,
@@ -339,9 +342,11 @@ export function RunResults({ view }: { view: SessionView }) {
     };
   }, [key, view.meta.id, view.run?.state, revision, attempt]);
 
-  const changed = (result?.key === key ? result.runs : [])
+  // Keep this reference stable: parent scroll/stream renders must not restart
+  // the card's requests and diff calculation for every completed run.
+  const changed = useMemo(() => (result?.key === key ? result.runs : [])
     .filter((run) => run.complete && run.files.length)
-    .slice(-20);
+    .slice(-20), [result, key]);
 
   if (!changed.length && !error) return null;
 
