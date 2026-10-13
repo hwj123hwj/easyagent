@@ -9,14 +9,15 @@ import { Icon } from "./Icon";
 function inspectJSON(value: unknown) {
   return JSON.stringify(value, (key, value) => key === "data" && typeof value === "string" ? `[图片数据：${value.length} 个 Base64 字符，界面省略]` : value, 2);
 }
-export function ContextInspector({ view, onClose, onBusy }: { view: SessionView; onClose: () => void; onBusy: (busy: boolean) => void }) {
+export function ContextInspector({ view, onClose }: { view: SessionView; onClose: () => void }) {
   const profile = useStore(state => state.selectedProfile), id = view.meta.id;
   const active = isActiveRun(view.run);
   const [snapshot, setSnapshot] = useState<ContextSnapshot>(), [error, setError] = useState("");
-  const [loading, setLoading] = useState(true), [compacting, setCompacting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const compacting = useStore(state => !!state.compacting[id]);
   const [instructions, setInstructions] = useState(""), [revision, setRevision] = useState(0);
   const generation = useRef(0), heading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => { heading.current?.focus(); return () => onBusy(false); }, []);
+  useEffect(() => { heading.current?.focus(); }, []);
   useEffect(() => {
     const current = ++generation.current;
     setSnapshot(undefined); setError(""); setLoading(!active);
@@ -28,14 +29,11 @@ export function ContextInspector({ view, onClose, onBusy }: { view: SessionView;
   }, [id, profile, active, revision]);
   async function compact() {
     const current = generation.current;
-    setError(""); setCompacting(true); onBusy(true);
+    setError("");
     try {
-      await apiRequest("POST", `/sessions/${encodeURIComponent(id)}/compact`, { custom_instructions: instructions.trim() });
-      if (generation.current !== current) return;
-      await useStore.getState().refreshSessionInfo(id);
+      await useStore.getState().compactSession(id, instructions.trim());
       if (generation.current === current) { setInstructions(""); setRevision(value => value + 1); }
     } catch (error) { if (generation.current === current) setError((error as Error).message); }
-    finally { setCompacting(false); onBusy(false); }
   }
   return <section className="context-inspector" aria-label="上下文检查" onKeyDown={event => { if (event.key === "Escape" && !compacting) { event.stopPropagation(); onClose(); } }}>
     <header><h3 ref={heading} tabIndex={-1}>当前上下文</h3><button type="button" className="icon-btn" disabled={compacting} aria-label="关闭上下文检查" onClick={onClose}><Icon name="x" size={14} /></button></header>

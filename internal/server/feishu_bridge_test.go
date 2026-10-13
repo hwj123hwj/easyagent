@@ -169,6 +169,23 @@ func TestFeishuBridgeRouteUnmanagedAndManaged(t *testing.T) {
 	if w = request("POST", "/settings/feishu/bridge/restart"); w.Code != 200 {
 		t.Fatalf("POST restart = %d: %s", w.Code, w.Body.String())
 	}
+	var restarted map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&restarted); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"managed", "local_mode", "app_id", "secret_configured"} {
+		if restarted[key] != status[key] {
+			t.Fatalf("restart lost %s: %v", key, restarted)
+		}
+	}
+	bridge, ok := restarted["bridge"].(map[string]any)
+	if !ok || bridge["running"] != true || bridge["started_at"] == "" {
+		t.Fatalf("invalid bridge status: %v", restarted)
+	}
+	if strings.Contains(w.Body.String(), "secret_test") {
+		t.Fatal("restart leaked secret")
+	}
+	defer s.localBridge.cancel()
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):

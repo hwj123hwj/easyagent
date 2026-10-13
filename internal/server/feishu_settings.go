@@ -176,10 +176,15 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 				http.Error(w, `{"error":"服务尚未开始监听，无法启动桥接"}`, http.StatusServiceUnavailable)
 				return
 			}
-			status, err := s.localBridge.restart(s.baseURL, s.localBridgeRun())
+			_, err := s.localBridge.restart(s.baseURL, s.localBridgeRun())
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
+				return
+			}
+			status, err := s.localFeishuStatus()
+			if err != nil {
+				http.Error(w, `{"error":"无法读取飞书凭据"}`, http.StatusInternalServerError)
 				return
 			}
 			json.NewEncoder(w).Encode(status)
@@ -187,25 +192,12 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 		}
 		if f.envFile == "" || f.ownerFile == "" {
 			if r.Method == "GET" && r.URL.Path == "/settings/feishu" {
-				// Even if systemd is not managing the bridge, expose saved local credentials if present
-				creds, err := feishu.LoadCredentials()
+				status, err := s.localFeishuStatus()
 				if err != nil {
-					http.Error(w, `{"error":"无法读取飞书凭据"}`, 500)
+					http.Error(w, `{"error":"无法读取飞书凭据"}`, http.StatusInternalServerError)
 					return
 				}
-				appID := ""
-				secretConfigured := false
-				if creds != nil {
-					appID = creds.AppID
-					secretConfigured = creds.AppSecret != ""
-				}
-				json.NewEncoder(w).Encode(map[string]any{
-					"managed":           false,
-					"app_id":            appID,
-					"secret_configured": secretConfigured,
-					"local_mode":        true,
-					"bridge":            s.localBridge.status(),
-				})
+				json.NewEncoder(w).Encode(status)
 				return
 			}
 			http.Error(w, `{"error":"此服务器未启用飞书配置管理"}`, http.StatusServiceUnavailable)
@@ -265,4 +257,20 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 	mux.HandleFunc("POST /settings/feishu/bridge/restart", handler)
 
 	registerFeishuQR(mux, s.apiKey, f.envFile != "" || f.ownerFile != "")
+}
+
+// Restart and GET expose the same status contract, without returning secrets.
+func (s *Server) localFeishuStatus() (map[string]any, error) {
+	creds, err := feishu.LoadCredentials()
+	if err != nil {
+		return nil, err
+	}
+	appID := ""
+	secretConfigured := false
+	if creds != nil {
+		appID = creds.AppID
+		secretConfigured = creds.AppSecret != ""
+	}
+	return map[string]any{"managed": false, "local_mode": true, "app_id": appID,
+		"secret_configured": secretConfigured, "bridge": s.localBridge.status()}, nil
 }

@@ -59,7 +59,7 @@ export function SessionView() {
         </div>
       </div>
 
-      <PromptBar view={view} />
+      <PromptBar key={profile + ":" + view.meta.id} view={view} />
 
       {bottomOpen && (
           <Resizer
