@@ -503,7 +503,7 @@ func (h *Handler) handleWithCard(ctx context.Context, chatKey, messageID, sessio
 	if err != nil {
 		slog.Error("stream chat failed", "error", err)
 		metrics.Status = "Error"
-		fullText = strings.TrimSpace(fullText + "\n\n❌ 处理出错，请重试")
+		fullText = strings.TrimSpace(fullText + "\n\n❌ 处理出错，请重试：`" + errorDetail(err) + "`")
 	}
 	if finalizeErr := card.Finalize(finalCtx, fullText, metrics); finalizeErr != nil {
 		slog.Warn("card finalize failed", "error", finalizeErr)
@@ -527,7 +527,7 @@ func (h *Handler) handleWithTextFallback(ctx context.Context, chatKey, messageID
 	fullText, err := h.streamChat(ctx, sessionID, text, nil)
 	if err != nil {
 		slog.Error("stream chat failed", "error", err)
-		errMsg := "❌ 处理出错，请重试"
+		errMsg := "❌ 处理出错，请重试：`" + errorDetail(err) + "`"
 		if botMsgID != "" {
 			_ = h.client.UpdateMessage(ctx, botMsgID, errMsg)
 		} else {
@@ -1007,3 +1007,17 @@ func (h *Handler) forwardCommand(ctx context.Context, chatKey, text string) stri
 
 // SetOwnerAccess must be configured before handling inbound events.
 func (h *Handler) SetOwnerAccess(access *OwnerAccess) { h.access = access }
+
+// errorDetail 把核心返回的错误压成单行摘要（截断到 200 字符），让飞书侧
+// 的失败卡片能透出真实原因（如 unknown model / 上游超时），而不是只有
+// 一句「处理出错」。
+func errorDetail(err error) string {
+	msg := strings.Join(strings.Fields(err.Error()), " ")
+	if runes := []rune(msg); len(runes) > 200 {
+		msg = string(runes[:200]) + "…"
+	}
+	if msg == "" {
+		return "未知错误"
+	}
+	return msg
+}

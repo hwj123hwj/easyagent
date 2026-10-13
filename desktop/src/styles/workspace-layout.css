@@ -1081,6 +1081,13 @@
 .file-change-list {
   border-top: 1px solid var(--border);
 }
+.file-change-incomplete {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--amber, #f5a623);
+  border-bottom: 1px solid var(--border);
+}
 .file-change-row {
   display: flex;
   align-items: center;

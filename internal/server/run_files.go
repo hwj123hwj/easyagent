@@ -28,6 +28,24 @@ import (
 const snapshotFileLimit = 4 * 1024 * 1024
 const snapshotTotalLimit = 32 * 1024 * 1024
 
+// 快照覆盖不完整的两个标记（skipped 中出现即代表 begin/end 覆盖的文件集合
+// 不可比对）。多仓库根目录退化成文件系统遍历时尤其常见。
+const (
+	scanLimitMessage     = "扫描达到上限"
+	snapshotLimitMessage = "快照达到文件或总大小上限"
+)
+
+// truncatedSnapshot 报告该快照对是否被截断：此时单侧出现的「新增/删除」
+// 可能只是另一次遍历没走到，不能当作真实的文件变更。
+func truncatedSnapshot(skipped []string) bool {
+	for _, s := range skipped {
+		if s == scanLimitMessage || s == snapshotLimitMessage {
+			return true
+		}
+	}
+	return false
+}
+
 type fileState struct {
 	Hash string      `json:"hash"`
 	Mode fs.FileMode `json:"mode"`
@@ -124,7 +142,7 @@ func (s *Server) snapshotFiles(root string) (map[string]fileState, []string) {
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			visited++
 			if visited > 5000 || ctx.Err() != nil {
-				skipped = append(skipped, "扫描达到上限")
+				skipped = append(skipped, scanLimitMessage)
 				return fs.SkipAll
 			}
 			if err != nil {
@@ -158,7 +176,7 @@ func (s *Server) snapshotFiles(root string) (map[string]fileState, []string) {
 			continue
 		}
 		if len(files) >= 2000 || total >= snapshotTotalLimit {
-			skipped = append(skipped, "快照达到文件或总大小上限")
+			skipped = append(skipped, snapshotLimitMessage)
 			break
 		}
 		path, err := securePath(root, rel)
@@ -303,6 +321,10 @@ func (s *Server) loadFiles(sessionID, runID string) (*runFiles, error) {
 	return &f, nil
 }
 func (s *Server) changes(f *runFiles) []runFileChange {
+	// 快照截断时两次遍历覆盖的集合不一致：单侧出现的「新增/删除」很可能
+	// 只是另一次遍历没走到（#123），不作为变更展示；双侧都在且内容变化的
+	// 条目仍然可信。
+	truncated := truncatedSnapshot(f.Skipped)
 	keys := map[string]bool{}
 	for p := range f.Before {
 		keys[p] = true
@@ -315,6 +337,9 @@ func (s *Server) changes(f *runFiles) []runFileChange {
 		before, b := f.Before[path]
 		after, a := f.After[path]
 		if before == after && b == a {
+			continue
+		}
+		if truncated && (!b || !a) {
 			continue
 		}
 		kind := "modified"
@@ -377,7 +402,7 @@ func (s *Server) getRunFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"run_id": f.RunID, "workspace": f.Workspace, "complete": f.Complete, "skipped": f.Skipped, "files": s.changes(f)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"run_id": f.RunID, "workspace": f.Workspace, "complete": f.Complete, "incomplete": truncatedSnapshot(f.Skipped), "skipped": f.Skipped, "files": s.changes(f)})
 }
 func (s *Server) undoRunFile(w http.ResponseWriter, r *http.Request) {
 	var request struct {
