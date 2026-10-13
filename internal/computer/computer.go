@@ -69,11 +69,15 @@ func CheckPermissions(ctx context.Context) (granted bool, missing []string, err 
 		return false, []string{"电脑控制组件启动失败（需要 macOS 14+）"}, err
 	}
 	var status struct {
-		Accessibility bool `json:"accessibility"`
-		ScreenRecord  bool `json:"screen_recording"`
+		Accessibility   bool `json:"accessibility"`
+		ScreenRecord    bool `json:"screen_recording"`
+		ProtocolVersion int  `json:"protocol_version"`
 	}
 	if err := json.Unmarshal(out, &status); err != nil {
 		return false, []string{"helper 输出无法解析"}, err
+	}
+	if status.ProtocolVersion != 2 {
+		return false, []string{"电脑控制组件版本不兼容，请更新内置 helper"}, fmt.Errorf("需要 helper 协议 2，收到 %d", status.ProtocolVersion)
 	}
 	if !status.Accessibility {
 		missing = append(missing, "辅助功能 (Accessibility)")
@@ -418,6 +422,10 @@ func (t *Tool) ApprovedApps() []string {
 // runHelper shells out one CLI invocation per action — stateless and simple,
 // matching the daemon convention without holding a long-lived pipe in PR-1.
 func runHelper(ctx context.Context, tool string, args any) (json.RawMessage, error) {
+	return runHelperAtPath(ctx, HelperPath(), tool, args)
+}
+
+func runHelperAtPath(ctx context.Context, path, tool string, args any) (json.RawMessage, error) {
 	cmdArgs := []string{"tool", tool}
 	if args != nil {
 		payload, err := json.Marshal(args)
@@ -428,7 +436,17 @@ func runHelper(ctx context.Context, tool string, args any) (json.RawMessage, err
 	}
 	c, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(c, HelperPath(), cmdArgs...)
+	// Old helpers ignore target fields and inject globally. Never invoke their tool command.
+	versionCtx, versionCancel := context.WithTimeout(c, 5*time.Second)
+	version, versionErr := exec.CommandContext(versionCtx, path, "--version").Output()
+	versionCancel()
+	var protocol struct {
+		Version int `json:"protocol_version"`
+	}
+	if versionErr != nil || json.Unmarshal(version, &protocol) != nil || protocol.Version != 2 {
+		return nil, fmt.Errorf("电脑控制组件不支持后台目标协议 2，请更新 helper；已拒绝调用")
+	}
+	cmd := exec.CommandContext(c, path, cmdArgs...)
 	var diagnostic bytes.Buffer
 	cmd.Stderr = &diagnostic
 	out, err := cmd.Output()
