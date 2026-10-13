@@ -491,8 +491,12 @@ func run() async throws {
 }
 // Establish the public AppKit/WindowServer connection before single-window capture.
 // A CLI process has no NSApplication by default; the filter otherwise asserts CGS_REQUIRE_INIT.
-let helperApplication = NSApplication.shared
-helperApplication.setActivationPolicy(.prohibited)
+// Metadata and offline validation must remain headless, including inside a mounted DMG.
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "tool",
+   ["screenshot", "perform_action"].contains(CommandLine.arguments[2]) {
+    let helperApplication = NSApplication.shared
+    helperApplication.setActivationPolicy(.prohibited)
+}
 
 Task { @MainActor in
     do { try await run(); exit(0) }
