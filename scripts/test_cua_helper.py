@@ -22,6 +22,12 @@ class NativeContract(unittest.TestCase):
             self.assertNotEqual(p.returncode,0)
         p = subprocess.run([HELPER,'validate-target','--args',json.dumps({'bundle_id':'test.editor','pid':1,'window_id':4294967295})],capture_output=True,text=True)
         self.assertEqual(p.returncode,0)
+    def test_word_selection_uses_utf16_and_preserves_emoji(self):
+        for text,index,expected in [('hello world',2,(0,5)),('中文😀 abc',2,(2,2)),('中文😀 abc',3,(2,2)),('中文😀 abc',6,(5,3)),('abc',3,(3,0))]:
+            with self.subTest(text=text,index=index):
+                p=subprocess.run([HELPER,'validate-word-selection','--args',json.dumps({'text':text,'index':index})],capture_output=True,text=True,check=True)
+                result=json.loads(p.stdout)
+                self.assertEqual((result['location'],result['length']),expected)
     def test_version_contract(self):
         p = subprocess.run([HELPER,"--version"],capture_output=True,text=True,check=True)
         version=json.loads(p.stdout)

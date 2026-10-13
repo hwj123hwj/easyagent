@@ -149,7 +149,9 @@ func post(_ event: CGEvent?, target: Target) throws {
     event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(target.window.windowID))
     event.postToPid(target.app.processIdentifier)
 }
-func perform(_ actions: [[String: Any]], target: Target, window: AXUIElement) throws {
+func perform(_ actions: [[String: Any]], target: Target, window: AXUIElement) throws -> [String] {
+    var methods = [String]()
+    var textTarget: AXUIElement?
     for action in actions {
         // Permission may be revoked between steps; stop rather than claiming success.
         try requireAccess()
@@ -166,29 +168,25 @@ func perform(_ actions: [[String: Any]], target: Target, window: AXUIElement) th
         switch type {
         case "click", "double_click", "right_click":
             let point = CGPoint(x: target.bounds.minX + Double(try integer(action, "x")), y: target.bounds.minY + Double(try integer(action, "y")))
-            let right = type == "right_click"
-            for index in 1...(type == "double_click" ? 2 : 1) {
-                for kind: CGEventType in [right ? .rightMouseDown : .leftMouseDown, right ? .rightMouseUp : .leftMouseUp] {
-                    let event = CGEvent(mouseEventSource: nil, mouseType: kind, mouseCursorPosition: point, mouseButton: right ? .right : .left)
-                    event?.setIntegerValueField(.mouseEventClickState, value: Int64(index))
-                    try post(event, target: target)
-                }
-                if type == "double_click" { Thread.sleep(forTimeInterval: 0.05) }
-            }
+            let selected = try clickControl(window: window, point: point, kind: type)
+            textTarget = selected
+            methods.append(selected == nil ? "ax_control_action" : "ax_text_selection")
         case "type":
-            try requireKeyboardWindow(target, window: window)
-            // AX replaces the target selection without the global clipboard or input focus.
-            let root = AXUIElementCreateApplication(target.app.processIdentifier)
-            if let raw = attribute(root, kAXFocusedUIElementAttribute), CFGetTypeID(raw) == AXUIElementGetTypeID() {
-                let field = raw as! AXUIElement
-                var settable = DarwinBoolean(false)
-                if AXUIElementIsAttributeSettable(field, kAXSelectedTextAttribute as CFString, &settable) == .success && settable.boolValue {
-                    guard AXUIElementSetAttributeValue(field, kAXSelectedTextAttribute as CFString, action["text"] as! CFString) == .success else {
-                        throw HelperError("目标应用拒绝后台文字输入")
-                    }
-                    continue
+            let field = try textTarget ?? focusedTextControl(target, window: window)
+            try rejectSecureControl(field)
+            var settable = DarwinBoolean(false)
+            if AXUIElementIsAttributeSettable(field, kAXSelectedTextAttribute as CFString, &settable) == .success && settable.boolValue {
+                guard AXUIElementSetAttributeValue(field, kAXSelectedTextAttribute as CFString, action["text"] as! CFString) == .success else {
+                    throw HelperError("目标应用拒绝后台文字输入")
                 }
+                methods.append("ax_selected_text")
+                continue
             }
+            // Process keyboard fallback is safe only when that exact control owns keyboard focus.
+            guard CFEqual(field, try focusedTextControl(target, window: window)) else {
+                throw HelperError("目标控件不支持后台文字编辑；不会输入到其他控件")
+            }
+            methods.append("process_unicode")
             let units = Array((action["text"] as! String).utf16)
             // CGEvent limits Unicode payload length. Avoid splitting surrogate pairs.
             var start = 0
@@ -205,20 +203,32 @@ func perform(_ actions: [[String: Any]], target: Target, window: AXUIElement) th
                 start = end
             }
         case "key":
-            try requireKeyboardWindow(target, window: window)
-            let (code, flags) = try key(action["key"] as! String)
-            for down in [true, false] {
-                let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
-                event?.flags = flags
-                try post(event, target: target)
+            let combo = action["key"] as! String
+            if combo == "cmd+a" {
+                let field = try textTarget ?? focusedTextControl(target, window: window)
+                try rejectSecureControl(field)
+                try setTextSelection(field, CFRange(location: 0, length: textLength(field)))
+                methods.append("ax_select_all")
+            } else {
+                try requireKeyboardWindow(target, window: window)
+                let (code, flags) = try key(combo)
+                for down in [true, false] {
+                    let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
+                    event?.flags = flags
+                    try post(event, target: target)
+                }
+                methods.append("process_keyboard")
             }
         case "scroll":
-            try post(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
-                             wheel1: Int32(try integer(action, "dy", default: 0)), wheel2: Int32(try integer(action, "dx", default: 0)), wheel3: 0), target: target)
-        case "wait": Thread.sleep(forTimeInterval: Double(try integer(action, "ms", default: 0)) / 1000)
+            try scrollControl(window, dx: integer(action, "dx", default: 0), dy: integer(action, "dy", default: 0))
+            methods.append("ax_scroll")
+        case "wait":
+            Thread.sleep(forTimeInterval: Double(try integer(action, "ms", default: 0)) / 1000)
+            methods.append("wait")
         default: throw HelperError("未知动作类型")
         }
     }
+    return methods
 }
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
@@ -255,6 +265,123 @@ func requireKeyboardWindow(_ target: Target, window: AXUIElement) throws {
         let element = raw as! AXUIElement
         if attribute(element, kAXSubroleAttribute) as? String == "AXSecureTextField" || attribute(element, kAXRoleAttribute) as? String == "AXSecureTextField" {
             throw HelperError("不向密码输入框发送文字或按键")
+        }
+    }
+}
+func rejectSecureControl(_ field: AXUIElement) throws {
+    if attribute(field, kAXRoleAttribute) as? String == "AXSecureTextField" || attribute(field, kAXSubroleAttribute) as? String == "AXSecureTextField" {
+        throw HelperError("不操作密码输入框")
+    }
+}
+func focusedTextControl(_ target: Target, window: AXUIElement) throws -> AXUIElement {
+    try requireKeyboardWindow(target, window: window)
+    let root = AXUIElementCreateApplication(target.app.processIdentifier)
+    guard let raw = attribute(root, kAXFocusedUIElementAttribute), CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+        throw HelperError("目标窗口没有可编辑控件；请把文本点击与输入放在同一动作批")
+    }
+    return raw as! AXUIElement
+}
+func textLength(_ field: AXUIElement) throws -> Int {
+    if let number = attribute(field, kAXNumberOfCharactersAttribute) as? NSNumber,
+       number.doubleValue >= 0, number.doubleValue <= Double(Int32.max), number.doubleValue.rounded() == number.doubleValue {
+        return number.intValue
+    }
+    if let value = attribute(field, kAXValueAttribute) as? String { return (value as NSString).length }
+    throw HelperError("目标控件没有可编辑文本")
+}
+func setTextSelection(_ field: AXUIElement, _ selection: CFRange) throws {
+    var range = selection
+    guard range.location >= 0, range.length >= 0, range.location + range.length <= (try textLength(field)),
+          let value = AXValueCreate(.cfRange, &range),
+          AXUIElementSetAttributeValue(field, kAXSelectedTextRangeAttribute as CFString, value) == .success,
+          let actual = attribute(field, kAXSelectedTextRangeAttribute), CFGetTypeID(actual) == AXValueGetTypeID() else {
+        throw HelperError("目标控件不支持后台文本选择；不会退回全局点击")
+    }
+    var observed = CFRange()
+    guard AXValueGetValue(actual as! AXValue, .cfRange, &observed), observed.location == range.location, observed.length == range.length else {
+        throw HelperError("目标控件未接受文本选择，请重新观察")
+    }
+}
+func wordSelection(_ text: String, index: Int) throws -> CFRange {
+    let source = text as NSString
+    guard index >= 0 && index <= source.length, source.length <= 500_000 else { throw HelperError("文本选择位置超出范围") }
+    if index == source.length { return CFRange(location: index, length: 0) }
+    var selected = source.rangeOfComposedCharacterSequence(at: index)
+    text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: [.byWords, .substringNotRequired]) { _, range, _, stop in
+        let word = NSRange(range, in: text)
+        if NSLocationInRange(index, word) { selected = word; stop = true }
+    }
+    return CFRange(location: selected.location, length: selected.length)
+}
+// Hit-test within this window's AX tree, regardless of another window covering it.
+func controlsAtPoint(_ window: AXUIElement, _ point: CGPoint) -> [AXUIElement] {
+    var nodes = [AXUIElement](), remaining = 150
+    let deadline = Date().addingTimeInterval(4)
+    func walk(_ node: AXUIElement, _ depth: Int) {
+        guard remaining > 0, depth <= 8, Date() < deadline else { return }
+        if let frame = axFrame(node), frame.width > 0, frame.height > 0, !frame.contains(point) { return }
+        remaining -= 1
+        if let children = attribute(node, kAXChildrenAttribute) as? [AXUIElement] {
+            for child in children.reversed() { walk(child, depth + 1) }
+        }
+        if axFrame(node)?.contains(point) == true { nodes.append(node) }
+    }
+    walk(window, 0)
+    return nodes
+}
+func hasAction(_ node: AXUIElement, _ action: String) -> Bool {
+    var names: CFArray?
+    return AXUIElementCopyActionNames(node, &names) == .success && (names as? [String] ?? []).contains(action)
+}
+func clickControl(window: AXUIElement, point: CGPoint, kind: String) throws -> AXUIElement? {
+    for node in controlsAtPoint(window, point) {
+        let role = attribute(node, kAXRoleAttribute) as? String ?? ""
+        if ["AXTextArea", "AXTextField", "AXSecureTextField"].contains(role) {
+            try rejectSecureControl(node)
+            var position = point
+            guard let value = AXValueCreate(.cgPoint, &position) else { throw HelperError("无法读取文本点击位置") }
+            var raw: CFTypeRef?
+            guard AXUIElementCopyParameterizedAttributeValue(node, kAXRangeForPositionParameterizedAttribute as CFString, value, &raw) == .success,
+                  let raw = raw, CFGetTypeID(raw) == AXValueGetTypeID() else {
+                throw HelperError("此文本控件不支持后台坐标定位，请使用应用接口")
+            }
+            var range = CFRange()
+            guard AXValueGetValue(raw as! AXValue, .cfRange, &range) else { throw HelperError("文本点击位置无效") }
+            if kind == "double_click" {
+                guard let text = attribute(node, kAXValueAttribute) as? String else { throw HelperError("无法读取单词选择范围") }
+                range = try wordSelection(text, index: range.location)
+            } else { range.length = 0 }
+            try setTextSelection(node, range)
+            if kind == "right_click" {
+                guard hasAction(node, kAXShowMenuAction), AXUIElementPerformAction(node, kAXShowMenuAction as CFString) == .success else {
+                    throw HelperError("此控件不支持后台菜单")
+                }
+            }
+            return node
+        }
+        let action = kind == "right_click" ? kAXShowMenuAction : kAXPressAction
+        if kind != "double_click", hasAction(node, action) {
+            guard AXUIElementPerformAction(node, action as CFString) == .success else { throw HelperError("目标控件拒绝后台操作") }
+            return nil
+        }
+    }
+    throw HelperError("目标位置没有支持后台操作的控件；不会退回全局鼠标")
+}
+func scrollControl(_ window: AXUIElement, dx: Int, dy: Int) throws {
+    guard let frame = axFrame(window) else { throw HelperError("目标窗口位置无效") }
+    let nodes = controlsAtPoint(window, CGPoint(x: frame.midX, y: frame.midY))
+    guard let area = nodes.first(where: { attribute($0, kAXRoleAttribute) as? String == "AXScrollArea" }), let viewport = axFrame(area) else {
+        throw HelperError("窗口中心没有支持后台操作的滚动区")
+    }
+    for (amount, name, extent) in [(dx, kAXHorizontalScrollBarAttribute, viewport.width), (dy, kAXVerticalScrollBarAttribute, viewport.height)] where amount != 0 {
+        guard let raw = attribute(area, name), CFGetTypeID(raw) == AXUIElementGetTypeID() else { throw HelperError("目标滚动方向不可用") }
+        let bar = raw as! AXUIElement
+        guard let current = attribute(bar, kAXValueAttribute) as? NSNumber else { throw HelperError("无法读取目标滚动位置") }
+        let low = (attribute(bar, kAXMinValueAttribute) as? NSNumber)?.doubleValue ?? 0
+        let high = (attribute(bar, kAXMaxValueAttribute) as? NSNumber)?.doubleValue ?? 1
+        let next = min(high, max(low, current.doubleValue + Double(amount) / max(1, extent) * (high - low)))
+        guard AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: next)) == .success else {
+            throw HelperError("此滚动区不支持后台滚动")
         }
     }
 }
@@ -327,6 +454,11 @@ func run() async throws {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { throw HelperError("系统设置地址无效") }
         guard NSWorkspace.shared.open(url) else { throw HelperError("无法打开系统权限设置") }
         try emit(["success": true])
+    case "validate-word-selection":
+        let input = try arguments(args)
+        guard let text = input["text"] as? String else { throw HelperError("需要文本") }
+        let range = try wordSelection(text, index: integer(input, "index"))
+        try emit(["location": range.location, "length": range.length])
     case "validate-target":
         _ = try targetIdentity(arguments(args))
         try emit(["success": true])
@@ -346,8 +478,8 @@ func run() async throws {
             let window = try axWindow(target)
             let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
             let pointer = CGEvent(source: nil)?.location
-            try perform(actions, target: target, window: window)
-            var result: [String: Any] = ["success": true, "target": target.identity, "background": foreground != target.app.processIdentifier,
+            let methods = try perform(actions, target: target, window: window)
+            var result: [String: Any] = ["success": true, "methods": methods, "target": target.identity, "background": foreground != target.app.processIdentifier,
                                         "foreground_unchanged": foreground == NSWorkspace.shared.frontmostApplication?.processIdentifier,
                                         "pointer_unchanged": pointer == CGEvent(source: nil)?.location]
             if actions.contains(where: { $0["type"] as? String != "wait" }) { result["controlled_app"] = target.app.bundleIdentifier ?? "" }
@@ -359,8 +491,12 @@ func run() async throws {
 }
 // Establish the public AppKit/WindowServer connection before single-window capture.
 // A CLI process has no NSApplication by default; the filter otherwise asserts CGS_REQUIRE_INIT.
-let helperApplication = NSApplication.shared
-helperApplication.setActivationPolicy(.prohibited)
+// Metadata and offline validation must remain headless, including inside a mounted DMG.
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "tool",
+   ["screenshot", "perform_action"].contains(CommandLine.arguments[2]) {
+    let helperApplication = NSApplication.shared
+    helperApplication.setActivationPolicy(.prohibited)
+}
 
 Task { @MainActor in
     do { try await run(); exit(0) }
