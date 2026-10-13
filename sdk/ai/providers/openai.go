@@ -236,6 +236,7 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 
 	textAccum := strings.Builder{}
 	textBlockStarted := false
+	terminalSeen := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -249,6 +250,7 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 			continue
 		}
 		if strings.HasPrefix(payload, "[DONE]") {
+			terminalSeen = true
 			break
 		}
 
@@ -304,6 +306,9 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 
 		// --- finish_reason ---
 		if choice.FinishReason != nil {
+			if *choice.FinishReason != "" {
+				terminalSeen = true
+			}
 			switch *choice.FinishReason {
 			case "stop":
 				partial.StopReason = ai.StopReasonStop
@@ -365,6 +370,11 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 	// 不装作正常完成（空消息会污染会话），交给调用方重试/报错
 	if !received {
 		return false, nil
+	}
+	// 正常 EOF 只说明 HTTP body 关闭，不能证明模型已完成；兼容单独
+	// finish_reason 或 [DONE]，但两者都缺失时必须保留 partial 并报中断。
+	if !terminalSeen {
+		return received, errors.New("upstream stream ended without a terminal event")
 	}
 
 	if partial.StopReason == "" {
