@@ -376,7 +376,7 @@ func (t *Tool) RequiresConfirmation(params json.RawMessage) (string, bool) {
 	if highRisk {
 		prefix = "⚠️ 高风险电脑控制："
 	}
-	return prefix + describeActions(batch), true
+	return prefix + fmt.Sprintf("%s（进程 %d，窗口 %d）\n", batch.BundleID, batch.PID, batch.WindowID) + describeActions(batch), true
 }
 
 // RequiresConfirmationAvailable implements agent.ToolRequiringConfirmation.
@@ -559,8 +559,8 @@ func validateActions(raw json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(out), nil
 }
 
-// checkScreenPoint rejects coordinates outside a sane virtual-screen envelope.
-// The helper re-checks against the real display bounds; this catches runaway
+// checkScreenPoint bounds coordinate magnitudes before invoking the helper.
+// The helper re-checks against the target window bounds; this catches runaway
 // model math before it reaches the OS.
 func checkScreenPoint(x, y int) error {
 	if x < -32768 || x > 32768 || y < -32768 || y > 32768 {
