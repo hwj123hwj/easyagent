@@ -169,3 +169,30 @@ func TestPreferenceBrowserPreflightAllowsPatch(t *testing.T) {
 	s.Handler().ServeHTTP(w, r)
 	require.Contains(t, w.Header().Get("Access-Control-Allow-Methods"), "PATCH")
 }
+
+func TestChangesExcludeSingleSideEntriesWhenSnapshotTruncated(t *testing.T) {
+	s, _, _ := newRunTestServer(t)
+	sess, err := s.resolveSession(context.Background(), "")
+	require.NoError(t, err)
+	root := sess.Workspace()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "kept.txt"), []byte("v1"), 0644))
+
+	run := &sessionRun{ID: "run-truncated", SessionID: sess.SessionID(), StartedAt: time.Now()}
+	s.beginFiles(run, root)
+	require.NotNil(t, run.files)
+	// 模拟多仓库根目录下目录过大：begin 快照不完整（#123）。
+	run.files.Skipped = append(run.files.Skipped, scanLimitMessage)
+	// before 独有（伪「删除」）；reviewedWrite 之后还有 after 独有（伪「新增」）。
+	run.files.Before["phantom-deleted.txt"] = fileState{Hash: "h-before", Mode: 0644, Size: 10}
+	reviewedWrite(t, s, run, "kept.txt", "v2")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "phantom-added.txt"), []byte("external-session-work"), 0644))
+	s.finishFiles(run)
+
+	snapshot, err := s.loadFiles(run.SessionID, run.ID)
+	require.NoError(t, err)
+	require.True(t, truncatedSnapshot(snapshot.Skipped))
+	changes := s.changes(snapshot)
+	require.Len(t, changes, 1, "截断时单侧增删应被过滤")
+	require.Equal(t, "kept.txt", changes[0].Path)
+	require.Equal(t, "modified", changes[0].Kind)
+}

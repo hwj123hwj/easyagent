@@ -99,6 +99,7 @@ function AggregatedRunCard({
   const [open, setOpen] = useState(true);
   const [all, setAll] = useState(false);
   const [diffs, setDiffs] = useState<Map<string, { additions: number; deletions: number }>>();
+  const [incomplete, setIncomplete] = useState(false);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const listId = useId();
@@ -146,8 +147,10 @@ function AggregatedRunCard({
       .then((snapshots) => {
         if (!alive) return;
         const diffMap = new Map<string, { additions: number; deletions: number }>();
+        let anyIncomplete = false;
         for (const snap of snapshots) {
           if (!snap) continue;
+          if (snap.incomplete) anyIncomplete = true;
           const summary = summarizeDiffs(snap.files);
           for (const [p, d] of summary.diffs.entries()) {
             const prev = diffMap.get(p) || { additions: 0, deletions: 0 };
@@ -157,6 +160,7 @@ function AggregatedRunCard({
             });
           }
         }
+        setIncomplete(anyIncomplete);
         setDiffs(diffMap);
       })
       .catch((e) => {
@@ -220,6 +224,11 @@ function AggregatedRunCard({
       </div>
       {open && (
         <div id={listId} className="file-change-list">
+          {incomplete && (
+            <p className="file-change-incomplete" role="note">
+              ⚠️ 工作区快照不完整（目录过大被截断）：单侧出现的增删已过滤，以下为双侧可核对的可信变更。
+            </p>
+          )}
           {aggregatedFiles
             .slice(0, all ? aggregatedFiles.length : 3)
             .map((item) => {

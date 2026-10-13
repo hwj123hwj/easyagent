@@ -41,6 +41,8 @@ export interface RunFileSet {
   workspace: string;
   started_at?: string;
   complete: boolean;
+  /** 快照被截断（目录过大等）：单侧增/删已过滤，数字可能低于真实改动面 */
+  incomplete?: boolean;
   skipped: string[];
   files: RunFileChange[];
 }
