@@ -13,12 +13,12 @@ func TestPolicyAskConfirmsEverything(t *testing.T) {
 	tool.ConfigurePolicy("ask", nil)
 
 	// ask：普通批与高危批都需要确认
-	normal := normalize(t, `{"action":"perform_action","actions":[{"type":"click","x":1,"y":2}]}`)
+	normal := normalize(t, `{"bundle_id":"test.editor","pid":100,"window_id":200,"action":"perform_action","actions":[{"type":"click","x":1,"y":2}]}`)
 	desc, ok := tool.RequiresConfirmation(normal)
 	require.True(t, ok)
 	require.Contains(t, desc, "电脑控制")
 
-	high := normalize(t, `{"action":"perform_action","actions":[{"type":"key","key":"cmd+q"}]}`)
+	high := normalize(t, `{"bundle_id":"test.editor","pid":100,"window_id":200,"action":"perform_action","actions":[{"type":"key","key":"cmd+q"}]}`)
 	desc, ok = tool.RequiresConfirmation(high)
 	require.True(t, ok)
 	require.Contains(t, desc, "⚠️ 高风险")
@@ -29,12 +29,12 @@ func TestPolicyAutoSkipsNormalButNeverHighRisk(t *testing.T) {
 	tool.ConfigurePolicy("auto", []string{"com.apple.finder"})
 
 	// auto：普通批免确认
-	normal := normalize(t, `{"action":"perform_action","actions":[{"type":"click","x":1,"y":2},{"type":"key","key":"cmd+s"}]}`)
+	normal := normalize(t, `{"bundle_id":"test.editor","pid":100,"window_id":200,"action":"perform_action","actions":[{"type":"click","x":1,"y":2},{"type":"key","key":"cmd+s"}]}`)
 	_, ok := tool.RequiresConfirmation(normal)
 	require.False(t, ok, "auto 策略下普通动作批应免确认")
 
 	// auto：高危批仍然必确认——用户退出类操作永远人工把关
-	high := normalize(t, `{"action":"perform_action","actions":[{"type":"key","key":"cmd+q"}]}`)
+	high := normalize(t, `{"bundle_id":"test.editor","pid":100,"window_id":200,"action":"perform_action","actions":[{"type":"key","key":"cmd+q"}]}`)
 	desc, ok := tool.RequiresConfirmation(high)
 	require.True(t, ok, "auto 策略下高危动作批仍必须确认")
 	require.Contains(t, desc, "⚠️ 高风险")
@@ -51,9 +51,9 @@ func TestApprovedAppsTrackedAndPersisted(t *testing.T) {
 	tool := NewTool(dataDir)
 	tool.ConfigurePolicy("auto", nil)
 
-	// 模拟 helper 返回 focused_app 的记录路径
-	tool.recordFocusedApp(json.RawMessage(`{"focused_app":"com.apple.finder"}`))
-	tool.recordFocusedApp(json.RawMessage(`{"focused_app":"com.apple.finder"}`)) // 去重
+	// 模拟 helper 返回 controlled_app 的记录路径
+	tool.recordControlledApp(json.RawMessage(`{"controlled_app":"com.apple.finder"}`))
+	tool.recordControlledApp(json.RawMessage(`{"controlled_app":"com.apple.finder"}`)) // 去重
 	require.Equal(t, []string{"com.apple.finder"}, tool.ApprovedApps())
 
 	// 重启恢复：LoadRuntimeOverrides 读回记录
@@ -61,8 +61,8 @@ func TestApprovedAppsTrackedAndPersisted(t *testing.T) {
 	cfg.LoadRuntimeOverrides(dataDir)
 	require.Equal(t, []string{"com.apple.finder"}, cfg.ApprovedApps)
 
-	// recordFocusedApp 对空输出无害
-	tool.recordFocusedApp(json.RawMessage(`{}`))
+	// recordControlledApp 对空输出无害
+	tool.recordControlledApp(json.RawMessage(`{}`))
 	require.Len(t, tool.ApprovedApps(), 1)
 }
 

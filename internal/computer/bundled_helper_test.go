@@ -35,7 +35,7 @@ func TestScreenshotIncludesModelImageAndRejectsEscapes(t *testing.T) {
 	tool.helper = func(context.Context, string, any) (json.RawMessage, error) {
 		return json.Marshal(map[string]any{"path": path, "width": 2, "height": 3})
 	}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"screenshot"}`), nil)
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"bundle_id":"test.editor","pid":100,"window_id":200,"action":"screenshot"}`), nil)
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 	require.Len(t, result.Images, 1)
@@ -47,7 +47,7 @@ func TestScreenshotIncludesModelImageAndRejectsEscapes(t *testing.T) {
 	require.NoError(t, os.Symlink(outside, link))
 	for _, bad := range []string{outside, link} {
 		path = bad
-		result, err = tool.Execute(context.Background(), json.RawMessage(`{"action":"screenshot"}`), nil)
+		result, err = tool.Execute(context.Background(), json.RawMessage(`{"bundle_id":"test.editor","pid":100,"window_id":200,"action":"screenshot"}`), nil)
 		require.NoError(t, err)
 		require.True(t, result.IsError)
 		require.Empty(t, result.Images)
