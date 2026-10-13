@@ -5,12 +5,82 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOpenAIErrorFrameOverridesTerminal(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		frames []string
+		tools  bool
+	}{
+		{"text-before-done", []string{textChunk("partial answer"), usageChunk()}, false},
+		{"text-after-finish", []string{textChunk("partial answer"), usageChunk(), finishChunk("stop")}, false},
+		{"tool-before-done", []string{tcChunk(0, "call", "echo", `{"message":"hello"}`), usageChunk()}, true},
+		{"empty-error", nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, frame := range tt.frames {
+					fmt.Fprintf(w, "data: %s\n\n", frame)
+				}
+				fmt.Fprint(w, "data: {\"error\":{\"message\":\"fixture upstream failed\",\"type\":\"server_error\"}}\n\ndata: [DONE]\n\n")
+			}))
+			t.Cleanup(srv.Close)
+			events, msg, err := collectStream(t, NewOpenAIProvider("test", srv.URL))
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "fixture upstream failed")
+			require.Equal(t, int32(1), calls.Load(), "explicit provider errors must not enter empty-stream retries")
+			require.Equal(t, ai.StopReasonError, msg.StopReason)
+			errorCount := 0
+			for _, event := range events {
+				_, done := event.(ai.EventDone)
+				require.False(t, done)
+				if _, ok := event.(ai.EventError); ok {
+					errorCount++
+				}
+			}
+			require.Equal(t, 1, errorCount)
+			if len(tt.frames) > 0 {
+				require.Equal(t, 10, msg.Usage.InputTokens)
+				if tt.tools {
+					require.Len(t, msg.ToolCalls, 1)
+				} else {
+					require.Equal(t, "partial answer", msg.Text)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenAIErrorFrameClosesBeforeEOF(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\ndata: {\"error\":{}}\n\n", textChunk("partial answer"))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stream, err := NewOpenAIProvider("test", srv.URL).Stream(ctx, ai.StreamRequest{Model: ai.Model{ID: "test"}})
+	require.NoError(t, err)
+	for range stream.Events() {
+	}
+	msg, err := stream.Result()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "upstream stream failed")
+	require.Equal(t, "partial answer", msg.Text)
+	require.NoError(t, ctx.Err(), "explicit provider errors must close without waiting for HTTP EOF")
+}
 
 func TestOpenAIStreamEOFWithoutTerminalFails(t *testing.T) {
 	for _, tools := range []bool{false, true} {
