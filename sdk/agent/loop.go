@@ -91,9 +91,10 @@ func runAgentLoop(ctx context.Context, a *Agent, provider interface {
 	// 如果有 session storage，从 session 恢复历史
 	if a.session != nil {
 		sessionHistory, err := a.session.BuildContext(ctx)
-		if err == nil && len(sessionHistory) > 0 {
-			history = sessionHistory
+		if err != nil {
+			return lastAssistant, fmt.Errorf("build session context: %w", err)
 		}
+		history = sessionHistory
 	}
 
 	var recoveryErr error
@@ -195,7 +196,9 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 	// 只保存本轮新增的 pending 消息到 session（避免 O(n²)）
 	if a.session != nil {
 		for _, msg := range pending {
-			_ = a.session.AppendMessage(ctx, msg)
+			if err := a.session.AppendMessage(ctx, msg); err != nil {
+				return turnResult{}, history, fmt.Errorf("persist pending message: %w", err)
+			}
 		}
 	}
 
@@ -243,7 +246,10 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 
 	// 保存到 session
 	if a.session != nil {
-		_ = a.session.AppendMessage(ctx, message)
+		// 有副作用的工具必须等 assistant 调用记录成功落盘后才能执行。
+		if err := a.session.AppendMessage(ctx, message); err != nil {
+			return turnResult{assistant: message}, history, fmt.Errorf("persist assistant message: %w", err)
+		}
 	}
 
 	// 如果 LLM 返回 error/aborted，终止循环
