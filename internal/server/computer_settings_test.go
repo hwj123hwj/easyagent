@@ -110,21 +110,21 @@ func TestComputerSettingsTogglePersistsAcrossRestart(t *testing.T) {
 	}
 }
 
-func TestComputerToolSchemaIsReadOnly(t *testing.T) {
+func TestComputerToolSchemaAndApproval(t *testing.T) {
 	tool := computer.NewTool(t.TempDir())
 
-	// Only read-only actions pass validation.
-	valid, err := tool.Validate(json.RawMessage(`{"action":"screenshot"}`))
+	// Read-only observations require an explicit target.
+	valid, err := tool.Validate(json.RawMessage(`{"action":"screenshot","bundle_id":"test.editor","pid":100,"window_id":200}`))
 	require.NoError(t, err)
 	require.NotNil(t, valid)
 
-	_, err = tool.Validate(json.RawMessage(`{"action":"get_app_state"}`))
+	_, err = tool.Validate(json.RawMessage(`{"action":"get_app_state","bundle_id":"test.editor","pid":100,"window_id":200}`))
 	require.NoError(t, err)
 
 	// Control actions go through strict batch validation (PR-2), and always
 	// demand a user confirmation before Execute.
 	normalized, err := tool.Validate(json.RawMessage(
-		`{"action":"perform_action","actions":[{"type":"click","x":10,"y":20}]}`))
+		`{"bundle_id":"test.editor","pid":100,"window_id":200,"action":"perform_action","actions":[{"type":"click","x":10,"y":20}]}`))
 	require.NoError(t, err)
 	desc, needConfirm := tool.RequiresConfirmation(normalized)
 	require.True(t, needConfirm, "perform_action must require per-batch approval")
@@ -140,6 +140,6 @@ func TestComputerToolSchemaIsReadOnly(t *testing.T) {
 	require.ErrorContains(t, err, "action")
 
 	// Malformed control batches are rejected too.
-	_, err = tool.Validate(json.RawMessage(`{"action":"perform_action"}`))
+	_, err = tool.Validate(json.RawMessage(`{"action":"perform_action","bundle_id":"test.editor","pid":100,"window_id":200}`))
 	require.ErrorContains(t, err, "actions 数组")
 }

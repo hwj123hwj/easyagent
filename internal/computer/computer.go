@@ -69,11 +69,15 @@ func CheckPermissions(ctx context.Context) (granted bool, missing []string, err 
 		return false, []string{"电脑控制组件启动失败（需要 macOS 14+）"}, err
 	}
 	var status struct {
-		Accessibility bool `json:"accessibility"`
-		ScreenRecord  bool `json:"screen_recording"`
+		Accessibility   bool `json:"accessibility"`
+		ScreenRecord    bool `json:"screen_recording"`
+		ProtocolVersion int  `json:"protocol_version"`
 	}
 	if err := json.Unmarshal(out, &status); err != nil {
 		return false, []string{"helper 输出无法解析"}, err
+	}
+	if status.ProtocolVersion != 2 {
+		return false, []string{"电脑控制组件版本不兼容，请更新内置 helper"}, fmt.Errorf("需要 helper 协议 2，收到 %d", status.ProtocolVersion)
 	}
 	if !status.Accessibility {
 		missing = append(missing, "辅助功能 (Accessibility)")
@@ -178,9 +182,9 @@ func (t *Tool) Name() string { return "computer" }
 
 // Description tells the model when and how to use the tool.
 func (t *Tool) Description() string {
-	return "macOS 电脑使用工具（实验）：感知与控制当前电脑。" +
-		"actions: screenshot（主屏幕截图，直接返回图像及坐标说明）、get_app_state（当前焦点应用的可读元素列表）、" +
-		"perform_action（键鼠控制：click/type/key/scroll/wait 批量动作，按电脑控制审批策略确认；单批最多 " + fmt.Sprint(maxActionSteps) + " 个动作）。截图像素对应屏幕逻辑坐标；依据最新截图或应用状态操作，失败后重新观察，不盲目重放。"
+	return "macOS 后台应用控制（实验）。先 list_apps 获取 bundle_id、pid、window_id；后续动作必须携带这三个目标标识。" +
+		"screenshot 只截指定窗口（即使被其他应用遮挡）；get_app_state 只读指定窗口；perform_action 向目标进程发送 click/type/key/scroll/wait，最多 " + fmt.Sprint(maxActionSteps) + " 个动作，遵守审批策略。" +
+		"坐标是目标窗口左上角为原点的逻辑像素。先观察再操作；输入前先点击目标窗口的可编辑区域。窗口关闭、身份变化或不支持后台操作时停止并报告，不能激活应用或改用全局键鼠。用户可继续使用其他应用，但不要同时编辑同一目标窗口。"
 }
 
 // Parameters implements agent.Tool (map-based JSON Schema).
@@ -190,9 +194,12 @@ func (t *Tool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"screenshot", "get_app_state", "perform_action"},
-				"description": "要执行的动作：screenshot 截屏、get_app_state 读取应用状态、perform_action 控制键鼠（需用户批准）",
+				"enum":        []string{"list_apps", "screenshot", "get_app_state", "perform_action"},
+				"description": "list_apps 列出应用和窗口；其他动作限定目标窗口（操作按策略审批）",
 			},
+			"bundle_id": map[string]any{"type": "string", "description": "除 list_apps 外必填：应用 bundle ID（来自 list_apps）"},
+			"pid":       map[string]any{"type": "integer", "description": "除 list_apps 外必填：应用进程 ID"},
+			"window_id": map[string]any{"type": "integer", "description": "除 list_apps 外必填：目标窗口 ID"},
 			"actions": map[string]any{
 				"type":        "array",
 				"description": "perform_action 时必填：按顺序执行（不支持回滚）的键鼠动作列表（单次调用一批，整体一次确认）",
@@ -204,8 +211,8 @@ func (t *Tool) Parameters() map[string]any {
 							"enum":        []string{"click", "double_click", "right_click", "type", "key", "scroll", "wait"},
 							"description": "动作类型",
 						},
-						"x":    map[string]any{"type": "integer", "description": "click 系列必填：屏幕坐标 x"},
-						"y":    map[string]any{"type": "integer", "description": "click 系列必填：屏幕坐标 y"},
+						"x":    map[string]any{"type": "integer", "description": "click 系列必填：目标窗口内坐标 x"},
+						"y":    map[string]any{"type": "integer", "description": "click 系列必填：目标窗口内坐标 y"},
 						"text": map[string]any{"type": "string", "description": "type 必填：要输入的文本"},
 						"key":  map[string]any{"type": "string", "description": "key 必填：按键或组合键，如 cmd+s、enter"},
 						"dx":   map[string]any{"type": "integer", "description": "scroll 可选：水平滚动量"},
@@ -223,13 +230,19 @@ func (t *Tool) Parameters() map[string]any {
 // Validate normalizes and checks arguments before Execute.
 func (t *Tool) Validate(params json.RawMessage) (json.RawMessage, error) {
 	var input struct {
-		Action string `json:"action"`
+		Action   string `json:"action"`
+		BundleID string `json:"bundle_id"`
+		PID      int64  `json:"pid"`
+		WindowID int64  `json:"window_id"`
 	}
 	if err := json.Unmarshal(params, &input); err != nil {
 		return nil, fmt.Errorf("computer 参数解析失败: %w", err)
 	}
+	if (input.Action == "screenshot" || input.Action == "get_app_state" || input.Action == "perform_action") && (strings.TrimSpace(input.BundleID) == "" || input.PID <= 0 || input.PID > 2147483647 || input.WindowID <= 0 || input.WindowID > 4294967295) {
+		return nil, fmt.Errorf("先 list_apps，其他动作必须指定有效的 bundle_id、pid、window_id；不会使用前台应用")
+	}
 	switch input.Action {
-	case "screenshot", "get_app_state":
+	case "list_apps", "screenshot", "get_app_state":
 		return params, nil
 	case "perform_action":
 		normalized, err := validateActions(params)
@@ -240,7 +253,7 @@ func (t *Tool) Validate(params json.RawMessage) (json.RawMessage, error) {
 	case "":
 		return nil, fmt.Errorf("computer 需要 action 参数")
 	default:
-		return nil, fmt.Errorf("不支持的 computer action %q（仅支持 screenshot / get_app_state / perform_action）", input.Action)
+		return nil, fmt.Errorf("不支持的 computer action %q（仅支持 list_apps / screenshot / get_app_state / perform_action）", input.Action)
 	}
 }
 
@@ -252,7 +265,10 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 	}
 	params = normalized
 	var input struct {
-		Action string `json:"action"`
+		Action   string `json:"action"`
+		BundleID string `json:"bundle_id"`
+		PID      int64  `json:"pid"`
+		WindowID int64  `json:"window_id"`
 	}
 	_ = json.Unmarshal(params, &input)
 	if err := Registry.Acquire(t.sessionID); err != nil {
@@ -263,12 +279,20 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 	c, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
+	target := map[string]any{"bundle_id": input.BundleID, "pid": input.PID, "window_id": input.WindowID}
 	switch input.Action {
+	case "list_apps":
+		out, err := t.helper(c, "list_apps", nil)
+		if err != nil {
+			return agent.ToolResult{IsError: true, Content: "列出应用失败: " + err.Error()}, nil
+		}
+		return agent.ToolResult{Content: string(out)}, nil
 	case "screenshot":
 		if err := os.MkdirAll(t.shotsDir, 0o700); err != nil {
 			return agent.ToolResult{IsError: true, Content: "创建截图目录失败: " + err.Error()}, nil
 		}
-		out, err := t.helper(c, "screenshot", map[string]any{"output_dir": t.shotsDir})
+		target["output_dir"] = t.shotsDir
+		out, err := t.helper(c, "screenshot", target)
 		if err != nil {
 			return agent.ToolResult{IsError: true, Content: "截屏失败: " + err.Error()}, nil
 		}
@@ -282,10 +306,10 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 		if err != nil {
 			return agent.ToolResult{IsError: true, Content: "读取截图失败: " + err.Error()}, nil
 		}
-		return agent.ToolResult{Content: "主屏幕截图（像素对应屏幕逻辑坐标）: " + string(out), Images: []ai.ImageBlock{{MediaType: "image/png", Data: data}}}, nil
+		return agent.ToolResult{Content: "目标窗口截图（像素对应窗口内逻辑坐标）: " + string(out), Images: []ai.ImageBlock{{MediaType: "image/png", Data: data}}}, nil
 
 	case "get_app_state":
-		out, err := t.helper(c, "app_state", nil)
+		out, err := t.helper(c, "app_state", target)
 		if err != nil {
 			return agent.ToolResult{IsError: true, Content: "读取应用状态失败: " + err.Error()}, nil
 		}
@@ -311,8 +335,8 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 		if result.Error != "" || result.Success == nil || !*result.Success {
 			return agent.ToolResult{IsError: true, Content: "键鼠操作未完成: " + string(out)}, nil
 		}
-		t.recordFocusedApp(out)
-		return agent.ToolResult{Content: fmt.Sprintf("已执行 %d 个动作", len(batch.Actions))}, nil
+		t.recordControlledApp(out)
+		return agent.ToolResult{Content: fmt.Sprintf("已执行 %d 个目标窗口动作: %s", len(batch.Actions), out)}, nil
 	}
 	return agent.ToolResult{IsError: true, Content: fmt.Sprintf("未知 action %q", input.Action)}, nil
 }
@@ -352,7 +376,7 @@ func (t *Tool) RequiresConfirmation(params json.RawMessage) (string, bool) {
 	if highRisk {
 		prefix = "⚠️ 高风险电脑控制："
 	}
-	return prefix + describeActions(batch), true
+	return prefix + fmt.Sprintf("%s（进程 %d，窗口 %d）\n", batch.BundleID, batch.PID, batch.WindowID) + describeActions(batch), true
 }
 
 // RequiresConfirmationAvailable implements agent.ToolRequiringConfirmation.
@@ -361,29 +385,29 @@ func (t *Tool) RequiresConfirmation(params json.RawMessage) (string, bool) {
 func (t *Tool) RequiresConfirmationAvailable() bool   { return true }
 func (t *Tool) RequiresInteractiveConfirmation() bool { return true }
 
-// recordFocusedApp persists the app that received the injected actions
-// (helper returns focused_app in the result). Best-effort: display data,
+// recordControlledApp persists the app that received the injected actions
+// (helper returns controlled_app only for an input batch, excluding waits). Best-effort: display data,
 // never blocks control. Updates the in-session view and settings.json.
-func (t *Tool) recordFocusedApp(helperOut json.RawMessage) {
+func (t *Tool) recordControlledApp(helperOut json.RawMessage) {
 	var result struct {
-		FocusedApp string `json:"focused_app"`
+		ControlledApp string `json:"controlled_app"`
 	}
-	if json.Unmarshal(helperOut, &result) != nil || result.FocusedApp == "" {
+	if json.Unmarshal(helperOut, &result) != nil || result.ControlledApp == "" {
 		return
 	}
 	t.mu.Lock()
 	seen := false
 	for _, existing := range t.approvedApps {
-		if existing == result.FocusedApp {
+		if existing == result.ControlledApp {
 			seen = true
 			break
 		}
 	}
 	if !seen {
-		t.approvedApps = append(t.approvedApps, result.FocusedApp)
+		t.approvedApps = append(t.approvedApps, result.ControlledApp)
 	}
 	t.mu.Unlock()
-	_ = config.RecordApprovedApp(t.dataDir, result.FocusedApp)
+	_ = config.RecordApprovedApp(t.dataDir, result.ControlledApp)
 }
 
 // ApprovedApps returns the session's controlled-app list (settings page).
@@ -398,6 +422,10 @@ func (t *Tool) ApprovedApps() []string {
 // runHelper shells out one CLI invocation per action — stateless and simple,
 // matching the daemon convention without holding a long-lived pipe in PR-1.
 func runHelper(ctx context.Context, tool string, args any) (json.RawMessage, error) {
+	return runHelperAtPath(ctx, HelperPath(), tool, args)
+}
+
+func runHelperAtPath(ctx context.Context, path, tool string, args any) (json.RawMessage, error) {
 	cmdArgs := []string{"tool", tool}
 	if args != nil {
 		payload, err := json.Marshal(args)
@@ -408,7 +436,17 @@ func runHelper(ctx context.Context, tool string, args any) (json.RawMessage, err
 	}
 	c, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(c, HelperPath(), cmdArgs...)
+	// Old helpers ignore target fields and inject globally. Never invoke their tool command.
+	versionCtx, versionCancel := context.WithTimeout(c, 5*time.Second)
+	version, versionErr := exec.CommandContext(versionCtx, path, "--version").Output()
+	versionCancel()
+	var protocol struct {
+		Version int `json:"protocol_version"`
+	}
+	if versionErr != nil || json.Unmarshal(version, &protocol) != nil || protocol.Version != 2 {
+		return nil, fmt.Errorf("电脑控制组件不支持后台目标协议 2，请更新 helper；已拒绝调用")
+	}
+	cmd := exec.CommandContext(c, path, cmdArgs...)
 	var diagnostic bytes.Buffer
 	cmd.Stderr = &diagnostic
 	out, err := cmd.Output()
@@ -434,7 +472,10 @@ type actionStep struct {
 
 // actionBatch is the normalized perform_action payload (produced by Validate).
 type actionBatch struct {
-	Actions []actionStep `json:"actions"`
+	BundleID string       `json:"bundle_id"`
+	PID      int64        `json:"pid"`
+	WindowID int64        `json:"window_id"`
+	Actions  []actionStep `json:"actions"`
 }
 
 // maxActionSteps bounds one confirmation → one bounded batch. Keeps a runaway
@@ -518,8 +559,8 @@ func validateActions(raw json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(out), nil
 }
 
-// checkScreenPoint rejects coordinates outside a sane virtual-screen envelope.
-// The helper re-checks against the real display bounds; this catches runaway
+// checkScreenPoint bounds coordinate magnitudes before invoking the helper.
+// The helper re-checks against the target window bounds; this catches runaway
 // model math before it reaches the OS.
 func checkScreenPoint(x, y int) error {
 	if x < -32768 || x > 32768 || y < -32768 || y > 32768 {
