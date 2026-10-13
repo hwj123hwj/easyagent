@@ -433,7 +433,7 @@ func (p *OpenAIProvider) buildOpenAIRequest(req ai.StreamRequest, stream bool) o
 	}
 
 	// 转换 messages
-	for _, msg := range req.Messages {
+	for _, msg := range expandToolImages(req.Messages) {
 		switch m := msg.(type) {
 		case ai.UserMessage:
 			hasOnlyText := true
@@ -531,4 +531,35 @@ func (p *OpenAIProvider) buildOpenAIRequest(req ai.StreamRequest, stream bool) o
 	}
 
 	return oaiReq
+}
+
+// Chat Completions supports images on user messages, not tool messages.
+// Flush images only after consecutive tool results so multi-call turns remain valid.
+func expandToolImages(messages []ai.Message) []ai.Message {
+	var result []ai.Message
+	var pending []ai.ContentBlock
+	flush := func() {
+		if len(pending) > 0 {
+			result = append(result, ai.UserMessage{Content: pending})
+			pending = nil
+		}
+	}
+	for _, message := range messages {
+		tool, isTool := message.(ai.ToolResultMessage)
+		if !isTool {
+			flush()
+		}
+		result = append(result, message)
+		if isTool {
+			for _, image := range tool.Images {
+				if len(image.Data) == 0 && image.URL == "" {
+					continue
+				}
+				copy := image
+				pending = append(pending, ai.ContentBlock{Type: "text", Text: "Image from tool call " + tool.ToolCallID}, ai.ContentBlock{Type: "image", Image: &copy})
+			}
+		}
+	}
+	flush()
+	return result
 }

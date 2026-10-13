@@ -34,6 +34,12 @@ class RegistrationTests(unittest.TestCase):
         registration.unregister(self.app, "")
         self.assertEqual([call.args[0][2] for call in self.run.call_args_list], [str(helper), str(self.app)])
 
+    def test_native_build_helper_is_scoped_and_running_protected(self):
+        app = self.bundle(self.root / "desktop/.bundle/cua-helper/EasyAgent Computer Use.app", "com.easyagent.cua-helper")
+        registration.unregister(app, "")
+        with self.assertRaisesRegex(ValueError, "Quit"):
+            registration.unregister(app, str(app) + "/Contents/MacOS/easyagent-cua-helper")
+
     def test_preserves_running_app_or_helper(self):
         for executable in ["MacOS/EasyAgent", "Frameworks/EasyAgent Helper.app/Contents/MacOS/EasyAgent Helper"]:
             with self.assertRaisesRegex(ValueError, "Quit"):

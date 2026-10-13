@@ -22,6 +22,8 @@ files:
 
 # Go binary — placed in Contents/Resources/ (not inside asar)
 extraResources:
+  - from: .bundle/cua-helper
+    to: cua-helper
   - from: .bundle/easyagent
     to: easyagent
   - from: .bundle/workflow-runtime.mjs

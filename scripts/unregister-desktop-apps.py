@@ -22,7 +22,8 @@ def unregister(app, commands):
         and stage.name.endswith(".noindex")
     )
     development = app == ROOT / "desktop/node_modules/electron/dist/Electron.app"
-    if not (any(app.is_relative_to(p) for p in outputs) or mounted_test or development):
+    native_helper = app == ROOT / "desktop/.bundle/cua-helper/EasyAgent Computer Use.app"
+    if not (any(app.is_relative_to(p) for p in outputs) or mounted_test or development or native_helper):
         raise ValueError(f"Refusing to unregister an installed or unrelated app: {app}")
     if any(line.startswith(str(app) + "/Contents/") for line in commands.splitlines()):
         raise ValueError(f"Quit the test app before unregistering it: {app}")

@@ -24,8 +24,9 @@ func (s *Session) AppendMicroCompaction(ctx context.Context, history []ai.Messag
 			if original == nil || original.ToolCallID != tool.ToolCallID {
 				return fmt.Errorf("micro-compaction tool does not match stored entry")
 			}
-			if original.Content != tool.Content {
-				replacements = append(replacements, ToolResultReplacement{EntryID: entries[i].ID, Content: tool.Content})
+			clearImages := len(original.Images) > 0 && len(tool.Images) == 0
+			if original.Content != tool.Content || clearImages {
+				replacements = append(replacements, ToolResultReplacement{EntryID: entries[i].ID, Content: tool.Content, ClearImages: clearImages})
 			}
 		}
 	}

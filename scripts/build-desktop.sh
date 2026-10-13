@@ -28,6 +28,7 @@ if [[ -n "$TAG" ]]; then
 fi
 OUTPUT="$PROJECT_ROOT/desktop/release.noindex/$VERSION/$ARCH"
 mkdir -p "$BUNDLE/licenses"
+bash "$SCRIPT_DIR/build-cua-helper.sh" "$ARCH"
 CGO_ENABLED=0 GOOS=darwin GOARCH="$GO_ARCH" go build -trimpath \
   -ldflags "-s -w -X main.version=v$VERSION" -o "$BUNDLE/easyagent" ./cmd/easyagent
 (cd workflow-runtime && npm ci --ignore-scripts && npm run build && npm test)
@@ -40,7 +41,8 @@ cleanup() {
   local status=0
   python3 "$SCRIPT_DIR/unregister-desktop-apps.py" \
     "$OUTPUT"/*/EasyAgent.app \
-    "$PROJECT_ROOT/desktop/node_modules/electron/dist/Electron.app" || status=$?
+    "$PROJECT_ROOT/desktop/node_modules/electron/dist/Electron.app" \
+    "$BUNDLE/cua-helper/EasyAgent Computer Use.app" || status=$?
   rm -rf "$STAGE"
   return "$status"
 }

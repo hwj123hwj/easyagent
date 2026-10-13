@@ -12,6 +12,7 @@ const clearedPlaceholder = "[older tool result cleared to save context]"
 // 这些工具的 result 体积大、价值随时间递减（旧命令输出、旧文件内容早用完）。
 // 写操作（edit/write）的 result 通常是简短确认，价值高体积小，不清理。
 var compactableTools = map[string]bool{
+	"computer":  true,
 	"read":      true,
 	"bash":      true,
 	"grep":      true,
@@ -78,8 +79,9 @@ func MicroCompact(history []ai.Message, keepRecent int) ([]ai.Message, int) {
 	for _, ref := range compactable[:keepFrom] {
 		if tr, ok := history[ref.idx].(ai.ToolResultMessage); ok {
 			// 占位符可能比原内容长（原内容极短时），但通常短得多；只在确实能省时清理
-			if len(clearedPlaceholder) < len(tr.Content) {
+			if len(clearedPlaceholder) < len(tr.Content) || len(tr.Images) > 0 {
 				tr.Content = clearedPlaceholder
+				tr.Images = nil
 				history[ref.idx] = tr // 值类型，需重新赋值回 slice
 				cleared++
 			}

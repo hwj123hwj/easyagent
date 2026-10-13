@@ -1,33 +1,43 @@
 // Package computer implements the experimental computer-use integration:
-// an optional macOS helper CLI bridge and exclusive per-invocation ownership.
-// The helper implementation is not bundled with this experimental integration.
+// a bundled macOS helper CLI bridge and exclusive per-invocation ownership.
 package computer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
+	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/hwj123hwj/easyagent/sdk/config"
 )
 
 // ─── Helper bridge ───────────────────────────────────────────────────────────
 
-// HelperPath resolves the helper binary shipped next to the server executable
-// (easyagent-cua-helper), falling back to PATH.
+// HelperPath prefers the signed helper in the desktop bundle. Standalone cores
+// retain the legacy sibling/PATH integration without requiring MCP configuration.
 func HelperPath() string {
 	if exe, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(exe), "easyagent-cua-helper")
-		if _, err := os.Stat(candidate); err == nil {
+		return helperPathForExecutable(exe)
+	}
+	return "easyagent-cua-helper"
+}
+func helperPathForExecutable(exe string) string {
+	for _, candidate := range []string{
+		filepath.Join(filepath.Dir(exe), "cua-helper", "EasyAgent Computer Use.app", "Contents", "MacOS", "easyagent-cua-helper"),
+		filepath.Join(filepath.Dir(exe), "easyagent-cua-helper"),
+	} {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
 			return candidate
 		}
 	}
@@ -37,7 +47,7 @@ func HelperPath() string {
 // Available reports whether computer use can run at all: macOS platform plus
 // a discoverable helper binary.
 func Available() bool {
-	if runtime.GOOS != "darwin" {
+	if !platformSupported() {
 		return false
 	}
 	path := HelperPath()
@@ -56,7 +66,7 @@ func CheckPermissions(ctx context.Context) (granted bool, missing []string, err 
 	defer cancel()
 	out, err := exec.CommandContext(c, HelperPath(), "status").Output()
 	if err != nil {
-		return false, []string{"helper 不可用"}, err
+		return false, []string{"电脑控制组件启动失败（需要 macOS 14+）"}, err
 	}
 	var status struct {
 		Accessibility bool `json:"accessibility"`
@@ -77,7 +87,7 @@ func CheckPermissions(ctx context.Context) (granted bool, missing []string, err 
 // RequestPermissions opens the macOS System Settings panes so the user can
 // grant TCC permissions. Cannot be silent by OS design.
 func RequestPermissions(ctx context.Context) error {
-	c, cancel := context.WithTimeout(ctx, 5*time.Second)
+	c, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	return exec.CommandContext(c, HelperPath(), "request-permissions").Run()
 }
@@ -169,8 +179,8 @@ func (t *Tool) Name() string { return "computer" }
 // Description tells the model when and how to use the tool.
 func (t *Tool) Description() string {
 	return "macOS 电脑使用工具（实验）：感知与控制当前电脑。" +
-		"actions: screenshot（全屏截图，返回本地文件路径）、get_app_state（当前焦点应用的可读元素列表）、" +
-		"perform_action（键鼠控制：click/type/key/scroll/wait 批量动作，按电脑控制审批策略确认；单批最多 " + fmt.Sprint(maxActionSteps) + " 个动作）。"
+		"actions: screenshot（主屏幕截图，直接返回图像及坐标说明）、get_app_state（当前焦点应用的可读元素列表）、" +
+		"perform_action（键鼠控制：click/type/key/scroll/wait 批量动作，按电脑控制审批策略确认；单批最多 " + fmt.Sprint(maxActionSteps) + " 个动作）。截图像素对应屏幕逻辑坐标；依据最新截图或应用状态操作，失败后重新观察，不盲目重放。"
 }
 
 // Parameters implements agent.Tool (map-based JSON Schema).
@@ -255,7 +265,7 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 
 	switch input.Action {
 	case "screenshot":
-		if err := os.MkdirAll(t.shotsDir, 0o755); err != nil {
+		if err := os.MkdirAll(t.shotsDir, 0o700); err != nil {
 			return agent.ToolResult{IsError: true, Content: "创建截图目录失败: " + err.Error()}, nil
 		}
 		out, err := t.helper(c, "screenshot", map[string]any{"output_dir": t.shotsDir})
@@ -268,7 +278,11 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage, onUpdate fun
 		if err := json.Unmarshal(out, &result); err != nil || result.Path == "" {
 			return agent.ToolResult{IsError: true, Content: "截屏结果异常: " + strings.TrimSpace(string(out))}, nil
 		}
-		return agent.ToolResult{Content: "屏幕截图已保存: " + result.Path}, nil
+		data, err := t.readScreenshot(result.Path)
+		if err != nil {
+			return agent.ToolResult{IsError: true, Content: "读取截图失败: " + err.Error()}, nil
+		}
+		return agent.ToolResult{Content: "主屏幕截图（像素对应屏幕逻辑坐标）: " + string(out), Images: []ai.ImageBlock{{MediaType: "image/png", Data: data}}}, nil
 
 	case "get_app_state":
 		out, err := t.helper(c, "app_state", nil)
@@ -394,9 +408,12 @@ func runHelper(ctx context.Context, tool string, args any) (json.RawMessage, err
 	}
 	c, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(c, HelperPath(), cmdArgs...).Output()
+	cmd := exec.CommandContext(c, HelperPath(), cmdArgs...)
+	var diagnostic bytes.Buffer
+	cmd.Stderr = &diagnostic
+	out, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(diagnostic.String()))
 	}
 	return json.RawMessage(out), nil
 }
@@ -615,4 +632,36 @@ func isHighRisk(batch actionBatch) bool {
 		}
 	}
 	return false
+}
+
+// A helper result must reference a bounded PNG inside this tool's screenshot directory.
+func (t *Tool) readScreenshot(path string) ([]byte, error) {
+	root, err := filepath.EvalSymlinks(t.shotsDir)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	relative, err := filepath.Rel(root, resolved)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil, errors.New("截图路径超出专用目录")
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 16*1024*1024 {
+		return nil, errors.New("截图文件无效或超过 16MB")
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return nil, err
+	}
+	dimensions, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || format != "png" || dimensions.Width < 1 || dimensions.Height < 1 || dimensions.Width*dimensions.Height > 32*1024*1024 {
+		return nil, errors.New("截图不是有效的 PNG")
+	}
+	return data, nil
 }

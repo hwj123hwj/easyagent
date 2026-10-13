@@ -5,7 +5,7 @@ import { parseComputerSettings, type ComputerSettings } from "../client/computer
 
 const RISK_BANNER =
   "Computer use 功能属于测试阶段，而且对模型性能要求较高，请在知晓所有风险后开启。" +
-  "当前为实验性 helper 接口，安装包暂未包含原生 helper。只有主机安装兼容的 easyagent-cua-helper 后，才可截图、读取应用状态与控制键鼠。";
+  "macOS 14 及以上的桌面安装包已内置电脑控制，无需配置 MCP。首次使用请授予辅助功能和屏幕录制权限；截屏和应用状态会提供给当前会话的模型。";
 
 function StatusRow({
   label,
@@ -73,6 +73,12 @@ export function ComputerUseSettings() {
     return () => { epoch.current++; };
   }, [load, profileId]);
 
+  useEffect(() => {
+    const refresh = () => { if (!saving && !requesting) void load(); };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [load, saving, requesting]);
+
   const patch = async (body: Record<string, unknown>) => {
     if (saving || requesting) return;
     const current = ++epoch.current;
@@ -116,9 +122,9 @@ export function ComputerUseSettings() {
     );
   }
 
-  const availabilityLabel = settings.available ? "可用" : "不可用（需要 macOS + easyagent-cua-helper）";
+  const availabilityLabel = settings.available ? (settings.granted ? "就绪" : "组件已就绪，等待系统授权") : "不可用（需要 macOS 14+ 桌面安装包）";
   const permissionLabel = !settings.available
-    ? "helper 未安装，无法检查权限"
+    ? "当前主机未提供电脑控制组件"
     : settings.granted
       ? "已授予"
       : `缺少：${(settings.missing || []).join("、")}`;
@@ -210,7 +216,7 @@ export function ComputerUseSettings() {
         <StatusRow label="可用性" value={availabilityLabel} />
         <StatusRow
           label="请求系统权限"
-          description="macOS 会请求辅助功能和屏幕录制权限。"
+          description="在 macOS 系统设置中为 EasyAgent / EasyAgent Computer Use 授权辅助功能和屏幕录制。"
           action={
             <button
               className="btn"
@@ -252,7 +258,7 @@ export function ComputerUseSettings() {
       )}
 
       <p style={{ fontSize: 12, opacity: 0.6, marginTop: 12, lineHeight: 1.6 }}>
-        启用并安装兼容 helper 后，新建会话的模型可使用 computer 工具（截屏 / 读取应用状态 / 键鼠控制）。
+        启用并授予系统权限后，新建会话的视觉模型可使用 computer 工具（截屏 / 读取应用状态 / 键鼠控制）。
         键鼠操作按审批策略把关：默认逐批询问，每批最多 20 个动作；退出、注销、锁屏、强制退出组合键在任何策略下都会询问。
         已加载会话保持原有工具集与策略，新建或重新加载会话后生效。
       </p>

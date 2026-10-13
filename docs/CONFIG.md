@@ -87,7 +87,11 @@ Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。ser
 
 `EA_ENABLE_COMPUTER_USE`（默认 `false`）与 `EA_COMPUTER_APPROVAL_POLICY`（`ask` 默认，或 `auto`）控制新建/重新加载的编码会话。桌面设置保存在数据目录的 `settings.json`，启动时覆盖环境与 YAML 中的对应项；已加载会话保持配置快照。
 
-v0.9.0 只提供可选 `easyagent-cua-helper` 的 CLI 协议，安装包没有原生 helper。仅 macOS 主机安装兼容 helper 后可执行，权限检测不可用时界面明确提示。截图结果当前只是本地路径。审批策略独立于编码会话的完全权限；`ask` 批次及 `auto` 中退出/注销/锁屏/强制退出组合键必须经交互批准。审计列表表示实际控制过的应用，不是允许列表，也不限制目标应用。原生实现与基于应用/元素的控制需要后续完善。
+从 v0.14.0 起，macOS 14+ 的桌面安装包内置原生 `EasyAgent Computer Use` helper，自动从应用资源目录发现，不需要安装或配置 CUA MCP。首次使用在「实验」设置中启用并点击「请求系统权限」，按照 macOS 提示为 EasyAgent / EasyAgent Computer Use 授予辅助功能和屏幕录制权限；返回应用会自动刷新状态。如系统要求退出重开，请重启 EasyAgent。系统授权不会被应用自动代办。Linux、Windows 及旧版 macOS 暂不支持。
+
+电脑控制包括主屏幕截图、前台应用的辅助功能元素树、坐标点击、文字输入、组合键、滚动及等待。截图直接作为图像回传给支持视觉输入的模型，并在会话历史中持久化；仅文本模型不能正确使用截图。每个截图像素对应屏幕逻辑坐标，元素树也使用屏幕逻辑坐标，密码字段不读取值。截图与会话保存在本机数据目录，需按会话数据对待；图像会随模型请求发送给所选 Provider。原生 helper 不依赖 shell、AppleScript、第三方 MCP 或外部下载。
+
+审批策略独立于编码会话的完全权限；`ask` 批次及 `auto` 中退出/注销/锁屏/强制退出组合键必须经交互批准。单批最多 20 个动作、累计等待最多 50 秒，整批先校验再执行；取消会终止 helper 并释放占用，但已发生的操作不回滚。审计列表记录实际控制过的应用，不是允许列表。已加载会话保留配置快照，新建或重新加载后生效。CLI 单独安装仍可使用可执行文件旁或 PATH 中兼容的 helper。
 
 兼容 helper 的 CLI 契约：`status` 返回 `accessibility` / `screen_recording` 布尔值；`request-permissions` 打开权限面板；`tool screenshot --args '{"output_dir":"…"}'` 返回 `path`；`tool app_state` 返回 JSON 应用状态；`tool perform_action --args '{"actions":[…]}'` 仅整批完成时返回 `{"success":true,"focused_app":"应用 ID"}`，失败返回非零退出码或 `{"success":false,"error":"原因"}`。批次按顺序执行，不保证回滚，失败不可盲目重放。所有输出走 stdout，诊断走 stderr。
 
