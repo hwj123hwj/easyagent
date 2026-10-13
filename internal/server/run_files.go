@@ -417,7 +417,7 @@ func (s *Server) undoRunFile(w http.ResponseWriter, r *http.Request) {
 	s.runs.mu.Lock()
 	defer s.runs.mu.Unlock()
 	for _, state := range s.runs.sessions {
-		if state.run != nil && runActive(state.run) {
+		if sessionBusy(state) {
 			writeError(w, 409, "请等待运行中的任务结束后撤回")
 			return
 		}

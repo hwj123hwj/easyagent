@@ -75,6 +75,8 @@ GET /ws
 
 服务先落盘接受凭据，再返回 `accepted`（含 `request_id`、`run_id`、`state`、`duplicate`）。客户端在接受前保留草稿；响应不确定时以同一 `request_id` 和原始 prompt 重试。相同 ID 的不同请求内容返回冲突；同一会话一次只能执行一个任务。
 
+会话的历史读取、工作区快照与工具准备也属于受理占位期，该阶段拒绝另一条消息和删除、分叉、权限切换等会话变更。并发重试同一请求等待这次受理的结果，准备失败且未执行的请求可继续以原 ID 重试。准备工作不持有所有会话共用的运行锁，其他会话仍可取消或审批已接受的任务。
+
 ```json
 {"type":"subscribe","session_id":"sess_123","run_id":"run_123","after_seq":12}
 {"type":"cancel","session_id":"sess_123","run_id":"run_123"}

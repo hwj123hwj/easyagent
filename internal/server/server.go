@@ -530,7 +530,7 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	s.runs.mu.Lock()
 	defer s.runs.mu.Unlock()
-	if state := s.runs.sessions[sessionID]; state != nil && state.run != nil && runActive(state.run) {
+	if state := s.runs.sessions[sessionID]; sessionBusy(state) {
 		writeError(w, http.StatusConflict, "会话仍在执行任务，请先取消或等待完成")
 		return
 	}
@@ -1555,7 +1555,7 @@ func (s *Server) setSessionPermissions(w http.ResponseWriter, r *http.Request) {
 	}
 	s.runs.mu.Lock()
 	defer s.runs.mu.Unlock()
-	if state := s.runs.sessions[id]; state != nil && state.run != nil && runActive(state.run) {
+	if state := s.runs.sessions[id]; sessionBusy(state) {
 		writeError(w, http.StatusConflict, "请等待当前任务完成后切换权限")
 		return
 	}
