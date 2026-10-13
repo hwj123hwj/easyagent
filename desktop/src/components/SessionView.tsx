@@ -59,7 +59,7 @@ export function SessionView() {
         </div>
       </div>
 
-      <PromptBar key={profile + ":" + view.meta.id} view={view} />
+      <PromptBar key={`prompt:${profile}:${view.meta.id}`} view={view} />
 
       {bottomOpen && (
           <Resizer
@@ -70,7 +70,7 @@ export function SessionView() {
             onChange={(v) => setWorkspaceSize("bottomHeight", v)}
           />
       )}
-      <BottomTerminal key={`${profile}:${view.meta.id}`} view={view} height={bottomHeight} open={bottomOpen} />
+      <BottomTerminal key={`terminal:${profile}:${view.meta.id}`} view={view} height={bottomHeight} open={bottomOpen} />
     </main>
   );
 }
