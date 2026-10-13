@@ -87,7 +87,7 @@ Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。ser
 
 `EA_ENABLE_COMPUTER_USE`（默认 `false`）与 `EA_COMPUTER_APPROVAL_POLICY`（`ask` 默认，或 `auto`）控制新建/重新加载的编码会话。桌面设置保存在数据目录的 `settings.json`，启动时覆盖环境与 YAML 中的对应项；已加载会话保持配置快照。
 
-从 v0.14.0 起，macOS 14+ 的桌面安装包内置原生 `EasyAgent Computer Use` helper，自动从应用资源目录发现，不需要安装或配置 CUA MCP。首次使用在「实验」设置中启用并点击「请求系统权限」，按照 macOS 提示为 EasyAgent / EasyAgent Computer Use 授予辅助功能和屏幕录制权限；返回应用会自动刷新状态。如系统要求退出重开，请重启 EasyAgent。系统授权不会被应用自动代办。Linux、Windows 及旧版 macOS 暂不支持。
+从 v0.14.0 起，macOS 14+ 的桌面安装包内置原生 `EasyAgent Computer Use` helper，自动从应用资源目录发现，不需要安装或配置 CUA MCP。首次使用在「实验」设置中启用并点击「请求系统权限」，按照 macOS 提示为 EasyAgent / EasyAgent Computer Use 授予辅助功能和屏幕录制权限；返回应用会自动刷新状态。如系统要求退出重开，请重启 EasyAgent。系统授权不会被应用自动代办。当前安装包为 ad hoc 测试签名，更新后已有授权可能因签名变化而失效：即使系统开关显示开启，进程的权限探测仍会返回未授权。此时在辅助功能和屏幕录制中移除旧 EasyAgent 条目，再用「+」添加 `/Applications/EasyAgent.app`，并退出重开；两项权限需分别处理。Linux、Windows 及旧版 macOS 暂不支持。
 
 电脑控制包括主屏幕截图、前台应用的辅助功能元素树、坐标点击、文字输入、组合键、滚动及等待。截图直接作为图像回传给支持视觉输入的模型，并在会话历史中持久化；仅文本模型不能正确使用截图。每个截图像素对应屏幕逻辑坐标，元素树也使用屏幕逻辑坐标，密码字段不读取值。截图与会话保存在本机数据目录，需按会话数据对待；图像会随模型请求发送给所选 Provider。原生 helper 不依赖 shell、AppleScript、第三方 MCP 或外部下载。
 

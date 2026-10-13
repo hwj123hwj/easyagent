@@ -1,6 +1,8 @@
 """Exercise native argument validation without reading or controlling a desktop."""
 import json, subprocess, sys, unittest
 HELPER = sys.argv.pop(1)
+NO_TCC = "--no-tcc" in sys.argv
+if NO_TCC: sys.argv.remove("--no-tcc")
 class NativeContract(unittest.TestCase):
     def invoke(self, actions):
         p = subprocess.run([HELPER, 'validate-actions', '--args', json.dumps({'actions': actions})], capture_output=True, text=True)
@@ -20,6 +22,7 @@ class NativeContract(unittest.TestCase):
         self.assertEqual(version["protocol_version"],1)
         self.assertNotEqual(version["version"],"dev")
 
+    @unittest.skipIf(NO_TCC, "TCC probes run before packaging, never from a mounted installer")
     def test_permission_status_contract(self):
         p = subprocess.run([HELPER,'status'],capture_output=True,text=True,check=True)
         status=json.loads(p.stdout)
