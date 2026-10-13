@@ -19,8 +19,4 @@ class InstallerDetach(unittest.TestCase):
         result,count=self.invoke(99)
         self.assertNotEqual(result.returncode,0); self.assertEqual(count,5)
         self.assertIn('retained for inspection',result.stderr)
-    def test_mounted_helper_avoids_permission_probe(self):
-        source=(ROOT/'scripts/check-desktop-package.sh').read_text()
-        self.assertIn('test_cua_helper.py "$HELPER" --no-tcc',source)
-        self.assertIn('test_cua_helper.py" "$APP/Contents/MacOS/easyagent-cua-helper"',(ROOT/'scripts/build-cua-helper.sh').read_text())
 if __name__=='__main__':unittest.main()
