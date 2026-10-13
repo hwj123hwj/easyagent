@@ -323,6 +323,10 @@ export function RunResults({ view }: { view: SessionView }) {
   useEffect(() => {
     let alive = true;
     setError("");
+    if (view.meta.id === "__new__") {
+      setResult(undefined);
+      return;
+    }
     void apiRequest<RunFileSet[]>(
       "GET",
       `/sessions/${encodeURIComponent(view.meta.id)}/run-files`,

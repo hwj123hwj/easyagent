@@ -45,6 +45,11 @@ test('parent renders do not reload historical diffs; review refresh still reload
     state.reviewRevision++;
     await render();
     assert.equal(fileCalls(), 40, 'an explicit review refresh reloads each diff once');
+    const count = calls.length;
+    view.meta = { id: '__new__' };
+    await render();
+    assert.equal(calls.length, count, 'a new conversation has no server session to load');
+    assert.equal(document.querySelector('.run-results'), null);
   } finally {
     await React.act(async () => root.unmount());
     dom.window.close();
