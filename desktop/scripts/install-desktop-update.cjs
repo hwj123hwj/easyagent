@@ -8,6 +8,8 @@ async function waitForExit(pid, timeout = 60000) {
   while (alive(pid)) { if (Date.now() >= end) throw Error('previous process is still running'); await delay(200); }
 }
 function verify(plan, app) {
+  const version = execFileSync('/usr/bin/plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', path.join(app, 'Contents/Info.plist')], { encoding: 'utf8' }).trim();
+  if (version !== (app === plan.candidate ? plan.version : plan.currentVersion)) throw Error('installation version changed');
   execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', '-R', '=' + plan.requirement, app], { stdio: 'ignore' });
   execFileSync('/usr/bin/codesign', ['--verify', '--strict', '-R', '=' + plan.helperRequirement, path.join(app, 'Contents/Resources/cua-helper/EasyAgent Computer Use.app')], { stdio: 'ignore' });
 }
@@ -78,7 +80,7 @@ if (require.main === module) {
     if (plan.target !== '/Applications/EasyAgent.app' || path.dirname(stage) !== '/Applications' ||
         !path.basename(stage).startsWith('.EasyAgent-update-') || !stage.endsWith('.noindex') ||
         plan.stage !== stage || plan.candidate !== path.join(stage, 'EasyAgent.app') || plan.receipt !== path.join(stage, 'receipt.json') ||
-        !Number.isSafeInteger(plan.parentPid) || plan.parentPid <= 1 || !/^\d+\.\d+\.\d+$/.test(plan.version) ||
+        !Number.isSafeInteger(plan.parentPid) || plan.parentPid <= 1 || !/^\d+\.\d+\.\d+$/.test(plan.version) || !/^\d+\.\d+\.\d+$/.test(plan.currentVersion) ||
         fs.lstatSync(stage).uid !== process.getuid() || (fs.lstatSync(stage).mode & 0o077)) throw Error('invalid update handoff');
     verify(plan, plan.target); verify(plan, plan.candidate);
     process.stdout.write('READY\n'); await install(plan);

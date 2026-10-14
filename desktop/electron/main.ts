@@ -367,6 +367,8 @@ handle("open-external", openExternal);
 async function installPreparedUpdate(automatic: boolean): Promise<void> {
   if (quitting || !updater || updateInstalling || providerApplying || updateDirty || terminals.size ||
       (automatic && mainWindow?.isFocused())) return;
+  const updateState = await updater.status();
+  if (updateState.phase !== "ready" || (automatic && !updateState.enabled) || updateInstalling) return;
   updateInstalling = true;
   let lease = "", connection: { url: string; token: string } | undefined, handedOff = false;
   try {
@@ -381,6 +383,7 @@ async function installPreparedUpdate(automatic: boolean): Promise<void> {
     lease = gate.lease;
     const permissions = await requestAt(connection, "GET", "/computer/settings");
     if (providerApplying || updateDirty || terminals.size || (automatic && mainWindow?.isFocused())) return;
+    if (automatic && !(await updater.status()).enabled) return;
     await updater.handoff(permissions.granted === true);
     handedOff = true; app.quit();
   } catch { /* Busy or offline: retain this app and retry at idle. */ }

@@ -27,6 +27,7 @@ function fixture(options = {}) {
     callback;
   let providerStore, manager, windowOptions, currentWindow;
   const updaterCalls = [];
+  let autoEnabled = options.autoEnabled === true, autoTick;
   const electron = {
     app: {
       isPackaged: options.packaged === true,
@@ -81,6 +82,7 @@ function fixture(options = {}) {
     const body = requestOptions.body ? JSON.parse(requestOptions.body) : null;
     if (resource.includes("/workspace/file-data")) return {ok:true,text:async()=>JSON.stringify({data:Buffer.from("exported-file").toString("base64"),mimeType:"text/plain",name:"report.md"})};
     if (resource.endsWith("/admin/deploy")) {
+      if (options.disableDuringLease && requestOptions.method === "POST") autoEnabled = false;
       return { ok: !options.busy, status: options.busy ? 409 : 200,
         text: async () => JSON.stringify(options.busy ? { error: "sensitive-upstream-error" } : { lease: "owned-lease" }) };
     }
@@ -162,8 +164,8 @@ function fixture(options = {}) {
     },
     "./update-checker": { checkForUpdate: async () => options.update ? ({ version: "0.15.5" }) : null },
     "./desktop-updater": { desktopUpdater: () => ({
-      status: async () => ({ supported: true, enabled: false, phase: "ready" }),
-      setEnabled: async () => ({ supported: true, enabled: false, phase: "ready" }),
+      status: async () => ({ supported: true, enabled: autoEnabled, phase: "ready" }),
+      setEnabled: async () => ({ supported: true, enabled: autoEnabled, phase: "ready" }),
       prepare: async version => { updaterCalls.push(["prepare", version]); return { phase: "ready" }; },
       handoff: async required => { updaterCalls.push(["handoff", required]); },
     }) },
@@ -192,7 +194,7 @@ function fixture(options = {}) {
       Blob,
       AbortSignal,
       fetch: fakeFetch,
-      setTimeout,
+      setTimeout: (fn,ms,...args) => ms===30000 ? (autoTick=fn,{unref(){}}) : setTimeout(fn,ms,...args),
       clearTimeout,
       setInterval,
       clearInterval,
@@ -203,6 +205,7 @@ function fixture(options = {}) {
   return {
     handlers,
     updaterCalls,
+    autoTick: () => autoTick?.(),
     terminalEvents,
     terminalSockets,
     exported:()=>fs.readFileSync(path.join(directory,"exported.md"),"utf8"),
@@ -464,6 +467,16 @@ test('desktop update installs only after an idle admission lease; busy or dirty 
    await f.handlers.get('install-desktop-update')(f.event);
    assert.equal(f.updaterCalls.filter(x=>x[0]==='handoff').length,blocked==='none'?1:0);
    if(blocked==='none')assert(f.requests.some(x=>x.resource.endsWith('/admin/deploy')&&x.options.method==='POST'));
+  }finally{f.cleanup();}
+ }
+});
+test('automatic installation respects foreground use and a switch disabled during the idle check',async()=>{
+ for(const kind of ['foreground','disabled','disabledDuringLease','idle']) {
+  const f=fixture({packaged:true,platform:'darwin',local:true,update:true,autoEnabled:kind!=='disabled',focused:kind==='foreground',disableDuringLease:kind==='disabledDuringLease'});
+  try {
+   await f.ready();f.autoTick();await f.ready();await f.ready();
+   assert.equal(f.updaterCalls.filter(x=>x[0]==='handoff').length,kind==='idle'?1:0);
+   if(kind==='disabledDuringLease')assert(f.requests.some(x=>x.resource.endsWith('/admin/deploy')&&x.options.method==='DELETE'));
   }finally{f.cleanup();}
  }
 });

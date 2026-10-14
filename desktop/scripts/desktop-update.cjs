@@ -58,6 +58,7 @@ function createUpdater(options) {
     const config = signing.configuration({ ...process.env, EA_MAC_SIGNING_MODE: 'auto' });
     if (config.mode !== 'local_certificate') throw Error('需要已配置的固定签名身份；不会自动创建证书或更改系统授权');
     signing.verify(target, APP_ID, config); signing.verify(helperPath(target), HELPER_ID, config);
+    if (plist(target, 'CFBundleShortVersionString') !== options.version) throw Error('安装版本已改变，请重新启动应用后再检查更新');
     return config;
   };
   try { identity(); state.supported = true; } catch {
@@ -90,7 +91,11 @@ function createUpdater(options) {
   } catch { /* No previous install report. */ }
   async function prepare(version) {
     if (pending) return pending;
-    if (prepared?.version === version) return { ...state };
+    if (prepared?.version === version && state.phase !== 'error') return { ...state };
+    if (prepared && state.phase === 'error') {
+      unregister(prepared.candidate); fs.rmSync(prepared.stage, { recursive: true }); prepared = undefined;
+      try { fs.unlinkSync(journal); } catch {}
+    }
     pending = (async () => {
       let stage, mounted = false;
       try {
@@ -151,9 +156,10 @@ function createUpdater(options) {
   }
   async function handoff(parentPid, requirePermissions) {
     if (!prepared || state.phase !== 'ready') throw Error('更新尚未准备就绪');
+    try {
     identity();
     const receipt = path.join(prepared.stage, 'receipt.json');
-    const plan = { ...prepared, target, parentPid, receipt, requirePermissions, journal, resultFile: path.join(options.userData, 'desktop-update-result.json') };
+    const plan = { ...prepared, target, currentVersion: options.version, parentPid, receipt, requirePermissions, journal, resultFile: path.join(options.userData, 'desktop-update-result.json') };
     fs.writeFileSync(path.join(prepared.stage, 'plan.json'), JSON.stringify(plan), { mode: 0o600 });
     const child = spawn(path.join(prepared.stage, 'node'), [path.join(prepared.stage, 'install.cjs'), path.join(prepared.stage, 'plan.json')], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
     try { await new Promise((resolve, reject) => {
@@ -164,6 +170,7 @@ function createUpdater(options) {
     }); } catch (error) { child.kill('SIGTERM'); throw error; }
     child.stdout.destroy(); child.unref(); emit({ phase: 'installing' });
     return { ...state };
+    } catch { emit({ phase: 'error', error: '更新安装未启动，当前版本和授权已保留；请重试' }); throw Error('更新安装未启动，当前版本保留'); }
   }
   return { status: () => ({ ...state }), prepare, setEnabled, handoff };
 }
