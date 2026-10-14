@@ -69,6 +69,18 @@ EA_VERSION=v0.1.0 bash scripts/install.sh
 
 SHA-256 用于检测下载损坏，信任根仍是 GitHub HTTPS 和发布权限。新版 Release 同时受 GitHub 不可变发布保护；下载完整资产后可运行 `sha256sum --check checksums.txt` 核验，macOS 可用 `shasum -a 256 -c checksums.txt`。
 
+## 本机固定签名与权限继承
+
+公开 CI 在没有 Developer ID 证书时仍产出 ad hoc 包，其默认 designated requirement 绑定本次构建的 CDHash；内容改变会改变身份，不能承诺旧的辅助功能 / 屏幕录制授权一直有效。公证与 TCC 授权是不同机制，签名不会自动授予权限。
+
+个人 Mac 可使用仓库外的固定项目证书，首次准备需要 OpenSSL 3（如 Homebrew openssl@3）。`python3 scripts/prepare-local-signing.py` 准备专用钥匙串及固定身份，默认不修改信任；确认后才运行 `python3 scripts/prepare-local-signing.py --trust-for-codesign`，仅为这一张证书添加当前用户的 CodeSigning 信任，并限定 `/usr/bin/codesign`，不添加网页 / TLS 或系统级信任。私钥保留在专用钥匙串，原始 PEM / P12 在导入后移除；配置和钥匙串密码在 `~/Library/Application Support/EasyAgent Signing/`，目录 0700、敏感文件 0600，不上传、提交或打印。首次准备失败或已有身份不完整时拒绝自动重建，避免轮换身份。
+
+`scripts/build-desktop.sh arm64` 自动读取该固定配置；也可用 `EA_MAC_SIGNING_CONFIG` 指定同样受权限检查的配置。主应用与 helper 的 DR 都包含各自 Bundle ID 和同一证书指纹，不依赖应用版本或 CDHash；helper 签名先校验、打包时不重复签名。代码签名需要临时加入专用钥匙串搜索项，完成或失败后只移除本次加入项，保留其他设置。不要并发运行需要本机钥匙串的打包。
+
+`EA_MAC_SIGNING_MODE=adhoc` 是明确的临时签名选择，可用于 CI / 无身份的试包。配置存在但不可用时不会自动使用它；不要用临时包覆盖固定签名的正式本机入口。公开 Release 的 DMG 仍是 CI ad hoc 包，Mac 日常更新应从已核实 main 通过上述固定签名流程构建、校验后替换 `/Applications/EasyAgent.app`。这条本机路径不是 Apple Developer ID 分发或公证，不能拿来保证其他设备直接下载后的权限继承。
+
+从旧 ad hoc 身份切换到固定证书时仍需一次辅助功能和屏幕录制授权；随后比较升级前后 DR 并读取实际权限，不只看系统设置开关。证书有期限，私钥 / 证书更换、切回 ad hoc、Bundle ID 变化或用户撤权都会破坏继承，不自动修改 TCC 数据库、绕过权限或关闭 Gatekeeper。
+
 ## 仓库保护配置
 
 配置保存在 [main 规则](../.github/rulesets/main.json) 与 [tag 规则](../.github/rulesets/release-tags.json)。main 要求 PR、最新基线的 GitHub Actions `verify` 成功且讨论已解决，禁止强推和删除。个人维护不强制另一个账号审批；发布仍受上述检查约束。

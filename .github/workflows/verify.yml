@@ -34,5 +34,6 @@ jobs:
       - run: node --test scripts/web-test.mjs scripts/mcp-settings-test.mjs
       - run: python3 scripts/test_update_mini.py
       - run: python3 scripts/test_desktop_registration.py
+      - run: python3 scripts/test_local_signing.py
       - run: python3 -m unittest discover -s scripts -p "test_release*.py"
       - run: git diff --check
