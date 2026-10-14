@@ -46,7 +46,7 @@ function createUpdater(options) {
   const journal = path.join(options.userData, 'desktop-update-pending.json');
   const savePending = value => { fs.mkdirSync(options.userData, { recursive: true, mode: 0o700 }); fs.writeFileSync(journal + '.tmp', JSON.stringify(value), { mode: 0o600 }); fs.renameSync(journal + '.tmp', journal); };
   const validStage = stage => typeof stage === 'string' && path.dirname(stage) === path.dirname(target) && path.basename(stage).startsWith('.EasyAgent-update-') && stage.endsWith('.noindex') && fs.lstatSync(stage).isDirectory() && fs.lstatSync(stage).uid === process.getuid() && !(fs.lstatSync(stage).mode & 0o077);
-  let state = { supported: false, enabled: true, phase: 'idle' }, prepared, pending;
+  let state = { supported: false, enabled: true, phase: 'idle' }, prepared, pending, installer;
   try {
     const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     state.enabled = saved.enabled === true;
@@ -168,10 +168,16 @@ function createUpdater(options) {
       child.once('exit', () => { clearTimeout(timeout); reject(Error('安装进程提前退出')); });
       child.stdout.once('data', data => { clearTimeout(timeout); data.toString().includes('READY') ? resolve() : reject(Error('安装进程未就绪')); });
     }); } catch (error) { child.kill('SIGTERM'); throw error; }
-    child.stdout.destroy(); child.unref(); emit({ phase: 'installing' });
+    child.stdout.destroy(); child.unref(); installer = child; emit({ phase: 'installing' });
     return { ...state };
     } catch { emit({ phase: 'error', error: '更新安装未启动，当前版本和授权已保留；请重试' }); throw Error('更新安装未启动，当前版本保留'); }
   }
-  return { status: () => ({ ...state }), prepare, setEnabled, handoff };
+  function cancelHandoff() {
+    // The parent has not quit yet, so the installer is only waiting. A late
+    // edit/focus/terminal or disable event can safely cancel before replacement.
+    if (installer) { installer.kill('SIGTERM'); installer = undefined; }
+    return emit({ phase: prepared ? 'ready' : 'idle' });
+  }
+  return { status: () => ({ ...state }), prepare, setEnabled, handoff, cancelHandoff };
 }
 module.exports = { createUpdater, releasePayload, download };

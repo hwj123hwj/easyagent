@@ -385,6 +385,10 @@ async function installPreparedUpdate(automatic: boolean): Promise<void> {
     if (providerApplying || updateDirty || terminals.size || (automatic && mainWindow?.isFocused())) return;
     if (automatic && !(await updater.status()).enabled) return;
     await updater.handoff(permissions.granted === true, automatic);
+    if (quitting || providerApplying || updateDirty || terminals.size ||
+        (automatic && (mainWindow?.isFocused() || !(await updater.status()).enabled))) {
+      await updater.cancelHandoff(); return;
+    }
     handedOff = true; app.quit();
   } catch { /* Busy or offline: retain this app and retry at idle. */ }
   finally {

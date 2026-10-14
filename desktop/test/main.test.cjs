@@ -168,7 +168,11 @@ function fixture(options = {}) {
       status: async () => ({ supported: true, enabled: autoEnabled, phase: "ready" }),
       setEnabled: async () => ({ supported: true, enabled: autoEnabled, phase: "ready" }),
       prepare: async version => { updaterCalls.push(["prepare", version]); return { phase: "ready" }; },
-      handoff: async required => { updaterCalls.push(["handoff", required]); },
+      handoff: async required => {
+        updaterCalls.push(["handoff", required]);
+        if(options.editDuringHandoff)await handlers.get('desktop-update-dirty')({sender:contents,senderFrame:frame},true);
+      },
+      cancelHandoff: async () => { updaterCalls.push(["cancel"]); },
     }) },
   };
   if (options.terminals) fakes.ws = class extends EventEmitter {
@@ -484,4 +488,12 @@ test('automatic installation respects foreground use and a switch disabled durin
 test('an automatic restart opens the window without taking focus from the user',async()=>{
  const f=fixture({packaged:true,platform:'darwin',background:true});
  try {await f.ready();assert.equal(f.windowOptions().show,false);assert.equal(f.window().shownInactive,true);}finally{f.cleanup();}
+});
+test('an edit starting while the installer is being prepared cancels handoff and releases admission',async()=>{
+ const f=fixture({packaged:true,platform:'darwin',local:true,update:true,editDuringHandoff:true});
+ try {
+  await f.ready();await f.handlers.get('install-desktop-update')(f.event);
+  assert.equal(f.updaterCalls.filter(x=>x[0]==='cancel').length,1);
+  assert(f.requests.some(x=>x.resource.endsWith('/admin/deploy')&&x.options.method==='DELETE'));
+ }finally{f.cleanup();}
 });
