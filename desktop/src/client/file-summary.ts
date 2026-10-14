@@ -20,7 +20,12 @@ export function aggregateRunFiles(runs: RunFileSet[]): AggregatedFile[] {
         continue;
       }
       const discontinuous = existing.file.after !== file.before || existing.file.attribution !== file.attribution;
-      existing.file = { ...file, before: existing.file.before, binary: existing.file.binary || file.binary || discontinuous };
+      existing.file = {
+        ...file,
+        before: discontinuous ? undefined : existing.file.before,
+        after: discontinuous ? undefined : file.after,
+        binary: existing.file.binary || file.binary,
+      };
       existing.latestRunId = run.run_id;
       if (!existing.runs.includes(run.run_id)) existing.runs.push(run.run_id);
     }
