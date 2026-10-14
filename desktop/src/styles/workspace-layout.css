@@ -1,6 +1,6 @@
 /* 青夜工作区：对话保持阅读宽度，辅助工具按需展开。 */
 .desktop-shell {
-  --workspace-chrome-height: 42px;
+  --workspace-chrome-height: 48px;
 }
 .desktop-shell > .app {
   position: relative;
@@ -9,116 +9,57 @@
 .connection-bar {
   height: var(--workspace-chrome-height);
   min-height: var(--workspace-chrome-height);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px;
+  gap: 12px;
+  padding: 0 16px;
   -webkit-app-region: drag;
-  position: relative;
-  z-index: 20;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elev);
 }
 [data-platform="darwin"] .connection-bar {
-  padding-left: 80px;
-}
-.connection-bar-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  -webkit-app-region: no-drag;
-}
-.connection-bar-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
-  min-width: 0;
-  padding: 0 12px;
-  overflow: hidden;
-  user-select: none;
-}
-.connection-session-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 360px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--text-muted);
-  padding: 3px 8px;
-  border-radius: 5px;
-  transition: color 0.15s, background 0.15s;
-}
-.connection-session-title:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-.connection-session-fork {
-  color: var(--text-faint);
-  display: inline-flex;
-}
-.connection-bar-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  -webkit-app-region: no-drag;
-}
-.connection-host-capsule {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 2px 6px;
-  font-size: 11px;
+  padding-left: 82px;
 }
 .connection-bar button,
 .connection-picker {
   -webkit-app-region: no-drag;
 }
+.connection-bar > .grow {
+  flex: 1;
+  min-width: 0;
+}
 .connection-brand {
   min-width: 0;
   flex: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
-  user-select: none;
 }
 .connection-brand b {
-  font-size: 17px;
-  color: var(--accent);
+  font-size: 24px;
   line-height: 1;
-  letter-spacing: -0.02em;
 }
 [data-platform="darwin"] .connection-brand b {
+  /* The lowercase wordmark sits below the icon's optical centre. */
+  transform: translateY(-3px);
+}
+[data-platform="darwin"] .connection-brand > span {
   transform: translateY(-1px);
 }
 .connection-picker {
+  border-left: 1px solid var(--border);
+  padding-left: 14px;
   min-width: 0;
-  gap: 6px;
+  gap: 7px;
 }
 .host-trigger {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
-  padding: 3px 6px;
+  padding: 6px 8px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text);
-  font-size: 11.5px;
+  font-size: 12px;
   cursor: pointer;
 }
 .host-trigger:hover,
@@ -212,32 +153,21 @@
 }
 .connection-sidebar-toggle,
 .connection-terminal,
-.connection-workbench,
-.connection-settings {
-  width: 28px;
-  height: 28px;
-  border-radius: 5px;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.connection-sidebar-toggle:hover,
-.connection-terminal:hover,
-.connection-workbench:hover,
-.connection-settings:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+.connection-workbench {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
 }
 .connection-workbench.active,
 .connection-terminal.active {
   color: var(--accent);
   background: var(--accent-weak);
+}
+.connection-settings {
+  height: 30px;
+  padding: 5px 9px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .connection-notice {
   top: var(--workspace-chrome-height);
