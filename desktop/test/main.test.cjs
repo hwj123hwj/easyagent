@@ -26,6 +26,7 @@ function fixture(options = {}) {
     token = "private-api-token",
     callback;
   let providerStore, manager, windowOptions, currentWindow;
+  const updaterCalls = [];
   const electron = {
     app: {
       isPackaged: options.packaged === true,
@@ -37,6 +38,8 @@ function fixture(options = {}) {
       },
       quit() {},
       getPath: () => directory,
+      getVersion: () => "0.15.4",
+      getAppPath: () => "/Applications/EasyAgent.app/Contents/Resources/app.asar",
     },
     BrowserWindow: class extends EventEmitter {
       constructor(options) {
@@ -51,6 +54,7 @@ function fixture(options = {}) {
       async loadURL() {}
       async loadFile() {}
       setWindowButtonPosition(position) { this.buttonPositions.push({ ...position }); }
+      isFocused() { return options.focused !== false; }
       isDestroyed() { return this.destroyed; }
       isFullScreen() { return this.fullScreen; }
     },
@@ -156,7 +160,13 @@ function fixture(options = {}) {
         constructor() { super(); providerStore = this; }
       },
     },
-    "./update-checker": { checkForUpdate: async () => null },
+    "./update-checker": { checkForUpdate: async () => options.update ? ({ version: "0.15.5" }) : null },
+    "./desktop-updater": { desktopUpdater: () => ({
+      status: async () => ({ supported: true, enabled: false, phase: "ready" }),
+      setEnabled: async () => ({ supported: true, enabled: false, phase: "ready" }),
+      prepare: async version => { updaterCalls.push(["prepare", version]); return { phase: "ready" }; },
+      handoff: async required => { updaterCalls.push(["handoff", required]); },
+    }) },
   };
   if (options.terminals) fakes.ws = class extends EventEmitter {
     static OPEN = 1;
@@ -174,7 +184,7 @@ function fixture(options = {}) {
       exports: module.exports,
       require: (name) => fakes[name] || require(name),
       __dirname: options.electronDirectory || "/tmp/easyagent-main-test",
-      process: { ...process, platform: options.platform || process.platform },
+      process: { ...process, on: () => {}, platform: options.platform || process.platform },
       Buffer,
       URL,
       URLSearchParams,
@@ -184,12 +194,15 @@ function fixture(options = {}) {
       fetch: fakeFetch,
       setTimeout,
       clearTimeout,
+      setInterval,
+      clearInterval,
       setImmediate,
     },
     { filename: "main.js" },
   );
   return {
     handlers,
+    updaterCalls,
     terminalEvents,
     terminalSockets,
     exported:()=>fs.readFileSync(path.join(directory,"exported.md"),"utf8"),
@@ -441,4 +454,16 @@ test("closing a terminal while the endpoint is resolving does not start an orpha
   await f.handlers.get("terminal-close")(f.event, "pending");
   release({ url: "http://127.0.0.1:9999" }); await pending;
   assert.equal(f.terminalSockets.length, 0);
+});
+test('desktop update installs only after an idle admission lease; busy or dirty apps never hand off',async()=>{
+ for(const blocked of ['busy','dirty','none']) {
+  const f=fixture({packaged:true,platform:'darwin',local:true,update:true,busy:blocked==='busy'});
+  try {
+   await f.ready();
+   if(blocked==='dirty')await f.handlers.get('desktop-update-dirty')(f.event,true);
+   await f.handlers.get('install-desktop-update')(f.event);
+   assert.equal(f.updaterCalls.filter(x=>x[0]==='handoff').length,blocked==='none'?1:0);
+   if(blocked==='none')assert(f.requests.some(x=>x.resource.endsWith('/admin/deploy')&&x.options.method==='POST'));
+  }finally{f.cleanup();}
+ }
 });

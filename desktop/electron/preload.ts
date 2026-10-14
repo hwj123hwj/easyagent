@@ -24,6 +24,15 @@ contextBridge.exposeInMainWorld("piAPI", {
   getServerUrl: () => call("get-server-url"),
   startServer: () => call("start-server"),
   checkForUpdate: () => call("check-for-update"),
+  desktopUpdateStatus: () => call("desktop-update-status"),
+  setDesktopAutoUpdate: (enabled: boolean) => call("desktop-update-enabled", enabled),
+  installDesktopUpdate: () => call("install-desktop-update"),
+  reportUpdateDirty: (dirty: boolean) => call("desktop-update-dirty", dirty),
+  onDesktopUpdate: (handler: (value: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown) => handler(value);
+    ipcRenderer.on("desktop-update-state", listener);
+    return () => ipcRenderer.removeListener("desktop-update-state", listener);
+  },
   openDownloadPage: (url: string) => call("open-download-page", url),
   pickFolder: () => call("pick-folder"),
   exportFile: (session: string, path: string, profile: string) => call("export-file", session, path, profile),

@@ -631,6 +631,10 @@ function FileContent({
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    void window.piAPI?.reportUpdateDirty?.(dirty);
+    return () => { void window.piAPI?.reportUpdateDirty?.(false); };
+  }, [dirty]);
 
   useEffect(() => {
     setLoaded(null);

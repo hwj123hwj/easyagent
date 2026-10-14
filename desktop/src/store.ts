@@ -844,10 +844,20 @@ export const useStore = create<StoreState>((set, get) => ({
       await get().checkUpdate();
       return;
     }
-    if (u?.info?.downloadUrl) {
-      await window.piAPI?.openDownloadPage(u.info.downloadUrl);
+    if (u?.info?.version) {
+      try {
+        const status = await window.piAPI?.desktopUpdateStatus?.();
+        if (status?.supported) {
+          const result = await window.piAPI?.installDesktopUpdate();
+          if (result?.phase === "error") throw Error(result.error);
+          return;
+        }
+        if (status && !status.manualDownload) throw Error(status.message || "固定签名身份未就绪，请检查签名配置后重试");
+        await window.piAPI?.openDownloadPage(u.info.downloadUrl);
+      } catch (error) {
+        set({ update: { ...u, phase: "error", error: error instanceof Error ? error.message : "更新失败，当前版本保留" } });
+      }
     }
-    set((s) => ({ update: s.update ? { ...s.update, phase: "idle" } : null }));
   },
   snoozeUpdate: () =>
     set((s) => (s.update ? { update: { ...s.update, snoozed: true } } : {})),
@@ -977,6 +987,11 @@ export const useStore = create<StoreState>((set, get) => ({
   init: async () => {
     if (initialized) return;
     initialized = true;
+    window.piAPI?.onDesktopUpdate?.((state) => {
+      if (!state.supported || state.phase === "idle") return;
+      set({ update: { supported: true, phase: state.phase, error: state.error, currentVersion: __APP_VERSION__,
+        info: state.version ? { version: state.version, downloadUrl: "", releaseNotes: "" } : undefined } });
+    });
     let queue: Envelope[] = [],
       scheduled = 0;
     const flush = () => {

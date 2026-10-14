@@ -320,6 +320,7 @@ export const zh = {
   'update.updateNow': '立即更新',
   'update.later': '稍后',
   'update.skip': '跳过此版本',
+  'update.autoIdle': '离开应用后自动安装；有任务、终端或未保存编辑时等待。',
   'update.downloading': '正在下载更新…',
   'update.downloaded': '更新已下载完成',
   'update.installNow': '立即安装',

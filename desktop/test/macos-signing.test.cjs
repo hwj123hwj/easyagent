@@ -38,3 +38,14 @@ test('failed signing restores the original user keychain list and does not print
   assert.deepEqual(calls.at(-1).args,['list-keychains','-d','user','-s','/original/login.keychain-db']);
  }finally{fs.rmSync(f.root,{recursive:true});}
 });
+test('automatic signing and manual builds cannot modify the keychain search list concurrently',async()=>{
+ const f=fixture(), filename=path.resolve(__dirname,'../scripts/macos-signing.cjs'), m=new Module(filename,module);m.paths=module.paths;
+ m.require=name=>name==='node:child_process'?{execFileSync:(_cmd,args)=>args[0]==='list-keychains'&&args.length===3?'    "/original/login.keychain-db"\n':undefined}:module.require(name);
+ m._compile(fs.readFileSync(filename,'utf8'),filename);
+ let finish;
+ try {
+  const first=m.exports.withKeychain({...f.config,mode:'local_certificate'},()=>new Promise(resolve=>{finish=resolve;}));
+  await assert.rejects(m.exports.withKeychain({...f.config,mode:'local_certificate'},async()=>{}),/already in progress/);
+  finish();await first;assert(!fs.existsSync(path.join(f.root,'.codesign-lock')));
+ }finally{fs.rmSync(f.root,{recursive:true});}
+});

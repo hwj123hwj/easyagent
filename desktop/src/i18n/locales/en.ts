@@ -322,6 +322,7 @@ export const en = {
   'update.updateNow': 'Update now',
   'update.later': 'Later',
   'update.skip': 'Skip this version',
+  'update.autoIdle': 'Installs when you leave the app; waits for tasks, terminals and unsaved edits.',
   'update.downloading': 'Downloading update…',
   'update.downloaded': 'Update ready to install',
   'update.installNow': 'Install now',
