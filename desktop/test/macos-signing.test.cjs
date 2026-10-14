@@ -49,3 +49,14 @@ test('automatic signing and manual builds cannot modify the keychain search list
   finish();await first;assert(!fs.existsSync(path.join(f.root,'.codesign-lock')));
  }finally{fs.rmSync(f.root,{recursive:true});}
 });
+test('a crashed signer removes only its introduced search item before taking the lock again',async()=>{
+ const f=fixture(),filename=path.resolve(__dirname,'../scripts/macos-signing.cjs'),m=new Module(filename,module);m.paths=module.paths;
+ const lock=path.join(f.root,'.codesign-lock');fs.mkdirSync(lock,{mode:0o700});fs.writeFileSync(path.join(lock,'pid'),'999999999');fs.writeFileSync(path.join(lock,'original.json'),JSON.stringify(['/original/login.keychain-db']));
+ let list=['/original/login.keychain-db',f.config.keychain,'/unrelated/new.keychain-db'];
+ m.require=name=>name==='node:child_process'?{execFileSync:(_cmd,args)=>{if(args[0]==='list-keychains'){if(args.length===3)return list.map(x=>JSON.stringify(x)).join('\n');list=args.slice(4);}}}:module.require(name);
+ m._compile(fs.readFileSync(filename,'utf8'),filename);
+ try {
+  await m.exports.withKeychain({...f.config,mode:'local_certificate'},async()=>{});
+  assert.deepEqual(list,['/original/login.keychain-db','/unrelated/new.keychain-db']);assert(!fs.existsSync(lock));
+ }finally{fs.rmSync(f.root,{recursive:true});}
+});
