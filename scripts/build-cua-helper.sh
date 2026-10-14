@@ -18,5 +18,6 @@ app, version = pathlib.Path(sys.argv[1]), sys.argv[2]
  'LSMinimumSystemVersion':'14.0', 'LSUIElement':True,
 }))
 PY
-codesign --force --sign - --identifier com.easyagent.cua-helper "$APP"
+node "$ROOT/desktop/scripts/macos-signing.cjs" sign "$APP" com.easyagent.cua-helper
+node "$ROOT/desktop/scripts/macos-signing.cjs" verify "$APP" com.easyagent.cua-helper
 python3 "$ROOT/scripts/test_cua_helper.py" "$APP/Contents/MacOS/easyagent-cua-helper"

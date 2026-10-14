@@ -31,6 +31,7 @@ go vet ./...
 (cd third_party/bubbletea && go test ./...)
 node --test scripts/web-test.mjs scripts/mcp-settings-test.mjs
 python3 scripts/test_update_mini.py
+python3 scripts/test_local_signing.py
 python3 -m unittest discover -s scripts -p "test_release*.py"
 git diff --check
 ```

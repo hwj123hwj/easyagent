@@ -54,14 +54,19 @@ RESOURCES="$APP/Contents/Resources"
 [[ $(plutil -extract CFBundleIdentifier raw -o - "$APP/Contents/Info.plist") == com.easyagent.desktop ]]
 codesign --verify --deep --strict --verbose=2 "$APP"
 signature=$(codesign --display --verbose=4 "$APP" 2>&1)
-[[ "$signature" == *"Identifier=com.easyagent.desktop"* && "$signature" == *"Signature=adhoc"* \
+[[ "$signature" == *"Identifier=com.easyagent.desktop"* \
    && "$signature" == *"Sealed Resources version=2"* && "$signature" != *"Info.plist=not bound"* ]] \
-  || { echo 'Installer lacks a complete ad hoc app signature and resource seal' >&2; exit 1; }
+  || { echo 'Installer lacks a complete app signature and resource seal' >&2; exit 1; }
+if [[ $(node desktop/scripts/macos-signing.cjs mode) == adhoc ]]; then
+  [[ "$signature" == *"Signature=adhoc"* ]] || { echo 'Expected an ad hoc signature' >&2; exit 1; }
+fi
+node desktop/scripts/macos-signing.cjs verify "$APP" com.easyagent.desktop
 HELPER_APP="$RESOURCES/cua-helper/EasyAgent Computer Use.app"
 HELPER="$HELPER_APP/Contents/MacOS/easyagent-cua-helper"
 [[ $(plutil -extract CFBundleIdentifier raw -o - "$HELPER_APP/Contents/Info.plist") == com.easyagent.cua-helper ]]
 [[ $(plutil -extract CFBundleShortVersionString raw -o - "$HELPER_APP/Contents/Info.plist") == "$VERSION" ]]
 codesign --verify --deep --strict "$HELPER_APP"
+node desktop/scripts/macos-signing.cjs verify "$HELPER_APP" com.easyagent.cua-helper
 for binary in "$HELPER" "$APP/Contents/MacOS/EasyAgent" "$RESOURCES/easyagent" "$RESOURCES/runtime/bin/node"; do
   [[ -f "$binary" && -x "$binary" && $(lipo -archs "$binary") == "$MACH_ARCH" ]] \
     || { echo "Installer has an invalid $ARCH executable: $binary" >&2; exit 1; }
