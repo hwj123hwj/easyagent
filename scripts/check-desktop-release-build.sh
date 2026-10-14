@@ -26,6 +26,5 @@ git add -- CHANGELOG.md desktop/package.json desktop/package-lock.json
 git -c commit.gpgsign=false commit --quiet -m 'test: local desktop release fixture'
 git update-ref refs/remotes/origin/main HEAD
 git -c tag.gpgsign=false tag -a "$version" -m 'Local test only; never publish'
-# The custom signer uses only ad hoc identity "-", with no certificates or secrets.
-# Exercise it in PR builds too, rather than inheriting Electron's unsigned binary.
-CSC_FOR_PULL_REQUEST=true bash scripts/build-desktop.sh "$arch" "$version"
+# Public release fixtures must not pick up a developer's private local identity.
+EA_MAC_SIGNING_MODE=adhoc CSC_FOR_PULL_REQUEST=true bash scripts/build-desktop.sh "$arch" "$version"

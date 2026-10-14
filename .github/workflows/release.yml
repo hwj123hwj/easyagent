@@ -10,6 +10,8 @@ on:
         type: string
 permissions:
   contents: read
+env:
+  EA_MAC_SIGNING_MODE: adhoc
 # Serialize publication; do not cancel a run while uploading assets.
 concurrency:
   group: release
