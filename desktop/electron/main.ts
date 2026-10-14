@@ -365,7 +365,7 @@ handle("open-external", openExternal);
 
 // Acquire the core admission lease before quitting; busy updates wait safely.
 async function installPreparedUpdate(automatic: boolean): Promise<void> {
-  if (!updater || updateInstalling || providerApplying || updateDirty || terminals.size ||
+  if (quitting || !updater || updateInstalling || providerApplying || updateDirty || terminals.size ||
       (automatic && mainWindow?.isFocused())) return;
   updateInstalling = true;
   let lease = "", connection: { url: string; token: string } | undefined, handedOff = false;
@@ -390,7 +390,7 @@ async function installPreparedUpdate(automatic: boolean): Promise<void> {
   }
 }
 async function automaticUpdate(): Promise<void> {
-  if (!updater || updateChecking || process.env.EA_DESKTOP_UPDATE_ROLLBACK === "1") return;
+  if (quitting || !updater || updateChecking || process.env.EA_DESKTOP_UPDATE_ROLLBACK === "1") return;
   updateChecking = true;
   try {
     const state = await updater.status();
@@ -686,4 +686,4 @@ app.on("before-quit", (event) => {
 });
 
 // A rollback stops the updated app normally, including its managed core.
-if (app.isPackaged && process.platform === "darwin") process.on("SIGTERM", () => app.quit());
+if (app.isPackaged && process.platform === "darwin") process.on("SIGTERM", () => { if (!quitting) app.quit(); });

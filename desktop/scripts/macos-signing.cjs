@@ -43,12 +43,24 @@ async function withKeychain(config, action) {
     if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077) || !Number.isSafeInteger(pid) || pid <= 1) throw Error('Invalid signing lock');
     try { process.kill(pid, 0); throw Error('EasyAgent signing is already in progress'); }
     catch (error) { if (error.code !== 'ESRCH') throw error; }
+    const snapshot = path.join(lock, 'original.json');
+    if (fs.existsSync(snapshot)) {
+      const previous = JSON.parse(fs.readFileSync(snapshot, 'utf8'));
+      if (!Array.isArray(previous)) throw Error('Invalid signing recovery snapshot');
+      if (!previous.includes(config.keychain)) {
+        const current = execFileSync('/usr/bin/security', ['list-keychains', '-d', 'user'], { encoding: 'utf8' })
+          .split('\n').map(line => line.trim()).filter(Boolean).map(line => JSON.parse(line));
+        execFileSync('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...current.filter(file => file !== config.keychain)], { stdio: 'ignore' });
+      }
+      fs.unlinkSync(snapshot);
+    }
     fs.unlinkSync(path.join(lock, 'pid')); fs.rmdirSync(lock); takeLock();
   }
   try {
     unlock(config);
     const original = execFileSync('/usr/bin/security', ['list-keychains', '-d', 'user'], { encoding: 'utf8' })
       .split('\n').map(line => line.trim()).filter(Boolean).map(line => JSON.parse(line));
+    fs.writeFileSync(path.join(lock, 'original.json'), JSON.stringify(original), { mode: 0o600 });
     // codesign still needs the identity in the search list even with --keychain.
     // Scope this to signing and always restore the user's original list.
     execFileSync('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...new Set([...original, config.keychain])], { stdio: 'ignore' });
@@ -60,7 +72,10 @@ async function withKeychain(config, action) {
       const restored = original.includes(config.keychain) ? current : current.filter(file => file !== config.keychain);
       execFileSync('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...restored], { stdio: 'ignore' });
     }
-  } finally { fs.unlinkSync(path.join(lock, 'pid')); fs.rmdirSync(lock); }
+  } finally {
+    const snapshot = path.join(lock, 'original.json'); if (fs.existsSync(snapshot)) fs.unlinkSync(snapshot);
+    fs.unlinkSync(path.join(lock, 'pid')); fs.rmdirSync(lock);
+  }
 }
 async function sign(app, identifier, config = configuration()) {
   const args = ['--force', '--sign', config.identity, '--identifier', identifier, '--timestamp=none'];
