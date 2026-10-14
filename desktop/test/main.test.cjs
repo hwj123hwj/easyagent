@@ -55,6 +55,7 @@ function fixture(options = {}) {
       async loadURL() {}
       async loadFile() {}
       setWindowButtonPosition(position) { this.buttonPositions.push({ ...position }); }
+      showInactive() { this.shownInactive = true; }
       isFocused() { return options.focused !== false; }
       isDestroyed() { return this.destroyed; }
       isFullScreen() { return this.fullScreen; }
@@ -186,7 +187,7 @@ function fixture(options = {}) {
       exports: module.exports,
       require: (name) => fakes[name] || require(name),
       __dirname: options.electronDirectory || "/tmp/easyagent-main-test",
-      process: { ...process, on: () => {}, platform: options.platform || process.platform },
+      process: { ...process, on: () => {}, env: { ...process.env, ...(options.background ? { EA_DESKTOP_UPDATE_BACKGROUND: "1" } : {}) }, platform: options.platform || process.platform },
       Buffer,
       URL,
       URLSearchParams,
@@ -479,4 +480,8 @@ test('automatic installation respects foreground use and a switch disabled durin
    if(kind==='disabledDuringLease')assert(f.requests.some(x=>x.resource.endsWith('/admin/deploy')&&x.options.method==='DELETE'));
   }finally{f.cleanup();}
  }
+});
+test('an automatic restart opens the window without taking focus from the user',async()=>{
+ const f=fixture({packaged:true,platform:'darwin',background:true});
+ try {await f.ready();assert.equal(f.windowOptions().show,false);assert.equal(f.window().shownInactive,true);}finally{f.cleanup();}
 });

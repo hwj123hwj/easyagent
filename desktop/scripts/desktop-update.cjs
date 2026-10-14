@@ -154,12 +154,12 @@ function createUpdater(options) {
     const tmp = stateFile + '.tmp'; fs.writeFileSync(tmp, JSON.stringify({ enabled: value }), { mode: 0o600 }); fs.renameSync(tmp, stateFile);
     return emit({ enabled: value });
   }
-  async function handoff(parentPid, requirePermissions) {
+  async function handoff(parentPid, requirePermissions, automatic = false) {
     if (!prepared || state.phase !== 'ready') throw Error('更新尚未准备就绪');
     try {
     identity();
     const receipt = path.join(prepared.stage, 'receipt.json');
-    const plan = { ...prepared, target, currentVersion: options.version, parentPid, receipt, requirePermissions, journal, resultFile: path.join(options.userData, 'desktop-update-result.json') };
+    const plan = { ...prepared, target, currentVersion: options.version, parentPid, receipt, requirePermissions, automatic, journal, resultFile: path.join(options.userData, 'desktop-update-result.json') };
     fs.writeFileSync(path.join(prepared.stage, 'plan.json'), JSON.stringify(plan), { mode: 0o600 });
     const child = spawn(path.join(prepared.stage, 'node'), [path.join(prepared.stage, 'install.cjs'), path.join(prepared.stage, 'plan.json')], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
     try { await new Promise((resolve, reject) => {

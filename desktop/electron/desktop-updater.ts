@@ -32,6 +32,6 @@ export function desktopUpdater(publish: (state: DesktopUpdateState) => void) {
     status: async () => { await ready; return state; },
     prepare: async (version: string) => { await ready; return call('prepare', version); },
     setEnabled: async (value: boolean) => { await ready; return call('setEnabled', value); },
-    handoff: async (requirePermissions: boolean) => { await ready; return call('handoff', process.pid, requirePermissions); },
+    handoff: async (requirePermissions: boolean, automatic: boolean) => { await ready; return call('handoff', process.pid, requirePermissions, automatic); },
   };
 }

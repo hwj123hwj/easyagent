@@ -384,7 +384,7 @@ async function installPreparedUpdate(automatic: boolean): Promise<void> {
     const permissions = await requestAt(connection, "GET", "/computer/settings");
     if (providerApplying || updateDirty || terminals.size || (automatic && mainWindow?.isFocused())) return;
     if (automatic && !(await updater.status()).enabled) return;
-    await updater.handoff(permissions.granted === true);
+    await updater.handoff(permissions.granted === true, automatic);
     handedOff = true; app.quit();
   } catch { /* Busy or offline: retain this app and retry at idle. */ }
   finally {
@@ -589,6 +589,7 @@ const macWindowButtonPosition = { x: 14, y: 16 };
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
+    show: process.env.EA_DESKTOP_UPDATE_BACKGROUND !== "1",
     width: 1280,
     height: 860,
     minWidth: 780,
@@ -636,6 +637,9 @@ async function createWindow() {
   if (!app.isPackaged) await mainWindow.loadURL("http://localhost:5173");
   else
     await mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+  if (process.env.EA_DESKTOP_UPDATE_BACKGROUND === "1") {
+    mainWindow.showInactive(); delete process.env.EA_DESKTOP_UPDATE_BACKGROUND;
+  }
   mainWindow.on("closed", () => {
     closeTerminals();
     mainWindow = null;

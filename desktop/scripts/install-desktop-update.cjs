@@ -27,6 +27,7 @@ function unregister(app) {
 async function install(plan, deps = {}) {
   const verifyApp = deps.verify || verify, launch = deps.launch || ((app, receipt) => {
     const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+    if (plan.automatic) env.EA_DESKTOP_UPDATE_BACKGROUND = '1'; else delete env.EA_DESKTOP_UPDATE_BACKGROUND;
     if (receipt) { env.EA_DESKTOP_UPDATE_RECEIPT = receipt; env.EA_DESKTOP_UPDATE_REQUIRE_PERMISSIONS = plan.requirePermissions ? '1' : '0'; }
     else { delete env.EA_DESKTOP_UPDATE_RECEIPT; delete env.EA_DESKTOP_UPDATE_REQUIRE_PERMISSIONS; env.EA_DESKTOP_UPDATE_ROLLBACK = '1'; }
     const child = spawn(path.join(app, 'Contents/MacOS/EasyAgent'), [], { detached: true, env, stdio: 'ignore' });
