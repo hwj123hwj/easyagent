@@ -97,39 +97,9 @@ textarea::placeholder {
   background: var(--bg-elev);
   border-right: 1px solid var(--border);
 }
-.connection-bar {
-  height: 56px;
-  min-height: 56px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 24px;
-  border-bottom: 1px solid var(--border);
-  position: relative;
-  background: var(--bg-elev);
-  z-index: 20;
-}
-.connection-brand {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  font-size: 13px;
-  color: var(--text-dim);
-  min-width: 204px;
-}
-.connection-brand b {
-  font-size: 27px;
-  color: var(--accent);
-  letter-spacing: -0.035em;
-}
-.connection-picker {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 .connection-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   display: inline-block;
   border-radius: 50%;
   background: var(--text-faint);
@@ -140,12 +110,7 @@ textarea::placeholder {
 }
 .connection-caption {
   color: var(--text-faint);
-  font-size: 12px;
-}
-.connection-settings {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+  font-size: 11px;
 }
 .connection-settings.active {
   color: var(--accent);
