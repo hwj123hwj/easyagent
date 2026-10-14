@@ -30,6 +30,7 @@ test('external changes and discontinuous histories never become confirmed tool n
  const result = aggregateRunFiles([run('one', 'a\n', 'b\n'), run('external', 'b\n', 'c\n', {attribution:'observed'})]);
  assert.equal(result[0].file.attribution, 'observed');
  assert.equal(fileDiff(result[0].file), undefined);
+ assert.equal(result[0].file.binary, false, 'unavailable stats must not mislabel a text file as binary');
  const gap = aggregateRunFiles([run('one', 'a\n', 'b\n'), run('two', 'user\n', 'c\n')]);
  assert.equal(fileDiff(gap[0].file), undefined);
 });

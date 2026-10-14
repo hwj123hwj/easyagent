@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { apiRequest, useStore, type SessionView } from "../store";
-import type { RunFileSet, RunFileChange } from "../client/file-delivery";
+import type { RunFileSet } from "../client/file-delivery";
 import { summarizeDiffs } from "../client/file-review";
 import { aggregateRunFiles, workspaceFileRuns } from "../client/file-summary";
 import { Icon } from "./Icon";
