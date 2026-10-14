@@ -16,6 +16,10 @@ directories:
 files:
   - dist/electron/**/*
   - dist/renderer/**/*
+  - scripts/macos-signing.cjs
+  - scripts/sign-adhoc.cjs
+  - scripts/desktop-update*.cjs
+  - scripts/install-desktop-update.cjs
   - node_modules/ws/**/*
   - node_modules/semver/**/*
   - "!src"

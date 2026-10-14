@@ -50,6 +50,11 @@ interface PiAPI {
     downloadUrl: string;
     releaseNotes: string;
   } | null>;
+  desktopUpdateStatus: () => Promise<import('./types').DesktopAutoUpdateState | undefined>;
+  setDesktopAutoUpdate: (enabled: boolean) => Promise<import('./types').DesktopAutoUpdateState>;
+  installDesktopUpdate: () => Promise<import('./types').DesktopAutoUpdateState | undefined>;
+  reportUpdateDirty: (dirty: boolean) => Promise<void>;
+  onDesktopUpdate: (handler: (value: import('./types').DesktopAutoUpdateState) => void) => () => void;
   openDownloadPage: (url: string) => Promise<void>;
   pickFolder: () => Promise<string | null>;
   exportFile: (session: string, path: string, profile: string) => Promise<void>;

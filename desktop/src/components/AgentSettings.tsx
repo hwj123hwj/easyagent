@@ -1,3 +1,4 @@
+import { DesktopUpdateSettings } from "./DesktopUpdateSettings";
 import { ComputerUseSettings } from "./ComputerUseSettings";
 import { UsageSettings } from "./UsageSettings";
 import { useEffect, useRef, useState } from "react";
@@ -328,6 +329,7 @@ export function AgentSettings() {
                   )}
                 </div>
               </div>
+              <DesktopUpdateSettings />
               {update?.phase === "idle" && (
                 <p className="settings-note" role="status">
                   当前没有可安装的桌面更新

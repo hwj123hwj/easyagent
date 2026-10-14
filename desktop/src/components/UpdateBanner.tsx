@@ -9,8 +9,9 @@ export function UpdateBanner() {
   const snooze = useStore((s) => s.snoozeUpdate);
 
   if (!update || !update.supported || update.snoozed) return null;
-  if (update.phase !== 'available' && update.phase !== 'error') return null;
-  if (!update.info && update.phase !== 'error') return null;
+  const progress = ['downloading', 'verifying', 'signing', 'ready', 'installing'].includes(update.phase);
+  if (!progress && update.phase !== 'available' && update.phase !== 'error') return null;
+  if (!update.info && !progress && update.phase !== 'error') return null;
 
   const version = update.info?.version ?? '';
 
@@ -24,12 +25,12 @@ export function UpdateBanner() {
           <div className="update-toast-title">
             {update.phase === 'error'
               ? t('update.failed')
-              : t('update.available', { version })}
+              : progress ? t(update.phase === 'ready' ? 'update.downloaded' : 'update.downloading') : t('update.available', { version })}
           </div>
           <div className="update-toast-sub">
             {update.phase === 'error'
               ? update.error
-              : t('update.currentVersion', { version: update.currentVersion ?? '' })}
+              : progress ? t('update.autoIdle') : t('update.currentVersion', { version: update.currentVersion ?? '' })}
           </div>
         </div>
         <button
@@ -41,7 +42,7 @@ export function UpdateBanner() {
         </button>
       </div>
       <div className="update-toast-actions">
-        {update.phase === 'available' && (
+        {(update.phase === 'available' || update.phase === 'ready') && (
           <>
             <button className="btn ghost sm" onClick={() => snooze()}>
               {t('update.later')}

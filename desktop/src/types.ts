@@ -134,7 +134,18 @@ export type UpdatePhase =
   | 'idle'
   | 'checking'
   | 'available'
+  | 'downloading'
+  | 'verifying'
+  | 'signing'
+  | 'ready'
+  | 'installing'
   | 'error';
+
+export interface DesktopAutoUpdateState {
+  supported: boolean; enabled: boolean; manualDownload?: boolean;
+  phase: 'idle' | 'downloading' | 'verifying' | 'signing' | 'ready' | 'installing' | 'error';
+  version?: string; error?: string; message?: string;
+}
 
 export interface UpdateState {
   supported: boolean;

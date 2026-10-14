@@ -4,12 +4,13 @@ const { configuration, requirement, withKeychain, verify } = require("./macos-si
 
 // Local updates reuse a persistent certificate. Public CI defaults to ad hoc.
 module.exports = async function sign(options) {
-  const config = configuration();
+  const config = options.config || configuration();
   const app = path.resolve(options.app);
   const helper = path.join(app, "Contents/Resources/cua-helper/EasyAgent Computer Use.app");
   verify(helper, "com.easyagent.cua-helper", config);
   await withKeychain(config, () => signAsync({
     ...options,
+    config: undefined,
     identity: config.identity,
     keychain: config.keychain,
     identityValidation: false,

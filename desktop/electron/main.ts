@@ -16,6 +16,7 @@ import { EasyAgentManager } from "./easyagent-manager";
 import { ProfileStore } from "./profile-store";
 import { ProviderStore, ProviderConfigInput } from "./provider-store";
 import { checkForUpdate } from "./update-checker";
+import { desktopUpdater } from "./desktop-updater";
 
 // Development and smoke tests can keep profiles separate from the user's app.
 if (process.env.EA_DESKTOP_USER_DATA) {
@@ -28,6 +29,9 @@ let mainWindow: BrowserWindow | null = null;
 let profiles: ProfileStore;
 let providerStore: ProviderStore;
 let providerApplying = false;
+let updater: ReturnType<typeof desktopUpdater> | undefined;
+let updateInstalling = false, updateDirty = false, updateChecking = false;
+let updateTimer: ReturnType<typeof setInterval> | undefined;
 let socket: WebSocket | null = null;
 let connectionRevision = 0;
 const terminals = new Map<string, WebSocket | null>();
@@ -342,8 +346,89 @@ handle("start-server", async () => {
   }
 });
 handle("check-for-update", checkForUpdate);
+handle("desktop-update-status", () => updater?.status());
+handle("desktop-update-enabled", async (value: boolean) => {
+  const state = await updater?.setEnabled(value);
+  if (value) void automaticUpdate();
+  return state;
+});
+handle("desktop-update-dirty", (value: boolean) => { if (typeof value !== "boolean") throw Error("编辑状态无效"); updateDirty = value; });
+handle("install-desktop-update", async () => {
+  const info = await checkForUpdate();
+  if (!info || !updater) return;
+  const state = await updater.prepare(info.version);
+  if (state.phase === "ready") await installPreparedUpdate(false);
+  return updater.status();
+});
 handle("open-download-page", openExternal);
 handle("open-external", openExternal);
+
+// Acquire the core admission lease before quitting; busy updates wait safely.
+async function installPreparedUpdate(automatic: boolean): Promise<void> {
+  if (quitting || !updater || updateInstalling || providerApplying || updateDirty || terminals.size ||
+      (automatic && mainWindow?.isFocused())) return;
+  const updateState = await updater.status();
+  if (updateState.phase !== "ready" || (automatic && !updateState.enabled) || updateInstalling) return;
+  updateInstalling = true;
+  let lease = "", connection: { url: string; token: string } | undefined, handedOff = false;
+  try {
+    if (profiles.get().kind !== "local") {
+      const remote = await request("GET", "/admin/deploy");
+      if (remote.active !== 0) return;
+    }
+    const running = await manager.start();
+    connection = { url: running.url, token: manager.token };
+    const gate = await requestAt(connection, "POST", "/admin/deploy");
+    if (typeof gate.lease !== "string" || !gate.lease) return;
+    lease = gate.lease;
+    const permissions = await requestAt(connection, "GET", "/computer/settings");
+    if (providerApplying || updateDirty || terminals.size || (automatic && mainWindow?.isFocused())) return;
+    if (automatic && !(await updater.status()).enabled) return;
+    await updater.handoff(permissions.granted === true, automatic);
+    if (quitting || providerApplying || updateDirty || terminals.size ||
+        (automatic && (mainWindow?.isFocused() || !(await updater.status()).enabled))) {
+      await updater.cancelHandoff(); return;
+    }
+    handedOff = true; app.quit();
+  } catch { /* Busy or offline: retain this app and retry at idle. */ }
+  finally {
+    if (!handedOff && lease && connection) await requestAt(connection, "DELETE", "/admin/deploy", { lease }).catch(() => {});
+    if (!handedOff) updateInstalling = false;
+  }
+}
+async function automaticUpdate(): Promise<void> {
+  if (quitting || !updater || updateChecking || process.env.EA_DESKTOP_UPDATE_ROLLBACK === "1") return;
+  updateChecking = true;
+  try {
+    const state = await updater.status();
+    if (!state.supported || !state.enabled) return;
+    if (state.phase === "ready") { await installPreparedUpdate(true); return; }
+    if (["downloading", "verifying", "signing", "installing"].includes(state.phase)) return;
+    const info = await checkForUpdate();
+    if (info) { await updater.prepare(info.version); await installPreparedUpdate(true); }
+  } catch { /* Network failures never interrupt the current app. */ }
+  finally { updateChecking = false; }
+}
+async function updateReceipt(): Promise<void> {
+  const receipt = process.env.EA_DESKTOP_UPDATE_RECEIPT;
+  if (!receipt) return;
+  const stage = path.dirname(receipt);
+  if (path.dirname(stage) !== "/Applications" || !path.basename(stage).startsWith(".EasyAgent-update-") ||
+      !stage.endsWith(".noindex") || path.basename(receipt) !== "receipt.json" || fs.lstatSync(stage).uid !== process.getuid?.()) return;
+  let healthy = false, granted = false;
+  try {
+    const running = await manager.start(), connection = { url: running.url, token: manager.token };
+    const health = await requestAt(connection, "GET", "/health");
+    const permissions = await requestAt(connection, "GET", "/computer/settings");
+    granted = permissions.granted === true;
+    healthy = health.status === "ok" && health.version === "v" + app.getVersion() &&
+      (process.env.EA_DESKTOP_UPDATE_REQUIRE_PERMISSIONS !== "1" || granted);
+  } catch { /* Missing readiness or lost permissions makes the installer roll back. */ }
+  fs.writeFileSync(receipt + ".tmp", JSON.stringify({ version: app.getVersion(), healthy, granted }), { mode: 0o600 });
+  fs.renameSync(receipt + ".tmp", receipt);
+  delete process.env.EA_DESKTOP_UPDATE_RECEIPT;
+  if (!healthy) app.quit();
+}
 
 // ─── Run completion notifications & unread badge ────────────────────────────
 
@@ -508,6 +593,7 @@ const macWindowButtonPosition = { x: 14, y: 16 };
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
+    show: process.env.EA_DESKTOP_UPDATE_BACKGROUND !== "1",
     width: 1280,
     height: 860,
     minWidth: 780,
@@ -555,6 +641,9 @@ async function createWindow() {
   if (!app.isPackaged) await mainWindow.loadURL("http://localhost:5173");
   else
     await mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+  if (process.env.EA_DESKTOP_UPDATE_BACKGROUND === "1") {
+    mainWindow.showInactive(); delete process.env.EA_DESKTOP_UPDATE_BACKGROUND;
+  }
   mainWindow.on("closed", () => {
     closeTerminals();
     mainWindow = null;
@@ -575,6 +664,19 @@ else {
     profiles = new ProfileStore();
     providerStore = new ProviderStore();
     await createWindow();
+    if (app.isPackaged && process.platform === "darwin") {
+      await updateReceipt();
+      if (quitting) return;
+      updater = desktopUpdater(state => mainWindow?.webContents.send("desktop-update-state", state));
+      setTimeout(() => void automaticUpdate(), 30000).unref();
+      let lastCheck = 0;
+      updateTimer = setInterval(async () => {
+        const state = await updater?.status();
+        if (state?.phase === "ready" || Date.now() - lastCheck >= 3600000) {
+          lastCheck = Date.now(); void automaticUpdate();
+        }
+      }, 30000); updateTimer.unref();
+    }
     app.on("activate", () => {
       if (!mainWindow) void createWindow();
     });
@@ -588,7 +690,11 @@ app.on("before-quit", (event) => {
   if (quitting) return;
   event.preventDefault();
   quitting = true;
+  if (updateTimer) clearInterval(updateTimer);
   closeTerminals();
   socket?.close();
   void manager.stop().finally(() => app.quit());
 });
+
+// A rollback stops the updated app normally, including its managed core.
+if (app.isPackaged && process.platform === "darwin") process.on("SIGTERM", () => { if (!quitting) app.quit(); });
