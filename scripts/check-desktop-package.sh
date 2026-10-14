@@ -81,6 +81,11 @@ node - "$RESOURCES/app.asar" "$VERSION" <<'JS'
 const {extractFile}=require('./desktop/node_modules/@electron/asar');
 const manifest=JSON.parse(extractFile(process.argv[2],'package.json').toString());
 if(manifest.version!==process.argv[3])throw Error('Installed app version does not match the release');
+for (const file of ['scripts/macos-signing.cjs','scripts/sign-adhoc.cjs','scripts/desktop-update.cjs',
+  'scripts/desktop-update-worker.cjs','scripts/install-desktop-update.cjs','dist/electron/desktop-updater.js',
+  'node_modules/@electron/osx-sign/package.json']) {
+  if (!extractFile(process.argv[2],file).length) throw Error('Installer lacks the fixed-identity update runtime: '+file);
+}
 JS
 for license in Node-LICENSE ZCODE-LICENSE ZCODE-NOTICE.md ZCODE-THIRD-PARTY-NOTICES.md SOURCE.md; do
   [[ -s "$RESOURCES/licenses/$license" ]] || { echo "Missing runtime license: $license" >&2; exit 1; }
