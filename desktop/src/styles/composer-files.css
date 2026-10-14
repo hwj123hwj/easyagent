@@ -241,6 +241,40 @@
   height: 24px;
 }
 
+.files-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 4px;
+  flex-shrink: 0;
+}
+
+.files-topbar-actions .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.files-topbar-actions .chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.files-topbar-actions .chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .files-panel .files-body,
 .files-panel .files-main,
 .files-explorer {

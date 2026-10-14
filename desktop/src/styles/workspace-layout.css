@@ -1316,11 +1316,6 @@
   min-height: 450px;
   border: 0;
 }
-.file-export {
-  align-self: flex-end;
-  margin: 6px 12px;
-  flex-shrink: 0;
-}
 .capability-entry {
   border-top: 1px solid var(--line);
   padding: 16px 0;

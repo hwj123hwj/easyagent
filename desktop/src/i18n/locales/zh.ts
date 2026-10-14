@@ -409,6 +409,7 @@ export const zh = {
   'files.binary': '二进制文件',
   'files.loadFailed': '文件加载失败',
   'files.edit': '编辑',
+  'files.export': '导出',
   'files.save': '保存',
   'files.cancel': '取消',
   'files.unsaved': '未保存',

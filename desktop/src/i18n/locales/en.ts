@@ -411,6 +411,7 @@ export const en = {
   'files.binary': 'Binary file',
   'files.loadFailed': 'Failed to load file',
   'files.edit': 'Edit',
+  'files.export': 'Export',
   'files.save': 'Save',
   'files.cancel': 'Cancel',
   'files.unsaved': 'Unsaved',
