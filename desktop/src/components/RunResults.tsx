@@ -1,7 +1,8 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { apiRequest, useStore, type SessionView } from "../store";
-import type { RunFileSet, RunFileChange } from "../client/file-delivery";
+import type { RunFileSet } from "../client/file-delivery";
 import { summarizeDiffs } from "../client/file-review";
+import { aggregateRunFiles, workspaceFileRuns } from "../client/file-summary";
 import { Icon } from "./Icon";
 
 export function ChangeStats({
@@ -80,87 +81,52 @@ function splitFilePath(path: string): { name: string; dir: string } {
   };
 }
 
-interface AggregatedFile {
-  path: string;
-  file: RunFileChange;
-  latestRunId: string;
-  runs: string[];
-}
-
 function AggregatedRunCard({
   runs,
   sessionId,
+  source,
 }: {
   runs: RunFileSet[];
   sessionId: string;
+  source: "file_tool" | "observed";
 }) {
   const profile = useStore((s) => s.selectedProfile);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(source === "file_tool");
   const [all, setAll] = useState(false);
   const [diffs, setDiffs] = useState<Map<string, { additions: number; deletions: number }>>();
   const [incomplete, setIncomplete] = useState(false);
+  const [partial, setPartial] = useState(false);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const listId = useId();
 
-  // Aggregate files across all completed runs: deduplicate by path, keeping latest metadata and run tracking
-  const aggregatedFiles = useMemo(() => {
-    const map = new Map<string, AggregatedFile>();
-    for (const run of runs) {
-      for (const f of run.files) {
-        const existing = map.get(f.path);
-        if (existing) {
-          existing.file = f;
-          existing.latestRunId = run.run_id;
-          if (!existing.runs.includes(run.run_id)) {
-            existing.runs.push(run.run_id);
-          }
-        } else {
-          map.set(f.path, {
-            path: f.path,
-            file: f,
-            latestRunId: run.run_id,
-            runs: [run.run_id],
-          });
-        }
-      }
-    }
-    return [...map.values()];
-  }, [runs]);
+  const aggregatedFiles = useMemo(() => aggregateRunFiles(runs)
+    .filter(item => (item.file.attribution === "file_tool" ? "file_tool" : "observed") === source), [runs, source]);
 
-  const latestRunId = runs.at(-1)?.run_id || "";
+  const latestRunId = [...runs].reverse().find(run => aggregatedFiles.some(file => file.latestRunId === run.run_id))?.run_id || "";
 
   useEffect(() => {
-    if (!open || !runs.length) return;
+    if (!open || !aggregatedFiles.length) return;
     let alive = true;
     setError("");
+    setDiffs(undefined);
     const runIds = Array.from(new Set(runs.map((r) => r.run_id)));
     Promise.all(
       runIds.map((rid) =>
         apiRequest<RunFileSet>(
           "GET",
           `/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(rid)}/files`,
-        ).catch(() => null),
+        ),
       ),
     )
       .then((snapshots) => {
         if (!alive) return;
-        const diffMap = new Map<string, { additions: number; deletions: number }>();
-        let anyIncomplete = false;
-        for (const snap of snapshots) {
-          if (!snap) continue;
-          if (snap.incomplete) anyIncomplete = true;
-          const summary = summarizeDiffs(snap.files);
-          for (const [p, d] of summary.diffs.entries()) {
-            const prev = diffMap.get(p) || { additions: 0, deletions: 0 };
-            diffMap.set(p, {
-              additions: prev.additions + d.additions,
-              deletions: prev.deletions + d.deletions,
-            });
-          }
-        }
-        setIncomplete(anyIncomplete);
-        setDiffs(diffMap);
+        const files = aggregateRunFiles(snapshots)
+          .filter(item => (item.file.attribution === "file_tool" ? "file_tool" : "observed") === source);
+        const summary = summarizeDiffs(files.map(item => item.file));
+        setIncomplete(snapshots.some(snap => snap.incomplete));
+        setPartial(summary.partial);
+        setDiffs(summary.diffs);
       })
       .catch((e) => {
         if (alive) setError(e.message);
@@ -168,7 +134,7 @@ function AggregatedRunCard({
     return () => {
       alive = false;
     };
-  }, [open, sessionId, runs, profile, attempt]);
+  }, [open, sessionId, runs, profile, attempt, source, aggregatedFiles]);
 
   const stats = useMemo(() => {
     if (!diffs) return undefined;
@@ -183,6 +149,8 @@ function AggregatedRunCard({
 
   const review = (runId: string, path?: string) =>
     useStore.getState().openRunReview(sessionId, runId, path);
+
+  if (source === "observed" && !aggregatedFiles.length) return null;
 
   return (
     <article className="file-change-card">
@@ -199,23 +167,17 @@ function AggregatedRunCard({
             className={`file-change-chevron ${open ? "open" : ""}`}
           />
           <span className="file-change-title">
-            {aggregatedFiles.length} 个文件已更改
+            {source === "file_tool"
+              ? `文件工具累计修改 ${aggregatedFiles.length} 个文件`
+              : `其他工作区变化：${aggregatedFiles.length} 个文件`}
           </span>
-          {stats && (stats.additions > 0 || stats.deletions > 0) && (
-            <span className="file-change-head-stats">
-              {stats.additions > 0 && (
-                <span className="change-added">+{stats.additions}</span>
-              )}
-              {stats.deletions > 0 && (
-                <span className="change-removed">−{stats.deletions}</span>
-              )}
-            </span>
-          )}
+          {stats && <ChangeStats additions={stats.additions} deletions={stats.deletions} partial={partial} />}
         </button>
         <button
           className="file-change-review-btn"
+          disabled={!latestRunId}
           onClick={() => review(latestRunId)}
-          title="在工作区查看完整变更"
+          title="查看最近任务的变更；点击文件可查看其对应任务"
         >
           审查
           <Icon name="chevron-right" size={12} />
@@ -223,9 +185,13 @@ function AggregatedRunCard({
       </div>
       {open && (
         <div id={listId} className="file-change-list">
-          {incomplete && (
+          <p className="file-change-scope" role="note">
+            当前工作区最近 {runs.length} 个有变更的任务，按路径去重，属于历史记录。
+            {source === "file_tool" ? "只计可确认的文件工具修改；行数按首次修改前与最后修改后计算。" : "Bash、外部进程等来源未确认的变化单独展示，不计入文件工具修改数量。"}
+          </p>
+          {(incomplete || runs.some(run => run.incomplete)) && (
             <p className="file-change-incomplete" role="note">
-              ⚠️ 工作区快照不完整（目录过大被截断）：单侧出现的增删已过滤，以下为双侧可核对的可信变更。
+              ⚠️ 工作区快照不完整：无法核对的单侧增删已过滤，统计可能遗漏实际改动。
             </p>
           )}
           {aggregatedFiles
@@ -251,6 +217,9 @@ function AggregatedRunCard({
                   <div className="file-change-main">
                     <FileTypeBadge path={item.path} />
                     <span className="file-change-name">{name}</span>
+                    <span className="file-edit-count">
+                      {item.file.undone ? "已撤回" : item.file.attribution === "file_tool" ? "文件工具修改" : "来源未确认"}
+                    </span>
                     {dir && <span className="file-change-dir">{dir}</span>}
                     {diff ? (
                       <span className="file-change-row-stats">
@@ -271,9 +240,9 @@ function AggregatedRunCard({
                     {item.runs.length > 1 && (
                       <span
                         className="file-edit-count"
-                        title={`在此对话中修改了 ${item.runs.length} 次`}
+                        title={`在 ${item.runs.length} 个任务快照中记录到变化${item.file.undone ? "；最新任务已撤回" : ""}`}
                       >
-                        {item.runs.length} 次修改
+                        {item.runs.length} 个任务
                       </span>
                     )}
                   </div>
@@ -344,9 +313,7 @@ export function RunResults({ view }: { view: SessionView }) {
 
   // Keep this reference stable: parent scroll/stream renders must not restart
   // the card's requests and diff calculation for every completed run.
-  const changed = useMemo(() => (result?.key === key ? result.runs : [])
-    .filter((run) => run.complete && run.files.length)
-    .slice(-20), [result, key]);
+  const changed = useMemo(() => workspaceFileRuns(result?.key === key ? result.runs : [], view.meta.cwd), [result, key, view.meta.cwd]);
 
   if (!changed.length && !error) return null;
 
@@ -354,10 +321,14 @@ export function RunResults({ view }: { view: SessionView }) {
     <section className="run-results" aria-label="任务文件变更">
       {changed.length > 0 && (
         <AggregatedRunCard
-          key={key}
+          key={key + ":" + view.meta.cwd + ":file_tool"}
           runs={changed}
           sessionId={view.meta.id}
+          source="file_tool"
         />
+      )}
+      {changed.some(run => run.files.some(file => file.attribution !== "file_tool")) && (
+        <AggregatedRunCard key={key + ":" + view.meta.cwd + ":observed"} runs={changed} sessionId={view.meta.id} source="observed" />
       )}
       {error && (
         <div className="file-change-error" role="alert">

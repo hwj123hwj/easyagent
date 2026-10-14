@@ -129,15 +129,22 @@ func (s *Server) snapshotFiles(root string) (map[string]fileState, []string) {
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ".")
-	cmd.Dir = root
-	if output, err := cmd.Output(); err == nil {
+	gitFiles := func(dir string) bool {
+		cmd := exec.CommandContext(ctx, "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ".")
+		cmd.Dir = dir
+		output, err := cmd.Output()
+		if err != nil {
+			return false
+		}
+		prefix, _ := filepath.Rel(root, dir)
 		for _, name := range bytes.Split(output, []byte{0}) {
 			if len(name) > 0 {
-				names = append(names, string(name))
+				names = append(names, filepath.Join(prefix, string(name)))
 			}
 		}
-	} else {
+		return true
+	}
+	if !gitFiles(root) {
 		visited := 0
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			visited++
@@ -159,8 +166,16 @@ func (s *Server) snapshotFiles(root string) (map[string]fileState, []string) {
 				return nil
 			}
 			if d.IsDir() {
+				if strings.HasSuffix(d.Name(), ".noindex") {
+					return fs.SkipDir
+				}
 				switch d.Name() {
 				case ".git", ".easyagent", "node_modules", "vendor", "data", "dist", "build", ".cache":
+					return fs.SkipDir
+				}
+				// A workspace may contain several repositories. Use each one's
+				// tracked/unignored files instead of walking its build and temp data.
+				if _, err := os.Stat(filepath.Join(path, ".git")); err == nil && gitFiles(path) {
 					return fs.SkipDir
 				}
 				return nil
@@ -328,37 +343,15 @@ func (s *Server) changes(f *runFiles) []runFileChange {
 	// 快照截断时两次遍历覆盖的集合不一致：单侧出现的「新增/删除」很可能
 	// 只是另一次遍历没走到（#123），不作为变更展示；双侧都在且内容变化的
 	// 条目仍然可信。
-	truncated := truncatedSnapshot(f.Skipped)
-	keys := map[string]bool{}
-	for p := range f.Before {
-		keys[p] = true
-	}
-	for p := range f.After {
-		keys[p] = true
-	}
 	out := []runFileChange{}
-	for path := range keys {
+	for _, c := range summarizeFiles(f) {
+		path := c.Path
 		before, b := f.Before[path]
 		after, a := f.After[path]
-		if before == after && b == a {
-			continue
-		}
-		if truncated && (!b || !a) {
-			continue
-		}
-		kind := "modified"
-		if !b {
-			kind = "created"
-		}
-		if !a {
-			kind = "deleted"
-		}
 		versionData, _ := json.Marshal([]fileState{before, after})
 		version := sha256.Sum256(versionData)
-		c := runFileChange{Binary: strings.HasPrefix(before.Hash, "large:") || strings.HasPrefix(after.Hash, "large:"), Version: hex.EncodeToString(version[:]), Path: path, Kind: kind, Size: after.Size, Attribution: "observed", Undone: f.Undone[path]}
-		if f.Owned[path] {
-			c.Attribution = "file_tool"
-		}
+		c.Binary = strings.HasPrefix(before.Hash, "large:") || strings.HasPrefix(after.Hash, "large:")
+		c.Version = hex.EncodeToString(version[:])
 		currentPath, err := securePath(f.Workspace, path)
 		if err != nil {
 			c.Conflict = "路径不再位于工作区"
@@ -550,7 +543,7 @@ func (s *Server) listRunFiles(w http.ResponseWriter, r *http.Request) {
 			change.After = ""
 			files = append(files, change)
 		}
-		out = append(out, map[string]any{"run_id": f.RunID, "started_at": f.StartedAt, "workspace": f.Workspace, "complete": f.Complete, "skipped": f.Skipped, "files": files})
+		out = append(out, map[string]any{"run_id": f.RunID, "started_at": f.StartedAt, "workspace": f.Workspace, "complete": f.Complete, "incomplete": truncatedSnapshot(f.Skipped), "skipped": f.Skipped, "files": files})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i]["started_at"].(time.Time).Before(out[j]["started_at"].(time.Time)) })
 	if len(out) > 50 {
@@ -605,6 +598,7 @@ func readFileState(path string) (fileState, bool) {
 }
 
 func summarizeFiles(f *runFiles) []runFileChange {
+	truncated := truncatedSnapshot(f.Skipped)
 	keys := map[string]bool{}
 	for path := range f.Before {
 		keys[path] = true
@@ -617,6 +611,9 @@ func summarizeFiles(f *runFiles) []runFileChange {
 		b, bok := f.Before[path]
 		a, aok := f.After[path]
 		if b == a && bok == aok {
+			continue
+		}
+		if truncated && (!bok || !aok) {
 			continue
 		}
 		kind := "modified"

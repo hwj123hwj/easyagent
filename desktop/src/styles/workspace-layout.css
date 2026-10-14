@@ -1088,6 +1088,13 @@
   color: var(--amber, #f5a623);
   border-bottom: 1px solid var(--border);
 }
+.file-change-scope {
+  margin: 0;
+  padding: 10px 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .file-change-row {
   display: flex;
   align-items: center;

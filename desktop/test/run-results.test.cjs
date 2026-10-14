@@ -18,12 +18,12 @@ test('parent renders do not reload historical diffs; review refresh still reload
   const useStore = select => select(state);
   useStore.getState = () => state;
   const calls = [];
-  const runs = Array.from({ length: 20 }, (_, i) => ({ run_id: 'run-' + i, complete: true, files: [{ path: 'file-' + i + '.ts', size: 12 }] }));
+  let runs = Array.from({ length: 20 }, (_, i) => ({ run_id: 'run-' + i, complete: true, workspace: '/qa', files: [{ attribution: 'file_tool', path: 'file-' + i + '.ts', size: 12 }] }));
   const apiRequest = async (_method, url) => {
     calls.push(url);
     return url.endsWith('/run-files') ? runs : { files: [] };
   };
-  const stubs = { '../store': { useStore, apiRequest }, './Icon': { Icon: () => null },
+  const stubs = { '../client/file-summary': require('../.test-output/src/client/file-summary.js'), '../store': { useStore, apiRequest }, './Icon': { Icon: () => null },
     '../client/file-review': { summarizeDiffs: () => ({ diffs: new Map() }) } };
   const filename = path.resolve(__dirname, '../src/components/RunResults.tsx');
   const component = new Module(filename, module);
@@ -34,17 +34,29 @@ test('parent renders do not reload historical diffs; review refresh still reload
   } }).outputText, filename);
   const { createRoot } = require('react-dom/client');
   const root = createRoot(document.getElementById('root'));
-  const view = { meta: { id: 's' }, run: { state: 'completed' } };
+  const view = { meta: { id: 's', cwd: '/qa' }, run: { state: 'completed' } };
   const render = async () => React.act(async () => root.render(React.createElement(component.exports.RunResults, { view: { ...view } })));
   const fileCalls = () => calls.filter(url => url.endsWith('/files')).length;
   try {
     await render();
     assert.equal(fileCalls(), 20);
+    assert.match(document.querySelector(".file-change-title").textContent, /文件工具累计修改 20 个文件/);
     for (let i = 0; i < 5; i++) await render();
     assert.equal(fileCalls(), 20, 'viewport/transcript updates must not refetch every historical diff');
     state.reviewRevision++;
     await render();
     assert.equal(fileCalls(), 40, 'an explicit review refresh reloads each diff once');
+    runs = [
+      {run_id:'owned', workspace:'/qa', complete:true, files:[{path:'owned.ts', attribution:'file_tool', size:12}]},
+      {run_id:'external', workspace:'/qa', complete:true, files:[{path:'temporary.log', attribution:'observed', size:12}]},
+      {run_id:'foreign', workspace:'/other', complete:true, files:[{path:'foreign.ts', attribution:'file_tool', size:12}]},
+    ];
+    state.reviewRevision++;
+    await render();
+    const titles = [...document.querySelectorAll('.file-change-title')].map(el => el.textContent);
+    assert.deepEqual(titles, ['文件工具累计修改 1 个文件', '其他工作区变化：1 个文件']);
+    assert.equal(document.querySelectorAll('.file-change-toggle')[1].getAttribute('aria-expanded'), 'false');
+    assert.equal(document.body.textContent.includes('foreign.ts'), false);
     const count = calls.length;
     view.meta = { id: '__new__' };
     await render();

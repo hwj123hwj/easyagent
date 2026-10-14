@@ -117,11 +117,17 @@ GET /ws
 | `POST` | `/sessions/{id}/compact` | 压缩会话上下文 |
 | `POST` | `/sessions/{id}/command` | 执行斜杠命令 |
 | `GET` | `/sessions/{id}/run` | 当前 run 与恢复快照 |
+| `GET` | `/sessions/{id}/run-files` | 最近最多 50 个任务的文件变更汇总，含 `workspace`、`incomplete`、`skipped` 与来源 |
+| `GET` | `/sessions/{id}/runs/{run}/files` | 单个任务文件变更详情及可用的修改前后内容 |
 | `POST` | `/sessions/{id}/run/cancel` | body 为 `{"run_id":"..."}` |
 | `POST` | `/sessions/{id}/run/confirm` | body 为 `{"run_id":"...","confirmation_id":"...","approved":true}`；提问须同时提交 `answers`，见下文 |
 | `GET` | `/sessions/{id}/diff` | 获取会话 Git diff |
 | `GET` | `/sessions/{id}/file` | 获取会话文件内容 |
 | `PUT` | `/sessions/{id}/file` | 写入会话文件 |
+
+文件变更来自任务前后快照，范围限定在该任务的工作区。`attribution:file_tool` 表示可确认的文件工具修改，`observed` 表示任务期间观察到但无法可靠归因的变化（包括 Bash、其他进程）；它们不是当前 Git 状态。快照截断时 `incomplete:true`，汇总与详情都过滤无法核对的单侧增删，不能把数量视为完整改动面。Git 工作区及多仓库工作区中的子仓库遵循 Git 忽略规则，已跟踪文件仍纳入；非 Git 目录跳过常见产物目录及 `.noindex`，未被规则忽略的用户文件仍会记录。
+
+桌面只汇总当前工作区最近最多 20 个有变更的任务，按路径去重，以最新记录的来源区分文件工具修改和其他变化；最新任务已撤回时标注“已撤回”。行数使用首次修改前到最后修改后的内容，内容不连续或无法计算时显示“部分”。历史观察记录不能证明全部变化由助手造成；旧服务的截断汇总也在桌面兼容过滤。记录缺失时不反推或伪造工具归属。
 
 `ask_user_question` 的待回答请求通过 `confirmation` 事件和 snapshot 的 `pending_confirmations` 返回，`args.questions` 包含问题、选项及 `multiSelect`。即使会话为完全权限模式，也必须等待用户回答；提问不会被普通审批的短超时自动跳过，直到回答、跳过或取消任务。提交到同一 `/run/confirm` 接口：
 
