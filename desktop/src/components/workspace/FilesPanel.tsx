@@ -144,28 +144,33 @@ export function FilesPanel() {
           onClose={closeFileTab}
           t={t}
         />
+        {activeTab && !browsing && (
+          <div className="files-topbar-actions">
+            <button
+              className="chip interactive file-export-btn"
+              title={t("files.export")}
+              onClick={() =>
+                void exportFile(activeId!, activeTab).catch((e) =>
+                  window.alert(e.message),
+                )
+              }
+            >
+              <Icon name="download" size={13} />
+              <span className="chip-label">{t("files.export")}</span>
+            </button>
+            <FileOpenIn file={activeTab} t={t} />
+          </div>
+        )}
       </div>
       <div className="files-body">
         <div className="files-main" hidden={browsing}>
           {activeTab && (
-            <>
-              <FileToolbar root={root} file={activeTab} t={t} />
-              <button
-                className="btn file-export"
-                onClick={() =>
-                  void exportFile(activeId!, activeTab).catch((e) =>
-                    window.alert(e.message),
-                  )
-                }
-              >
-                导出文件
-              </button>
-              <FileContent
-                key={profile + root + activeTab}
-                path={activeTab}
-                t={t}
-              />
-            </>
+            <FileContent
+              key={profile + root + activeTab}
+              root={root}
+              path={activeTab}
+              t={t}
+            />
           )}
         </div>
         <div className="files-explorer" hidden={!browsing}>
@@ -239,21 +244,34 @@ function FileTabs({
   );
 }
 
-// ── breadcrumb + "Open in" toolbar ──
+// ── breadcrumb & "Open in" ──
 
-function FileToolbar({
-  root,
+function FileBreadcrumb({ root, file }: { root: string; file: string }) {
+  const crumbs = useMemo(() => breadcrumb(root, file), [root, file]);
+  return (
+    <div className="file-breadcrumb" title={file}>
+      {crumbs.map((c, i) => (
+        <span key={i} className="crumb">
+          {i > 0 && <Icon name="chevron-right" size={12} />}
+          <span className={i === crumbs.length - 1 ? "crumb-leaf" : ""}>
+            {c}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function FileOpenIn({
   file,
   t,
 }: {
-  root: string;
   file: string;
   t: TFunc;
 }) {
   const local = useStore(
     (s) => s.profiles.find((p) => p.id === s.selectedProfile)?.kind === "local",
   );
-  const crumbs = useMemo(() => breadcrumb(root, file), [root, file]);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -275,52 +293,39 @@ function FileToolbar({
   const dir = file.replace(/[\\/][^\\/]*$/, "") || file;
 
   return (
-    <div className="file-toolbar">
-      <div className="file-breadcrumb" title={file}>
-        {crumbs.map((c, i) => (
-          <span key={i} className="crumb">
-            {i > 0 && <Icon name="chevron-right" size={12} />}
-            <span className={i === crumbs.length - 1 ? "crumb-leaf" : ""}>
-              {c}
-            </span>
-          </span>
-        ))}
-      </div>
-      <span className="grow" />
-      <div ref={menuRef} style={{ position: "relative" }}>
-        <button
-          className="chip interactive file-open-in"
-          disabled={!local}
-          title={local ? t("files.openIn") : "路径属于远程主机，无法在本机打开"}
-          onClick={() => setMenuOpen((o) => !o)}
-        >
-          <Icon name="external-link" size={13} />
-          <span className="chip-label">{t("files.openIn")}</span>
-          <Icon name="chevron-down" size={12} className="chip-caret" />
-        </button>
-        {menuOpen && (
-          <div className="menu-pop" style={{ right: 0, top: "120%" }}>
-            <button
-              onClick={() => {
-                void window.piAPI?.revealInFolder(file);
-                setMenuOpen(false);
-              }}
-            >
-              <Icon name="folder-open" size={14} />
-              {t("files.openInFolder")}
-            </button>
-            <button
-              onClick={() => {
-                void window.piAPI?.openInTerminal(dir);
-                setMenuOpen(false);
-              }}
-            >
-              <Icon name="terminal" size={14} />
-              {t("files.openInTerminal")}
-            </button>
-          </div>
-        )}
-      </div>
+    <div ref={menuRef} style={{ position: "relative" }}>
+      <button
+        className="chip interactive file-open-in"
+        disabled={!local}
+        title={local ? t("files.openIn") : "路径属于远程主机，无法在本机打开"}
+        onClick={() => setMenuOpen((o) => !o)}
+      >
+        <Icon name="external-link" size={13} />
+        <span className="chip-label">{t("files.openIn")}</span>
+        <Icon name="chevron-down" size={12} className="chip-caret" />
+      </button>
+      {menuOpen && (
+        <div className="menu-pop" style={{ right: 0, top: "120%" }}>
+          <button
+            onClick={() => {
+              void window.piAPI?.revealInFolder(file);
+              setMenuOpen(false);
+            }}
+          >
+            <Icon name="folder-open" size={14} />
+            {t("files.openInFolder")}
+          </button>
+          <button
+            onClick={() => {
+              void window.piAPI?.openInTerminal(dir);
+              setMenuOpen(false);
+            }}
+          >
+            <Icon name="terminal" size={14} />
+            {t("files.openInTerminal")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -584,7 +589,15 @@ type Loaded =
   | { kind: "binary" }
   | { kind: "error" };
 
-function FileContent({ path, t }: { path: string; t: TFunc }) {
+function FileContent({
+  root,
+  path,
+  t,
+}: {
+  root: string;
+  path: string;
+  t: TFunc;
+}) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const isMarkdown = MARKDOWN_EXT.test(path);
   const isImage = IMAGE_EXT.test(path);
@@ -709,52 +722,15 @@ function FileContent({ path, t }: { path: string; t: TFunc }) {
     }
   };
 
-  if (!loaded) {
-    return (
-      <div className="file-content" {...contentProps}>
-        <div className="empty">
-          <Icon name="loader" size={18} spin />
-        </div>
-      </div>
-    );
-  }
-  if (loaded.kind === "error") {
-    return (
-      <div className="file-content" {...contentProps}>
-        <div className="empty">{t("files.loadFailed")}</div>
-      </div>
-    );
-  }
-  if (loaded.kind === "binary") {
-    return (
-      <div className="file-content" {...contentProps}>
-        <div className="empty">{t("files.binary")}</div>
-      </div>
-    );
-  }
-  if (loaded.kind === "pdf")
-    return (
-      <div className="file-content" {...contentProps}>
-        <iframe className="file-pdf" title={baseName(path)} src={loaded.url} />
-      </div>
-    );
-  if (loaded.kind === "image") {
-    return (
-      <div className="file-content" {...contentProps}>
-        <div className="file-image-wrap">
-          <img className="file-image" src={loaded.url} alt={baseName(path)} />
-        </div>
-      </div>
-    );
-  }
-
-  // text
-  const canEdit = loaded.kind === "text";
+  const isText = loaded?.kind === "text";
+  const canEdit = isText;
 
   return (
     <div className="file-content" {...contentProps}>
       <div className="file-content-toolbar">
-        {isMarkdown && !editing && (
+        <FileBreadcrumb root={root} file={path} />
+        <span className="grow" />
+        {isText && isMarkdown && !editing && (
           <div className="views-menu">
             <button
               className={preview ? "active" : ""}
@@ -788,8 +764,7 @@ function FileContent({ path, t }: { path: string; t: TFunc }) {
             </button>
           </div>
         )}
-        {isMarkdown && !editing && <span className="grow" />}
-        {!editing && canEdit && (
+        {isText && !editing && canEdit && (
           <button
             className="file-edit-btn"
             onClick={handleStartEdit}
@@ -799,13 +774,12 @@ function FileContent({ path, t }: { path: string; t: TFunc }) {
             <span>{t("files.edit")}</span>
           </button>
         )}
-        {editing && (
+        {isText && editing && (
           <>
             <span className={`file-dirty-indicator ${dirty ? "visible" : ""}`}>
               <span className="file-dirty-dot" />
               {t("files.unsaved")}
             </span>
-            <span className="grow" />
             <button
               className="file-edit-btn cancel"
               onClick={handleCancelEdit}
@@ -829,7 +803,21 @@ function FileContent({ path, t }: { path: string; t: TFunc }) {
           </>
         )}
       </div>
-      {editing ? (
+      {!loaded ? (
+        <div className="empty">
+          <Icon name="loader" size={18} spin />
+        </div>
+      ) : loaded.kind === "error" ? (
+        <div className="empty">{t("files.loadFailed")}</div>
+      ) : loaded.kind === "binary" ? (
+        <div className="empty">{t("files.binary")}</div>
+      ) : loaded.kind === "pdf" ? (
+        <iframe className="file-pdf" title={baseName(path)} src={loaded.url} />
+      ) : loaded.kind === "image" ? (
+        <div className="file-image-wrap">
+          <img className="file-image" src={loaded.url} alt={baseName(path)} />
+        </div>
+      ) : editing ? (
         <textarea
           className="file-edit-area"
           value={editContent}
