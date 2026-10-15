@@ -136,6 +136,10 @@ func (m *TuiModel) handleSearchPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			s, err := app.SwitchSession(ctx, target)
 			return sessionPickerSwitchMsg{id, s, err}
 		}
+	case tea.KeySpace:
+		// bubbletea reports a lone space as KeySpace, not KeyRunes.
+		m.completion.query += " "
+		filterPicker(&m.completion, m.searchCatalog)
 	case tea.KeyRunes:
 		m.completion.query += strings.ReplaceAll(sanitizeInput(string(msg.Runes)), "\n", " ")
 		filterPicker(&m.completion, m.searchCatalog)

@@ -15,6 +15,7 @@ import (
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
+	"github.com/hwj123hwj/easyagent/sdk/tools"
 )
 
 // TuiModel is the root Bubble Tea model for easyagent's interactive TUI.
@@ -77,6 +78,8 @@ type TuiModel struct {
 	// Phase 3: completion + confirmation + model selector
 	completion    CompletionState
 	confirmation  *ConfirmationState
+	questions     *QuestionState
+	questionResult chan QuestionResultMsg // pending ask_user_question reply channel
 	modelSelect   bool // Ctrl+P model selector popup active
 	modelCatalog  []CompletionItem
 	searchCatalog []CompletionItem
@@ -173,6 +176,7 @@ func New(session *runtime.AgentSession, cmds *slashcmd.Registry, autoApprove boo
 		clipboardWriter: writeClipboard,
 		completion:      NewCompletionState(),
 		confirmation:    NewConfirmationState(),
+		questions:       NewQuestionState(),
 	}
 
 	// Wire confirmation callback：始终安装对话框，autoApprove/-y 只决定
@@ -247,6 +251,18 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case confirmationCancelledMsg:
 		if m.confirmation.resultChan == msg.result {
 			m.confirmation.Hide()
+			m.clearSelection()
+		}
+		return m, nil
+	case QuestionDialogMsg:
+		m.clearSelection()
+		m.questions.Show(msg.Questions)
+		m.questionResult = msg.Result
+		return m, nil
+	case questionCancelledMsg:
+		if m.questionResult == msg.result {
+			m.questions.Hide()
+			m.questionResult = nil
 			m.clearSelection()
 		}
 		return m, nil
@@ -538,6 +554,23 @@ func (m *TuiModel) renderView() string {
 		tea.SetCursorPosition(0, 0)
 		return strings.Join(lines, "\n")
 	}
+
+	if m.questions.IsActive() {
+		lines := strings.Split(m.questions.Render(m.theme, m.width), "\n")
+		if m.height < 5 {
+			lines = []string{"Questions: ↑↓ move · Space select · Tab submit · Esc skip"}
+		} else if len(lines) > m.height {
+			lines = lines[len(lines)-m.height:]
+		}
+		for len(lines) < m.height {
+			lines = append(lines, "")
+		}
+		for i := range lines {
+			lines[i] = ansi.Truncate(lines[i], m.width, "")
+		}
+		tea.SetCursorPosition(0, 0)
+		return strings.Join(lines, "\n")
+	}
 	if m.height <= 5 && m.completion.IsActive() {
 		tea.SetCursorPosition(0, 0)
 		return NewCompletionPopup().RenderHeight(&m.completion, m.width, m.height)
@@ -681,9 +714,14 @@ func (m *TuiModel) spinnerTick() tea.Cmd {
 
 // handleConfirmation is called by the agent when a dangerous tool needs user approval.
 // It shows the TUI confirmation dialog and blocks until the user responds.
+// ask_user_question routes to the interactive question panel instead: the run
+// only resumes once the user submitted (or skipped) answers.
 func (m *TuiModel) handleConfirmation(ctx context.Context, req agent.ConfirmationRequest) agent.ConfirmDecision {
 	if ctx.Err() != nil || m.program == nil {
 		return agent.ConfirmDecision{Approved: false, Reason: "confirmation unavailable"}
+	}
+	if req.ToolName == "ask_user_question" {
+		return m.handleQuestionPrompt(ctx, req)
 	}
 	resultCh := make(chan ConfirmationResultMsg, 1)
 	m.program.Send(ConfirmationDialogMsg{
@@ -694,6 +732,31 @@ func (m *TuiModel) handleConfirmation(ctx context.Context, req agent.Confirmatio
 		return agent.ConfirmDecision{Approved: result.Approved}
 	case <-ctx.Done():
 		m.program.Send(confirmationCancelledMsg{result: resultCh})
+		return agent.ConfirmDecision{Approved: false, Reason: "context cancelled"}
+	}
+}
+
+// handleQuestionPrompt shows the interactive question overlay and returns the
+// answers via ConfirmDecision.Response for ExecuteConfirmed to validate.
+func (m *TuiModel) handleQuestionPrompt(ctx context.Context, req agent.ConfirmationRequest) agent.ConfirmDecision {
+	questions, err := tools.ParseAskUserQuestions(req.Args)
+	if err != nil {
+		return agent.ConfirmDecision{Approved: false, Reason: fmt.Sprintf("invalid questions: %v", err)}
+	}
+	resultCh := make(chan QuestionResultMsg, 1)
+	m.program.Send(QuestionDialogMsg{ToolCallID: req.ToolCallID, Questions: questions, Result: resultCh})
+	select {
+	case result := <-resultCh:
+		if !result.Submitted {
+			return agent.ConfirmDecision{Approved: false, Reason: "User skipped the questions; no answers were submitted. Ask in plain text if still necessary."}
+		}
+		answers, err := json.Marshal(result.Answers)
+		if err != nil {
+			return agent.ConfirmDecision{Approved: false, Reason: fmt.Sprintf("encode answers: %v", err)}
+		}
+		return agent.ConfirmDecision{Approved: true, Response: answers}
+	case <-ctx.Done():
+		m.program.Send(questionCancelledMsg{result: resultCh})
 		return agent.ConfirmDecision{Approved: false, Reason: "context cancelled"}
 	}
 }

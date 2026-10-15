@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [v0.15.7] - 2026-10-15
+
+- 修复 TUI 空格键被静默丢弃：主输入框、`/model` 模型搜索和 Ctrl+R 会话/历史搜索现在可正常输入英文空格（vendored bubbletea 将单独空格编码为 `KeySpace`，此前所有输入点只处理 `KeyRunes`）。
+- `ask_user_question` 在 TUI、CLI 与 WebSocket 入口支持交互式作答：TUI 弹出单选/多选与自定义文本问题面板（↑↓ 选择、Space/Enter 勾选、Tab/Y 提交、Esc 跳过）；CLI 按编号选项作答，支持 `1,3` 多选与 `0: 自定义文本`；WS `confirm` 消息新增 `answers` 字段。此前除桌面 HTTP 通道外，该工具按确认键必然报 `invalid question answers` 且无作答入口。
+- 新增 2026-10 Agent 第一人称功能体验评审报告（`docs/research/easyagent-feature-review-2026-10.md`），调研索引见 `docs/README.md` 历史调研。
+
 ## [v0.15.6] - 2026-10-15
 
 - 同步已合并的标题栏回退，恢复原有品牌字标、主机状态和顶栏对齐方式，保留固定签名的后台自动更新功能。

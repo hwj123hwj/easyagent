@@ -141,6 +141,12 @@ func (im *InputModel) HandleKey(msg tea.KeyMsg) {
 		// Some terminals send arrow keys as raw escape codes (\x1b[A) that
 		// Bubble Tea may pass as KeyRunes. If we insert them, they leak
 		// into the message and corrupt API URLs.
+		// KeySpace: bubbletea reports a lone space as KeySpace (not KeyRunes);
+		// without this case the space key is silently dropped.
+		if msg.Type == tea.KeySpace {
+			im.insertString(" ")
+			return
+		}
 		if msg.Type == tea.KeyRunes {
 			if msg.Paste {
 				im.insertString(sanitizeInput(strings.ReplaceAll(strings.ReplaceAll(string(msg.Runes), "\r\n", "\n"), "\r", "\n")))
