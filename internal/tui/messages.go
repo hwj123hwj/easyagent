@@ -6,6 +6,16 @@ import (
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 )
 
+// SlashCmdDoneMsg carries the result of a slash command that the TUI ran
+// asynchronously in a background goroutine (slow commands like /compact
+// must not block the Update loop).
+type SlashCmdDoneMsg struct {
+	Input    string // original command line, e.g. "/compact keep the API notes"
+	Output   string
+	Err      error
+	StreamID uint64 // guards against stale results after cancel/restart
+}
+
 // ── Messages (tea.Msg) ────────────────────────────────────────────────────
 // These are the message types that flow through the Bubble Tea Update loop.
 
