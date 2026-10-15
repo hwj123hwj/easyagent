@@ -1,0 +1,223 @@
+常规|General
+外观|Appearance
+模型连接|Model connections
+用量统计|Usage
+实验|Experiments
+运行主机|Runtime hosts
+MCP 工具|MCP tools
+技能与工作流|Skills & workflows
+飞书机器人|Feishu bot
+基础设置|Basic settings
+连接与能力|Connections & capabilities
+返回工作区|Back to workspace
+Go 原生预览 · 0.1.0|Native Go preview · 0.1.0
+设置界面语言，查看版本与常用快捷键。|Choose a language and view the version and keyboard shortcuts.
+选择适合你的界面配色。|Choose your interface colors.
+连接模型服务，选择默认模型。|Connect a model service and choose the default model.
+查看近 30 天 Token 消耗与各会话用量排行。|View token usage and session rankings for the last 30 days.
+浏览并安装官方技能市场里的技能。|Browse and install skills from the official marketplace.
+实验性功能开关：Computer use 等能力。|Manage experimental features, including computer use.
+选择任务运行的位置，管理远程 Agent 连接。|Choose where tasks run and manage remote Agent connections.
+为当前主机接入工具服务，管理信任与授权。|Connect tool services and manage trust and authorization for this host.
+查看当前项目实际加载的能力与工作流运行记录。|View the current project's loaded capabilities and workflow runs.
+配置应用凭据、查看桥接状态，并完成私聊配对。|Configure app credentials, view bridge status, and pair through private chat.
+语言与外观保存在此设备；连接与能力设置仅为演示。|Language and appearance are saved on this device. Connections and capabilities use demo state.
+界面语言|Interface language
+选择应用的显示语言。|Choose the display language.
+桌面版本|Desktop version
+常用快捷键|Keyboard shortcuts
+发送消息|Send message
+输入换行|Insert a line break
+打开命令菜单|Open command menu
+新建会话|New conversation
+打开设置|Open settings
+文件工作台|File workbench
+文件工作台仅展示演示目录，代码审查尚未接入。|The file workbench uses a demo directory. Code review is not connected.
+这是独立预览包，正式客户端的更新由现有发布流程管理。|This is an independent preview. The existing release process manages production updates.
+配色主题|Color theme
+立即应用到当前界面，选择会保留在此设备。|Apply immediately and remember the choice on this device.
+青夜|Qingye
+明亮表面 · 清晰文字|Bright surfaces · clear text
+深青背景 · 柔和浅青|Deep teal background · soft cyan
+随系统外观自动切换|Follow system appearance
+当前模型|Current model
+刷新模型|Refresh models
+本地模型来源|Local model source
+沿用命令行配置|Use CLI configuration
+在桌面客户端配置|Configure in desktop app
+沿用 easyagent.yaml、个人配置文件和 EA_* 环境变量。|Use easyagent.yaml, personal configuration, and EA_* environment variables.
+模型服务|Model service
+OpenAI 兼容服务 / 网关|OpenAI-compatible service / gateway
+服务地址|Service URL
+默认模型|Default model
+填写服务中的模型 ID|Enter the model ID
+演示输入（不保存）|Demo input (not saved)
+此预览不会请求模型服务，密钥只在当前页面内存中暂存。|The preview makes no model requests. Keys remain only in page memory.
+检测连接|Check connection
+应用并重新连接|Apply and reconnect
+示例模型目录 · 不代表真实推理验证|Example model catalog · no inference verification
+模型配置属于服务主机|Model configuration belongs to the runtime host
+远程模型需在对应主机的 EasyAgent 配置中设置。|Configure remote models in EasyAgent on the corresponding host.
+选择运行主机|Choose a runtime host
+应用管理的本地 Agent|App-managed local Agent
+当前连接|Current connection
+文件路径、工具和 MCP 均属于所选服务主机。|File paths, tools, and MCP belong to the selected host.
+远程连接配置|Remote connection configuration
+选择配置|Choose configuration
+新增连接|Add connection
+连接名称|Connection name
+Agent 服务地址|Agent service URL
+API 令牌|API token
+预览模式仅保存当前窗口的演示配置，令牌不会写入偏好文件。|Demo configuration lasts for this window only. Tokens are never written to the preferences file.
+保存并连接|Save and connect
+近 30 天用量概览|Usage overview · last 30 days
+以下为演示执行收据统计，未读取真实会话用量。|These are demo execution receipts. Real session usage has not been read.
+总 Tokens|Total tokens
+输入 Tokens|Input tokens
+输出 Tokens|Output tokens
+总任务数 (Runs)|Total runs
+会话消耗排行|Session usage ranking
+会话|Conversation
+输入|Input
+输出|Output
+合计|Total
+刷新状态|Refresh status
+电脑控制可以读取屏幕与操作应用。此预览仅切换界面状态，不会请求系统权限或操作应用。|Computer use can read the screen and operate apps. This preview only changes interface state and never requests permissions or controls apps.
+启用电脑控制|Enable computer use
+默认关闭。关闭时新会话不会暴露电脑控制工具。|Off by default. New conversations do not expose computer tools while disabled.
+审批策略|Approval policy
+普通操作可自动执行；退出、注销、锁屏等操作仍会询问。|Routine actions may run automatically. Quit, logout, and lock actions still require approval.
+逐批询问|Ask for each batch
+自动执行|Automatic execution
+可用性|Availability
+演示组件|Demo component
+请求系统权限|Request system permissions
+辅助功能与屏幕录制是两项独立授权。|Accessibility and screen recording are separate permissions.
+系统权限|System permissions
+已控制应用（审计）|Controlled apps (audit)
+实际被模型执行过操作的应用。|Apps the model has operated.
+当前占用|Current lease
+空闲|Idle
+暂无|None
+搜索技能|Search skills
+精选|Featured
+开发|Development
+效率|Productivity
+以下为本地示例目录，未连接真实技能市场。|This is a local example catalog, not the live marketplace.
+没有匹配的技能。|No matching skills.
+界面设计|Interface design
+根据现有设计系统实现界面，并验证布局与交互。|Build interfaces using the existing design system and verify layout and interaction.
+检查修改中的功能、边界与回归风险。|Review behavior, edge cases, and regression risks.
+项目记录|Project notes
+组织项目进度、决策与验证证据。|Organize project progress, decisions, and validation evidence.
+安装技能|Install skill
+返回技能列表|Back to skills
+复制使用方式|Copy usage
+使用方式|Usage
+技能文件|Skill files
+卸载示例技能？|Uninstall example skill?
+仅移除当前预览中的安装标记，不会删除文件。|Only remove the installation marker in this preview. No files are deleted.
+确认卸载|Confirm uninstall
+MCP 工具连接|MCP tool connections
+连接配置属于当前服务主机。项目配置需显式信任后才可执行。|Configuration belongs to the current host. Project configuration requires explicit trust before execution.
+项目工作区|Project workspace
+服务主机上的绝对路径|Absolute path on the runtime host
+读取|Read
+项目配置 · 未信任|Project configuration · untrusted
+项目配置 · 已信任|Project configuration · trusted
+信任此项目|Trust project
+撤销信任|Revoke trust
+重新连接|Reconnect
+刷新工具|Refresh tools
+修改配置|Edit configuration
+停用|Disable
+启用|Enable
+信任服务|Trust service
+启用工具|Enable tool
+授权登录|Authorize sign-in
+退出授权|Sign out
+示例只读工具，用于检查工具开关和配置交互。|Example read-only tool for checking tool switches and configuration interaction.
+接入你的第一个工具服务|Connect your first tool service
+下方填写名称与标准 MCP 配置，可使用本机命令或远程服务。|Enter a name and standard MCP configuration below, using a local command or remote service.
+添加或修改 MCP 服务|Add or edit MCP service
+配置范围|Configuration scope
+个人|Personal
+服务名称|Service name
+例如 filesystem|For example, filesystem
+工具连接配置|Tool connection configuration
+高级 JSON|Advanced JSON
+返回表单|Back to form
+标准 MCP 配置|Standard MCP configuration
+连接方式|Transport
+启动命令|Command
+命令参数 · 每行一个|Arguments · one per line
+工具服务地址|Tool service URL
+环境变量 / 请求头与超时|Environment / headers and timeout
+每行 KEY=VALUE|KEY=VALUE, one per line
+超时（毫秒）|Timeout (ms)
+信任此服务|Trust this service
+保存演示配置不会自动信任项目，不会执行命令或创建网络连接。|Saving demo configuration does not trust projects, execute commands, or create network connections.
+保存配置|Save configuration
+删除演示工具服务？|Delete demo tool service?
+只删除当前预览的配置，正式 MCP 服务不受影响。|Only delete the current preview's configuration. Production MCP services are unchanged.
+确认删除|Confirm delete
+当前会话的能力|Current conversation capabilities
+这里展示预览会话的示例能力。正式客户端按项目与个人 .agents/skills 加载。|This preview shows example capabilities. The production app loads project and personal .agents/skills.
+已加载技能 · 1|Loaded skills · 1
+项目 · 可由模型调用|Project · model invocation enabled
+检查当前修改的功能与回归风险。|Review the current changes and regression risks.
+工作流|Workflows
+入口 workflow，使用 create_workflow / get_workflow / resume_workflow 创建、查看与恢复。|Use create_workflow / get_workflow / resume_workflow to create, inspect, and resume workflows.
+可用工具：create_workflow · get_workflow · resume_workflow（演示）|Available tools: create_workflow · get_workflow · resume_workflow (demo)
+界面验收工作流|Interface validation workflow
+已完成 · 演示记录|Completed · demo record
+结果：布局、草稿、命令菜单与审批交互已验证。|Result: layout, drafts, command menu, and approval interaction verified.
+在对话中查看|View in conversation
+配置所在主机|Configuration host
+配置与配对均针对这台主机，消息由这里的 Agent 处理。|Configuration and pairing belong to this host. Its Agent handles the messages.
+快速绑定（扫码登录）|Quick binding (QR sign-in)
+使用飞书手机客户端扫码授权，保存后启动飞书桥接。此预览未接入授权服务。|Authorize with the Feishu mobile app, then start the bridge after saving. This preview has no authorization service.
+扫码绑定飞书机器人|Bind Feishu bot with QR code
+尚未生成授权二维码|No authorization QR code available
+取消扫码|Cancel QR sign-in
+演示扫码确认|Simulate QR confirmation
+确认保存授权凭据|Confirm authorization credentials
+飞书桥接（本机）|Feishu bridge (local)
+已停止|Stopped
+运行中（演示）|Running (demo)
+启动飞书桥接|Start Feishu bridge
+停止飞书桥接|Stop Feishu bridge
+服务状态|Service status
+飞书桥接|Feishu bridge
+服务托管|Service management
+未连接 · 演示|Disconnected · demo
+开机后台运行（linger）：未启用 · 演示|Background startup (linger): disabled · demo
+自建应用凭据（高级）|Custom app credentials (advanced)
+此预览不保存真实密钥，仅用于检查表单和状态变化。|This preview does not save real secrets. Use it to check forms and state changes.
+保存并重启桥接|Save and restart bridge
+使用者配对|User pairing
+私聊机器人发送以下指令|Send this command to the bot in private chat
+这是无效的演示配对码，不会绑定账号。|This is an invalid demo pairing code. It cannot bind an account.
+隐藏指令|Hide command
+尚未配对|Not paired
+查看私聊配对指令|View private-chat pairing command
+演示环境|Demo environment
+预览未连接授权服务，没有可用的真实二维码。|The preview has no authorization service or real QR code.
+请填写名称和有效的 HTTP(S) 服务地址。|Enter a name and a valid HTTP(S) service URL.
+请填写有效的服务地址和默认模型。|Enter a valid service URL and a default model.
+请输入服务名称|Enter a service name
+请输入启动命令|Enter a command
+请输入有效 HTTP(S) 地址|Enter a valid HTTP(S) URL
+配置须为有效 JSON 对象|Configuration must be a valid JSON object
+命令参数须为字符串数组|Command arguments must be an array of strings
+项目配置需要工作区路径|Project configuration requires a workspace path
+每行使用 KEY=VALUE 格式|Use KEY=VALUE on each line
+超时须为非负整数毫秒|Timeout must be a nonnegative integer in milliseconds
+配置需要有效的 command 或 HTTP(S) url|Configuration requires a valid command or HTTP(S) URL
+语言选择|Language choice
+对话|Conversations
+最近|Recent
+已归档|Archived
+此 Mac|This Mac
+原生预览 · 演示数据|Native preview · Demo data
+当前状态：|Status:
