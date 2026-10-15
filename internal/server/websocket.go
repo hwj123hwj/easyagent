@@ -53,6 +53,7 @@ type wsClientMessage struct {
 	ConfirmationID string       `json:"confirmation_id,omitempty"`
 	Approved       bool         `json:"approved"`
 	Reason         string       `json:"reason,omitempty"`
+	Answers        json.RawMessage `json:"answers,omitempty"`
 	Model          string       `json:"model,omitempty"`
 	Provider       string       `json:"provider,omitempty"`
 }
@@ -175,7 +176,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				_ = ws.writeJSON(wsServerMessage{Type: "cancelled", SessionID: msg.SessionID, RunID: msg.RunID})
 			}
 		case "confirm":
-			if err := s.confirmRun(msg.SessionID, msg.RunID, msg.ConfirmationID, msg.Approved, msg.Reason); err != nil {
+			if err := s.confirmRun(msg.SessionID, msg.RunID, msg.ConfirmationID, msg.Approved, msg.Reason, msg.Answers); err != nil {
 				s.writeWSError(ws, msg, err)
 			} else {
 				_ = ws.writeJSON(wsServerMessage{Type: "confirmed", SessionID: msg.SessionID, RunID: msg.RunID, ConfirmationID: msg.ConfirmationID})

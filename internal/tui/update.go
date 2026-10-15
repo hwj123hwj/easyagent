@@ -47,6 +47,14 @@ func (m *TuiModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// ── Priority 1b: ask_user_question overlay ──
+	if m.questions.IsActive() {
+		if done, submitted := m.questions.HandleKey(msg); done {
+			m.resolveQuestions(submitted)
+		}
+		return m, nil
+	}
+
 	// Model selection owns its keys before generic completion.
 	if m.modelSelect || m.completion.IsActive() {
 		if msg.Type == tea.KeyCtrlC || msg.Type == tea.KeyCtrlD {
