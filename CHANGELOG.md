@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [v0.15.8] - 2026-10-15
+
+- 修复 TUI 慢速斜杠命令冻结整个终端：`/compact` 在 Bubble Tea Update 循环内同步执行 LLM 总结，长会话下几十秒无渲染、按键无响应，且命令跑在 `context.Background()` 上无法被 Ctrl+C 取消。现快命令（`/models` `/sessions` `/switch` `/confirm` `/clear` `/new`）保持同步，其余命令后台执行并经 `SlashCmdDoneMsg` 回传结果；忙碌期状态栏显示 `⟳ compacting`，拒绝并发命令与切换模型/会话，Ctrl+C 可真正取消，迟到结果由 streamID 门卫丢弃。
+- CLI `/context` 输出改为紧凑面板格式，不再直接倾倒原始 JSON。
+- 桌面新增纯 Go 原生客户端试验版本。
+
 ## [v0.15.7] - 2026-10-15
 
 - 修复 TUI 空格键被静默丢弃：主输入框、`/model` 模型搜索和 Ctrl+R 会话/历史搜索现在可正常输入英文空格（vendored bubbletea 将单独空格编码为 `KeySpace`，此前所有输入点只处理 `KeyRunes`）。
