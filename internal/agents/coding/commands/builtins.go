@@ -2,15 +2,16 @@ package commands
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
+	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
 )
 
@@ -379,8 +380,7 @@ func RegisterBuiltins(registry *slashcmd.Registry) {
 				if err != nil {
 					return slashcmd.CommandResult{}, err
 				}
-				data, err := json.MarshalIndent(snapshot, "", "  ")
-				return slashcmd.CommandResult{Output: "Current logical model input (before provider serialization; excludes drafts/queued messages). Token counts are estimates.\n" + string(data)}, err
+				return slashcmd.CommandResult{Output: formatContextSnapshot(snapshot)}, nil
 			}
 			provider, modelID := ctx.Session.ModelInfo()
 			tools := ctx.Session.ToolNames()
@@ -408,6 +408,129 @@ func RegisterBuiltins(registry *slashcmd.Registry) {
 			return slashcmd.CommandResult{ClearScreen: true}, nil
 		},
 	})
+}
+
+// formatContextSnapshot renders a context snapshot as a compact terminal
+// panel (alignment via spaces; TUI renders command output as plain text).
+// Replaces the previous raw json.MarshalIndent dump, which could emit
+// thousands of lines (full system prompt + messages + tool schemas).
+func formatContextSnapshot(s agent.ContextSnapshot) string {
+	u := s.Usage
+
+	var b strings.Builder
+	b.WriteString("Context Overview\n")
+	b.WriteString(strings.Repeat("─", 44) + "\n")
+	b.WriteString(fmt.Sprintf("Model       %s/%s\n", s.Model.Provider, s.Model.ID))
+	if u.WindowKnown && u.ContextWindow > 0 {
+		pct := 100.0 * float64(u.EstimatedTokens) / float64(u.ContextWindow)
+		b.WriteString(fmt.Sprintf("Tokens      %s of %s (%.1f%%)\n",
+			formatTokens(u.EstimatedTokens), formatTokens(u.ContextWindow), pct))
+		b.WriteString(contextBar(u.EstimatedTokens, u.ContextWindow, 40) + "\n")
+	} else {
+		b.WriteString(fmt.Sprintf("Tokens      %s (window size unknown)\n", formatTokens(u.EstimatedTokens)))
+	}
+	b.WriteString(fmt.Sprintf("Messages    %d entries\n", len(s.Messages)))
+	b.WriteString("\nToken Breakdown\n")
+	b.WriteString(strings.Repeat("─", 44) + "\n")
+	b.WriteString(fmt.Sprintf("  Messages  %7s\n", formatTokens(u.Messages)))
+	b.WriteString(fmt.Sprintf("  System    %7s\n", formatTokens(u.System)))
+	b.WriteString(fmt.Sprintf("  Tools     %7s\n", formatTokens(u.Tools)))
+	if u.LastRequest.InputTokens > 0 {
+		line := fmt.Sprintf("  Last req  %7s in / %s out", formatTokens(u.LastRequest.InputTokens), formatTokens(u.LastRequest.OutputTokens))
+		if u.LastRequest.CachedInputTokens != nil && *u.LastRequest.CachedInputTokens > 0 {
+			line += fmt.Sprintf(" (%s cached)", formatTokens(*u.LastRequest.CachedInputTokens))
+		}
+		b.WriteString(line + "\n")
+	}
+
+	b.WriteString("\nTools (" + strconv.Itoa(len(s.Tools)) + ")\n")
+	b.WriteString(strings.Repeat("─", 44) + "\n")
+	if len(s.Tools) == 0 {
+		b.WriteString("  (none)\n")
+	} else {
+		b.WriteString("  " + wrapList(toolNames(s.Tools), 42) + "\n")
+	}
+
+	if len(s.Compactions) > 0 {
+		b.WriteString(fmt.Sprintf("\nCompactions (%d)\n", len(s.Compactions)))
+		b.WriteString(strings.Repeat("─", 44) + "\n")
+		for _, c := range s.Compactions {
+			ts := time.Unix(c.Timestamp, 0).Format("01-02 15:04")
+			line := fmt.Sprintf("  %s", ts)
+			if c.Info != nil {
+				line += fmt.Sprintf("  msgs %d→%d, tokens %s→%s, trigger %s",
+					c.Info.MessagesBefore, c.Info.MessagesAfter,
+					formatTokens(c.Info.TokensBefore), formatTokens(c.Info.TokensAfter),
+					c.Info.Trigger)
+			}
+			b.WriteString(line + "\n")
+		}
+	}
+
+	b.WriteString("\n" + themeHint)
+	return b.String()
+}
+
+// themeHint explains what the snapshot covers, replacing the sentence that
+// previously prefixed the JSON dump.
+const themeHint = "Logical model input before provider serialization; excludes drafts/queued messages. Token counts are estimates."
+
+// contextBar renders a filled/empty bar: [████░░░░] 34%.
+func contextBar(used, total, width int) string {
+	if total <= 0 || width <= 0 {
+		return ""
+	}
+	ratio := float64(used) / float64(total)
+	if ratio < 0 {
+		ratio = 0
+	} else if ratio > 1 {
+		ratio = 1
+	}
+	filled := int(ratio * float64(width))
+	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]" + fmt.Sprintf(" %3.0f%%", ratio*100)
+}
+
+// formatTokens renders token counts compactly: 1234 -> 1.2k, 1234567 -> 1.2M.
+func formatTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return strconv.Itoa(n)
+	}
+}
+
+// toolNames extracts tool names from tool definitions.
+func toolNames(tools []ai.ToolDefinition) []string {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
+// wrapList joins items with ", " soft-wrapped at width, indented continuation.
+func wrapList(items []string, width int) string {
+	var lines []string
+	cur := ""
+	for _, item := range items {
+		candidate := item
+		if cur != "" {
+			candidate = cur + ", " + item
+		}
+		if len(candidate) > width && cur != "" {
+			lines = append(lines, cur)
+			cur = item
+			continue
+		}
+		cur = candidate
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	return strings.Join(lines, "\n  ")
 }
 
 func formatHelp(registry *slashcmd.Registry) string {
