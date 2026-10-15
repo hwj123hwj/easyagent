@@ -52,6 +52,9 @@ func (m *InteractiveMode) Run(ctx context.Context) error {
 	// 时机安全：ConfirmFunc 仅在 Agent 等待确认时被调，此时主循环阻塞在
 	// range stream 上、不在读 stdin，故此处独立读 os.Stdin 不会与主 scanner 抢占。
 	m.session.SetConfirmFunc(func(ctx context.Context, req agent.ConfirmationRequest) agent.ConfirmDecision {
+		if req.ToolName == "ask_user_question" {
+			return promptAskUser(os.Stdout, os.Stdin, req)
+		}
 		return promptConfirm(os.Stdout, os.Stdin, req.Description)
 	})
 	m.session.SetConfirmEnabled(!m.app.Config().AutoApprove)

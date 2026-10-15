@@ -130,6 +130,26 @@ func (m *TuiModel) resolveConfirmation(approved bool) {
 	}
 }
 
+// resolveQuestions closes the question overlay and hands the answers (or a
+// skip) to the waiting agent goroutine.
+func (m *TuiModel) resolveQuestions(submitted bool) {
+	if !m.questions.IsActive() || m.questionResult == nil {
+		return
+	}
+	resultCh := m.questionResult
+	answers := m.questions.Answers()
+	m.questions.Hide()
+	m.questionResult = nil
+
+	select {
+	case resultCh <- QuestionResultMsg{
+		Submitted: submitted,
+		Answers:   answers,
+	}:
+	default:
+	}
+}
+
 // renderConfirmationOverlay renders the confirmation dialog as an overlay
 // on top of the normal TUI view.
 func (m *TuiModel) renderConfirmationOverlay() string {

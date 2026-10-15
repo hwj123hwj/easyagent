@@ -198,6 +198,22 @@ type AskUserAnswer struct {
 	Text     string   `json:"text,omitempty"`
 }
 
+// ParseAskUserQuestions extracts the validated questions from raw tool args.
+// Entrypoints with an interactive channel (TUI/CLI/desktop) use it to render
+// the question panel; on invalid args the caller should decline the run so
+// the model can re-ask in plain text.
+func ParseAskUserQuestions(raw json.RawMessage) ([]AskUserQuestion, error) {
+	validated, err := NewAskUserTool().Validate(raw)
+	if err != nil {
+		return nil, err
+	}
+	var params AskUserParams
+	if err := json.Unmarshal(validated, &params); err != nil {
+		return nil, err
+	}
+	return params.Questions, nil
+}
+
 func ValidateAskUserAnswers(raw, response json.RawMessage) ([]AskUserAnswer, error) {
 	validated, err := NewAskUserTool().Validate(raw)
 	if err != nil {
