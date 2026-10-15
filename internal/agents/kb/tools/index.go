@@ -39,11 +39,11 @@ var (
 
 // skipFiles are filenames that should not be indexed (auto-generated or non-knowledge).
 var skipFiles = map[string]bool{
-	"INDEX.md":           true,
-	"KNOWLEDGE_BASE.md":  true,
-	"tags-index.json":    true,
-	"by-project.md":      true,
-	"USER-CHANGELOG.md":  true,
+	"INDEX.md":          true,
+	"KNOWLEDGE_BASE.md": true,
+	"tags-index.json":   true,
+	"by-project.md":     true,
+	"USER-CHANGELOG.md": true,
 }
 
 // skipDirs are directory prefixes that should not be indexed.
@@ -55,8 +55,20 @@ var skipDirs = []string{
 	"devops/",
 }
 
+// resolveRepoRoot 解析软链到真实路径。filepath.Walk 不跟随软链根目录：
+// 传常见默认路径 ~/agent-lessons（软链）时，索引会安静地返回空（#第二大脑为空）。
+func resolveRepoRoot(repoPath string) string {
+	resolved, err := filepath.EvalSymlinks(repoPath)
+	if err != nil || resolved == "" {
+		return repoPath
+	}
+	return resolved
+}
+
 // GetIndex builds (or returns cached) an index of all .md files in the repo.
 func GetIndex(repoPath string) (*Index, error) {
+	repoPath = resolveRepoRoot(repoPath)
+
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 
