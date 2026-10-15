@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v0.15.9] - 2026-10-15
+
+- Linux 客户端首发：Go 原生试用版（desktop-native 0.2.5）现提供 `linux/amd64` 的 `.deb` 一键安装包与 `tar.gz` 归档，内含 Go 核心.easyagent、工作流运行时 Node 与原生界面，无 WebView 依赖，`dpkg -i` 安装后从应用菜单启动。作为 v0.15.9 的附加发布资产提供，暂不进入正式 manifest 校验。
+
 ## [v0.15.8] - 2026-10-15
 
 - 修复 TUI 慢速斜杠命令冻结整个终端：`/compact` 在 Bubble Tea Update 循环内同步执行 LLM 总结，长会话下几十秒无渲染、按键无响应，且命令跑在 `context.Background()` 上无法被 Ctrl+C 取消。现快命令（`/models` `/sessions` `/switch` `/confirm` `/clear` `/new`）保持同步，其余命令后台执行并经 `SlashCmdDoneMsg` 回传结果；忙碌期状态栏显示 `⟳ compacting`，拒绝并发命令与切换模型/会话，Ctrl+C 可真正取消，迟到结果由 streamID 门卫丢弃。
