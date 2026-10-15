@@ -196,6 +196,28 @@ func TestInputModel_HandleKeyRunes(t *testing.T) {
 	}
 }
 
+// bubbletea reports a lone space as KeySpace, not KeyRunes.
+// Regression: KeySpace fell into the default branch and was silently dropped.
+func TestInputModel_HandleKeySpace(t *testing.T) {
+	im := NewInputModel()
+	im.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ab")})
+	im.HandleKey(tea.KeyMsg{Type: tea.KeySpace})
+	im.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("cd")})
+
+	if got := im.Text(); got != "ab cd" {
+		t.Errorf("after typing 'ab'+space+'cd': Text() = %q, want 'ab cd'", got)
+	}
+
+	// space in the middle: cursor splits before/after
+	im2 := NewInputModel()
+	im2.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("xy")})
+	im2.HandleKey(tea.KeyMsg{Type: tea.KeyLeft})
+	im2.HandleKey(tea.KeyMsg{Type: tea.KeySpace})
+	if got := im2.Text(); got != "x y" {
+		t.Errorf("space at cursor middle: Text() = %q, want 'x y'", got)
+	}
+}
+
 func TestToolPanelRender(t *testing.T) {
 	tp := NewToolPanel(ToolCallInfo{
 		Name:      "bash",

@@ -316,6 +316,10 @@ func (m *TuiModel) handleModelSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyDown:
 		m.completion.Next()
 		return m, nil
+	case tea.KeySpace:
+		// bubbletea reports a lone space as KeySpace, not KeyRunes.
+		m.completion.query += " "
+		m.filterModels()
 	case tea.KeyRunes:
 		m.completion.query += strings.ReplaceAll(sanitizeInput(string(msg.Runes)), "\n", " ")
 		m.filterModels()
