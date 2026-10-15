@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/operations"
@@ -16,6 +17,7 @@ type ReadTool struct {
 	workspace    string // 工作目录，用于解析相对路径
 	maxOutputLen int    // 最大输出长度，0 表示使用 DefaultMaxOutputLen
 	ops          operations.FileOperations
+	readTracker  *ReadTracker
 }
 
 type ReadParams struct {
@@ -26,6 +28,11 @@ type ReadParams struct {
 
 // ReadToolOption configures a ReadTool during construction.
 type ReadToolOption func(*ReadTool)
+
+// WithReadTracker sets the ReadTracker to record read files.
+func WithReadTracker(tracker *ReadTracker) ReadToolOption {
+	return func(t *ReadTool) { t.readTracker = tracker }
+}
 
 // WithReadPathPolicy explicitly controls access outside the workspace.
 func WithReadPathPolicy(policy PathPolicy) ReadToolOption {
@@ -105,6 +112,14 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, onUpdate fu
 		return agent.ToolResult{IsError: true}, err
 	}
 
+	if t.readTracker != nil {
+		var modTime time.Time
+		if stat, statErr := t.ops.Stat(ctx, cleanPath); statErr == nil {
+			modTime = stat.ModTime
+		}
+		t.readTracker.Record(cleanPath, data, modTime)
+	}
+
 	lines := strings.Split(string(data), "\n")
 	totalLines := len(lines)
 
@@ -120,24 +135,40 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, onUpdate fu
 		end = totalLines
 	}
 
-	// Output with line numbers
-	var b strings.Builder
+	// Output with line numbers, capped at the output limit on line boundaries
+	// so the model never sees a partial line and the continuation hint is exact.
 	selectedLines := lines[start:end]
+	maxLen := t.maxOutputLen
+	if maxLen <= 0 {
+		maxLen = DefaultMaxOutputLen
+	}
+	var b strings.Builder
+	kept := 0
 	for i, line := range selectedLines {
-		lineNum := start + i + 1 // 1-indexed
-		b.WriteString(fmt.Sprintf("%6d\t%s\n", lineNum, line))
+		formatted := fmt.Sprintf("%6d\t%s\n", start+i+1, line)
+		if len(formatted) > maxLen {
+			// 单行超限（minified 文件等）：rune 安全硬切该行，停在行尾。
+			formatted = truncateByteCap(formatted, maxLen)
+		} else if kept > 0 && b.Len()+len(formatted) > maxLen {
+			break // 剩余行放不下，在行边界收尾，续读提示在循环外补
+		}
+		b.WriteString(formatted)
+		kept++
+	}
+	if kept < len(selectedLines) {
+		nextOffset := start + kept
+		b.WriteString(fmt.Sprintf(
+			"\n... output capped at %d characters: showing lines %d-%d of %d; continue with offset=%d (and a smaller limit when lines are very long)\n",
+			maxLen, start+1, nextOffset, totalLines, nextOffset))
+	} else {
+		// Hint about remaining lines for large files
+		remaining := totalLines - end
+		if remaining > 0 {
+			b.WriteString(fmt.Sprintf("\n... %d more lines (use offset=%d to read further)\n", remaining, end))
+		}
 	}
 
-	// Hint about remaining lines for large files
-	remaining := totalLines - end
-	if remaining > 0 {
-		b.WriteString(fmt.Sprintf("\n... %d more lines (use offset=%d to read further)\n", remaining, end))
-	}
-
-	content := b.String()
-	content = TruncateOutput(content, t.maxOutputLen)
-
-	return agent.ToolResult{Content: content}, nil
+	return agent.ToolResult{Content: b.String()}, nil
 }
 
 // IsConcurrencySafe implements agent.ConcurrencySafeChecker.

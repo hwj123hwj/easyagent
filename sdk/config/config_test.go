@@ -51,6 +51,20 @@ func TestEnvReadsEAPrefixOnly(t *testing.T) {
 	assert.Equal(t, "", Env("EA_PROVIDER"))
 }
 
+func TestServerKeyDoesNotOverrideModelKey(t *testing.T) {
+	t.Setenv("EA_API_KEY", "upstream-key")
+	t.Setenv("EA_SERVER_API_KEY", "desktop-session-key")
+	t.Setenv("EA_MCP_CONFIG", "/tmp/user-mcp.json")
+	cfg := Default()
+	cfg.LoadFromEnv()
+	assert.Equal(t, "upstream-key", cfg.OpenAIAPIKey)
+	assert.Equal(t, "desktop-session-key", cfg.APIKey)
+	assert.Equal(t, "desktop-session-key", ServerAPIKey())
+	assert.Equal(t, "/tmp/user-mcp.json", cfg.MCPConfigPath)
+	t.Setenv("EA_SERVER_API_KEY", "")
+	assert.Equal(t, "upstream-key", ServerAPIKey())
+}
+
 func TestLoadDotEnv(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, ".env")
@@ -71,4 +85,43 @@ func TestLoadDotEnv(t *testing.T) {
 func TestLoadDotEnv_NotExist(t *testing.T) {
 	err := LoadDotEnv("/nonexistent/.env")
 	assert.Error(t, err)
+}
+
+func TestASRProviderCredentialPairing(t *testing.T) {
+	for _, tc := range []struct{ name, asr, silicon, gateway, base, override, wantKey, wantURL string }{
+		{name: "gateway", gateway: "gw", base: "https://gateway.test/v1", wantKey: "gw", wantURL: "https://gateway.test/v1"},
+		{name: "gateway without endpoint", gateway: "gw", wantURL: "https://api.siliconflow.cn"},
+		{name: "explicit URL must not receive gateway key", gateway: "gw", base: "https://gateway.test", override: "https://other.test", wantURL: "https://other.test"},
+		{name: "explicit URL must not receive silicon key", silicon: "sf", override: "https://other.test", wantURL: "https://other.test"},
+		{name: "silicon precedence", silicon: "sf", gateway: "gw", base: "https://gateway.test", wantKey: "sf", wantURL: "https://api.siliconflow.cn"},
+		{name: "explicit provider", asr: "explicit", gateway: "gw", base: "https://gateway.test", override: "https://asr.test", wantKey: "explicit", wantURL: "https://asr.test"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, name := range []string{"ASR_API_KEY", "ASR_BASE_URL", "SILICONFLOW_API_KEY", "EA_API_KEY", "OPENAI_API_KEY", "EA_BASE_URL", "OPENAI_BASE_URL"} {
+				t.Setenv(name, "")
+			}
+			t.Setenv("ASR_API_KEY", tc.asr)
+			t.Setenv("ASR_BASE_URL", tc.override)
+			t.Setenv("SILICONFLOW_API_KEY", tc.silicon)
+			c := Default()
+			c.OpenAIAPIKey, c.OpenAIBaseURL = tc.gateway, tc.base
+			c.LoadFromEnv()
+			assert.Equal(t, tc.wantKey, c.ASRAPIKey)
+			assert.Equal(t, tc.wantURL, c.ASRBaseURL)
+		})
+	}
+}
+
+func TestASRPreservesFileConfiguration(t *testing.T) {
+	for _, name := range []string{"ASR_API_KEY", "ASR_BASE_URL", "ASR_MODEL", "SILICONFLOW_API_KEY"} {
+		t.Setenv(name, "")
+	}
+	c := Default()
+	c.ASRAPIKey = "file-key"
+	c.ASRBaseURL = "https://file.test/v1"
+	c.ASRModel = "file-model"
+	c.LoadFromEnv()
+	assert.Equal(t, "file-key", c.ASRAPIKey)
+	assert.Equal(t, "https://file.test/v1", c.ASRBaseURL)
+	assert.Equal(t, "file-model", c.ASRModel)
 }

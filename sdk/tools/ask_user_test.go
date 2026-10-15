@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,12 +18,12 @@ func TestAskUserTool_Basic(t *testing.T) {
 	validated, err := tool.Validate([]byte(`{"questions":[{"question":"Which library?","header":"Library","options":[{"label":"React","description":"UI library"},{"label":"Vue","description":"Progressive framework"}]}]}`))
 	require.NoError(t, err)
 
-	result, err := tool.Execute(ctx, validated, nil)
+	result, err := tool.ExecuteConfirmed(ctx, validated, agent.ConfirmDecision{Approved: true, Response: json.RawMessage(`[{"selected":["React"]}]`)}, nil)
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 	assert.Contains(t, result.Content, "Which library?")
 	assert.Contains(t, result.Content, "React")
-	assert.Contains(t, result.Content, "Vue")
+	assert.NotContains(t, result.Content, "Vue")
 }
 
 func TestAskUserTool_MultipleQuestions(t *testing.T) {
@@ -34,7 +35,7 @@ func TestAskUserTool_MultipleQuestions(t *testing.T) {
 		`]}`))
 	require.NoError(t, err)
 
-	result, err := tool.Execute(ctx, validated, nil)
+	result, err := tool.ExecuteConfirmed(ctx, validated, agent.ConfirmDecision{Approved: true, Response: json.RawMessage(`[{"selected":["React"]},{"selected":[],"text":"plain CSS"}]`)}, nil)
 	require.NoError(t, err)
 	assert.Contains(t, result.Content, "Frontend framework?")
 	assert.Contains(t, result.Content, "CSS approach?")
@@ -100,4 +101,27 @@ func TestAskUserTool_AutoFixHeader(t *testing.T) {
 	var params AskUserParams
 	require.NoError(t, json.Unmarshal(validated, &params))
 	assert.Equal(t, "Question", params.Questions[0].Header)
+}
+
+func TestAskUserDoesNotInventAnswers(t *testing.T) {
+	tool := NewAskUserTool()
+	require.True(t, tool.RequiresInteractiveConfirmation())
+	raw := json.RawMessage(`{"questions":[{"question":"Q?","options":[{"label":"A"},{"label":"B"}]}]}`)
+	_, err := tool.Execute(context.Background(), raw, nil)
+	require.Error(t, err)
+	for _, response := range []string{`null`, `[]`, `[{}]`, `[{"selected":["unknown"]}]`, `[{"selected":["A","A"]}]`, `[{"selected":["A","B"]}]`, `[{"selected":["A"],"text":"custom"}]`} {
+		_, err := tool.ExecuteConfirmed(context.Background(), raw, agent.ConfirmDecision{Approved: true, Response: json.RawMessage(response)}, nil)
+		require.Error(t, err, response)
+	}
+}
+func TestAskUserMultiSelectAndCustomAnswer(t *testing.T) {
+	tool := NewAskUserTool()
+	raw := json.RawMessage(`{"questions":[{"question":"Q?","multiSelect":true,"options":[{"label":"A"},{"label":"B"}]}]}`)
+	result, err := tool.ExecuteConfirmed(context.Background(), raw, agent.ConfirmDecision{Approved: true, Response: json.RawMessage(`[{"selected":["A","B"],"text":"  自定义  "}]`)}, nil)
+	require.NoError(t, err)
+	require.Contains(t, result.Content, "A; B; 自定义")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = tool.ExecuteConfirmed(ctx, raw, agent.ConfirmDecision{Approved: true}, nil)
+	require.ErrorIs(t, err, context.Canceled)
 }

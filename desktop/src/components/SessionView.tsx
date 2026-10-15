@@ -1,244 +1,250 @@
-import { useEffect, useRef, useState } from 'react';
-import { useStore, type SessionView as SV, type ViewDensity } from '../store';
-import { ChatPane } from './panes/ChatPane';
-import { PromptBar } from './PromptBar';
-import { Icon } from './Icon';
-import { WorkspaceToggles } from './workspace/WorkspaceToggles';
-import { useT, type TFunc } from '../i18n/useT';
-import { BottomTerminal } from './workspace/BottomTerminal';
-import { Resizer } from './workspace/Resizer';
-import { isElectron } from '../platform';
+import { useEffect, useRef, useState } from "react";
+import { useStore, type SessionView as SV, type ViewDensity } from "../store";
+import { ChatPane } from "./panes/ChatPane";
+import { PromptBar } from "./PromptBar";
+import { Icon } from "./Icon";
+import { useT } from "../i18n/useT";
+import { BottomTerminal } from "./workspace/BottomTerminal";
+import { Resizer } from "./workspace/Resizer";
+import { copyText } from "../client/clipboard";
+import { isActiveRun } from "../client/protocol";
 
 export function SessionView() {
   const activeId = useStore((s) => s.activeSessionId);
+  const profile = useStore((s) => s.selectedProfile);
   const view = useStore((s) => (activeId ? s.sessions[activeId] : undefined));
-  const setDensity = useStore((s) => s.setDensity);
   const bottomOpen = useStore((s) => s.workspace.bottomOpen);
   const bottomHeight = useStore((s) => s.workspace.bottomHeight);
   const setWorkspaceSize = useStore((s) => s.setWorkspaceSize);
   const t = useT();
 
   if (!view) {
-    return <EmptyState />;
+    return <EmptyState key={profile} />;
   }
 
   const meta = view.meta;
-
   return (
-    <main className="main">
+    <main className="main session-main">
       <div className="toolbar">
-        <span className="toolbar-title">{meta.title}</span>
-        {meta.cwd && (
-          <span className="toolbar-cwd" title={meta.cwd}>
-            <Icon name="folder" size={13} />
-            {baseName(meta.cwd)}
-          </span>
-        )}
-        <span className="toolbar-status">
-          <span className={`status-dot ${meta.status}`} />
-          {t(`status.${meta.status}` as any)}
-        </span>
-        <span className="grow" />
-
-        <WorkspaceToggles />
-
-        {/* Density toggle (summary / normal / verbose) — desktop only on mobile */}
-        <div className={`views-menu ${isElectron ? 'toolbar-density' : 'toolbar-density-mobile'}`}>
-          {(['summary', 'normal', 'verbose'] as ViewDensity[]).map((d) => (
-            <button
-              key={d}
-              className={view.density === d ? 'active' : ''}
-              onClick={() => setDensity(meta.id, d)}
-              title={t('density.title')}
-            >
-              {t(`density.${d}`)}
-            </button>
-          ))}
+        <div className="toolbar-heading">
+          <span className="toolbar-title" title={meta.title}>{meta.title}</span>
+          {meta.cwd && (
+            <span className="toolbar-cwd" title={meta.cwd}>
+              <Icon name="folder" size={12} />
+              <span>{baseName(meta.cwd)}</span>
+            </span>
+          )}
         </div>
+        <span className="toolbar-status" role="status">
+          <span className={`status-dot ${meta.status}`} />
+          {isActiveRun(view.run) && view.phase === "responding"
+            ? t("chat.aiResponding")
+            : isActiveRun(view.run) && view.phase === "tool"
+              ? t("tool.status.in_progress")
+              : isActiveRun(view.run) && view.phase === "approval"
+                ? t("status.needs_approval")
+                : t(`status.${meta.status}` as any)}
+        </span>
+        <SessionActions view={view} cwd={meta.cwd} />
       </div>
 
-      <div className={`workspace ${bottomOpen ? 'with-bottom' : ''}`}>
+      <div className={`workspace ${bottomOpen ? "with-bottom" : ""}`}>
         <div className="pane">
           <div className="pane-head">
             <Icon name="chat" size={15} />
-            <span>{t('pane.chat')}</span>
+            <span>{t("pane.chat")}</span>
             <span className="grow" />
           </div>
           <ChatPane view={view} />
         </div>
       </div>
 
+      <PromptBar key={`prompt:${profile}:${view.meta.id}`} view={view} />
+
       {bottomOpen && (
-        <>
           <Resizer
             axis="y"
-            sign={1}
-            title={t('terminal.resize')}
+            sign={-1}
+            title={t("terminal.resize")}
             getValue={() => useStore.getState().workspace.bottomHeight}
-            onChange={(v) => setWorkspaceSize('bottomHeight', v)}
+            onChange={(v) => setWorkspaceSize("bottomHeight", v)}
           />
-          <BottomTerminal view={view} height={bottomHeight} />
-        </>
       )}
-
-      <PromptBar view={view} />
+      <BottomTerminal key={`terminal:${profile}:${view.meta.id}`} view={view} height={bottomHeight} open={bottomOpen} />
     </main>
   );
 }
 
 function baseName(cwd: string): string {
-  const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/);
+  const parts = cwd.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || cwd;
 }
 
-function EmptyState() {
-  const createSession = useStore((s) => s.createSession);
-  const sendPrompt = useStore((s) => s.sendPrompt);
-  const pickFolder = useStore((s) => s.pickFolder);
-  const models = useStore((s) => s.models);
-  const currentModel = useStore((s) => s.currentModel);
+function SessionActions({ view, cwd }: { view?: SV; cwd?: string }) {
   const t = useT();
-
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [cwd, setCwd] = useState<string | null>(null);
-  const [model, setModel] = useState('');
-  const [menuOpen, setMenuOpen] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const setDensity = useStore((s) => s.setDensity);
+  const details = useRef<HTMLDetailsElement>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    taRef.current?.focus();
+    const dismiss = (event: PointerEvent) => {
+      if (details.current && !details.current.contains(event.target as Node)) details.current.open = false;
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !details.current?.open) return;
+      event.preventDefault();
+      event.stopPropagation();
+      details.current.open = false;
+      details.current.querySelector("summary")?.focus();
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", onKey);
+    };
   }, []);
 
   useEffect(() => {
-    if (currentModel && !model) setModel(currentModel);
-  }, [currentModel, model]);
+    if (!copied) return;
+    const timeout = window.setTimeout(() => setCopied(false), 2400);
+    return () => window.clearTimeout(timeout);
+  }, [copied]);
 
-  // Dismiss the project menu on outside click / Escape.
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenuOpen(false);
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menuOpen]);
-
-  const handlePickFolder = async () => {
-    const folder = await pickFolder();
-    if (folder) setCwd(folder);
-    setMenuOpen(false);
-  };
-
-  const submit = async () => {
-    const trimmed = text.trim();
-    if (!trimmed || busy) return;
-    setBusy(true);
+  async function copyConversation() {
+    if (!view) return;
     try {
-      const id = await createSession({
-        cwd: cwd || undefined,
-        model: model || undefined,
-      });
-      await sendPrompt(id, trimmed);
-      setText('');
-    } catch {
-      setBusy(false);
+      await copyText(view.transcript.map((item) => item.kind === "tool"
+        ? `工具 · ${item.title}\n${JSON.stringify(item.rawInput || {})}\n${item.terminalOutput || item.content.map((c) => c.text || "").join("\n")}`
+        : `${item.kind === "user" ? "你" : item.kind === "assistant" ? "EasyAgent" : item.kind}\n${item.text}`,
+      ).join("\n\n"));
+      setCopied(true);
+      useStore.setState({ connectionError: undefined });
+    } catch (error) {
+      useStore.setState({ connectionError: (error as Error).message });
     }
-  };
-
-  const targetLabel = cwd ? baseName(cwd) : t('session.emptyChatTarget');
+  }
 
   return (
-    <main className="main">
-      <div className="empty-titlebar" />
-      <div className="empty">
-        <div className="empty-inner">
-          <div className="empty-title">{t('session.emptyPrompt')}</div>
-          <div className="empty-card">
-            <textarea
-              ref={taRef}
-              className="empty-input"
-              rows={2}
-              placeholder={t('session.emptyPlaceholder')}
-              value={text}
-              disabled={busy}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void submit();
-                }
-              }}
-            />
-            <div className="empty-controls">
-              {/* Project / directory selector — desktop only (no folder picker on mobile) */}
-              {isElectron && (
-              <div className="empty-target" ref={menuRef}>
-                <button
-                  className="chip interactive"
-                  onClick={() => setMenuOpen((o) => !o)}
-                  title={cwd ?? t('session.emptyChatTarget')}
-                >
-                  <Icon name="folder" size={14} />
-                  {targetLabel}
-                  <Icon name="chevron-down" size={12} />
-                </button>
-                {menuOpen && (
-                  <div className="empty-menu">
-                    <button
-                      className={`empty-menu-item ${!cwd ? 'active' : ''}`}
-                      onClick={() => {
-                        setCwd(null);
-                        setMenuOpen(false);
-                      }}
-                    >
-                      <Icon name="sparkle" size={14} />
-                      {t('session.emptyChatTarget')}
-                    </button>
-                    <div className="empty-menu-sep" />
-                    <button className="empty-menu-item" onClick={() => void handlePickFolder()}>
-                      <Icon name="folder-open" size={14} />
-                      {t('session.emptyPickFolder')}
-                    </button>
-                  </div>
-                )}
-              </div>
-              )}
-
-              {/* Model selector */}
-              <span className="chip">
-                <Icon name="cpu" size={14} />
-                <select value={model} onChange={(e) => setModel(e.target.value)}>
-                  <option value="">{t('prompt.defaultModel')}</option>
-                  {models.map((m) => (
-                    <option key={m.modelId} value={m.modelId}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
-              </span>
-
-              <span className="grow" />
-
-              <button
-                className="btn primary empty-send"
-                disabled={!text.trim() || busy}
-                onClick={() => void submit()}
-                title={t('session.emptySend')}
-              >
-                {busy ? <span className="spinner" /> : <Icon name="send" size={16} />}
-              </button>
-            </div>
+    <details
+      className="session-actions-menu"
+      ref={details}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) event.currentTarget.open = false;
+      }}
+    >
+      <summary className="icon-btn" title="更多会话选项" aria-label="更多会话选项">
+        <span className="session-menu-dots" aria-hidden="true">···</span>
+      </summary>
+      <div className="session-actions-popover">
+        {cwd && (
+          <div className="session-menu-path">
+            <Icon name="folder" size={13} />
+            <span title={cwd}>{cwd}</span>
           </div>
-          <div className="empty-hint">{t('session.emptyHint')}</div>
-        </div>
+        )}
+        {view && (
+          <>
+            <button className="session-menu-action" disabled={!view.transcript.length} onClick={() => void copyConversation()}>
+              <Icon name={copied ? "check" : "copy"} size={15} />
+              <span role="status">{copied ? "已复制完整会话" : "复制完整会话"}</span>
+            </button>
+            <div className="session-menu-section" role="group" aria-label={t("density.title")}>
+              <span className="session-menu-label">{t("density.title")}</span>
+              {(["summary", "normal", "verbose"] as ViewDensity[]).map((density) => (
+                <button
+                  key={density}
+                  className={`session-menu-action ${view.density === density ? "selected" : ""}`}
+                  aria-pressed={view.density === density}
+                  onClick={() => setDensity(view.meta.id, density)}
+                >
+                  <span>{t(`density.${density}`)}</span>
+                  {view.density === density && <Icon name="check" size={14} />}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
+    </details>
+  );
+}
+
+function EmptyState() {
+  const currentModel = useStore((s) => s.currentModel),
+    connected = useStore((s) => s.connected);
+  const [cwd, setCwd] = useState(""),
+    [model, setModel] = useState("");
+  useEffect(() => {
+    if (!model && currentModel) setModel(currentModel);
+  }, [currentModel, model]);
+  const view: SV = {
+    meta: {
+      id: "__new__",
+      title: "新对话",
+      cwd,
+      status: "idle",
+      model,
+      availableModels: [],
+      createdAt: 0,
+      updatedAt: 0,
+    },
+    transcript: [],
+    seq: 0,
+    confirmations: [],
+    phase: "idle",
+    plan: [],
+    diffs: [],
+    density: "normal",
+    panes: ["chat"],
+    activePane: "chat",
+  };
+  async function start() {
+    const text = useStore.getState().drafts.__new__ || "";
+    const id = await useStore
+      .getState()
+      .createSession({ cwd: cwd || undefined, model: model || undefined });
+    useStore.getState().setDraft(id, text);
+    return id;
+  }
+  return (
+    <main className="main session-main">
+      <div className="toolbar">
+        <div className="toolbar-heading">
+          <span className="toolbar-title">新对话</span>
+        </div>
+        <button
+          className="btn toolbar-project-picker"
+          disabled={!connected}
+          title={cwd || "选择项目"}
+          onClick={() =>
+            void useStore
+              .getState()
+              .pickFolder()
+              .then((path) => {
+                if (path) setCwd(path);
+              })
+              .catch((error) =>
+                useStore.setState({ connectionError: error.message }),
+              )
+          }
+        >
+          <Icon name="folder" size={14} />
+          <span>{cwd ? baseName(cwd) : "选择项目"}</span>
+        </button>
+        {cwd && (
+          <button
+            className="icon-btn"
+            aria-label="清除项目"
+            onClick={() => setCwd("")}
+          >
+            <Icon name="x" size={13} />
+          </button>
+        )}
+        <SessionActions cwd={cwd} />
+      </div>
+      <ChatPane view={view} />
+      <PromptBar view={view} onStart={start} onModelChange={setModel} />
     </main>
   );
 }

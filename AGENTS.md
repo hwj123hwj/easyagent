@@ -28,12 +28,42 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 - 把任务转为可验证目标："加校验" → "先写测试用例，再让它通过"
 - 多步骤任务先列计划，每步带验证标准。
 
+### 分支收尾
+
+- 长期只保留 `main`，开发分支仅用于当前任务，不积累已完成的分支。
+- PR 合并后，切回 `main` 并同步远端，删除对应的本地和远端开发分支，再运行 `git fetch --prune origin` 清理失效引用；这属于任务收尾，不能留给用户手动处理。
+- 删除前确认提交已进入 `main`。未合并的提交、未提交的改动和仍在使用的 worktree 必须先核实并保留，不用强制删除来凑成“只剩 main”。
+- 汇报完成前检查本地、远端分支；如仍有未合并或正在使用的分支，说明原因。
+
+- 收尾时检查 `git worktree list`、各副本的修改和相关进程；确认工作已进入 `main`、所需检查通过后，同步并切回主目录的 `main`，主动清理本次任务的闲置 worktree 和已合并分支，再 prune 失效引用。
+- worktree 只有在没有独有工作、未处理修改、活动会话或进程时才可清理。未跟踪文件也要核实；需要整合的先整合、验证，需要保留的先做可恢复备份，不仅凭目录名或 PR 已合并判断无用。
+- Codex 管理的 worktree 使用应用归档工具，普通 Git worktree 使用 `git worktree remove`；不直接删目录、不强制清空，保留主目录和仍在使用的副本。
+- 回归主线不构成提交、推送或部署授权。已授权的部署须确认构建包含最新已核实主线及需要保留的本地改动，避免旧分支覆盖较新运行版本。
+- 完成时简要说明当前分支、清理结果和保留原因；只清理本次相关仓库。
+
 ---
+
+### 桌面构建与应用收尾
+
+- 桌面宿主继续使用 Electron；不引入 MyGo。界面迭代沿用现有 React、Electron 桥接和发布链路。
+
+- 日常只保留一个已核实的 EasyAgent 应用入口；正式安装使用 `/Applications/EasyAgent.app`，不累积改名副本，也不自动替换用户当前运行的应用。
+- macOS 构建统一使用 `desktop/release.noindex/`；临时挂载、原生验收目录使用 `.noindex` 后缀，不把测试 `.app` 放到桌面、下载目录或 Applications。仅 Git ignore 不会阻止系统应用搜索收录。
+- 打包和安装包检查结束后自动撤销测试包及 Helper 的 LaunchServices 注册。原生 GUI 或 `electron:dev` 验收须先退出测试进程，再运行 `python3 scripts/unregister-desktop-apps.py <测试应用路径>`，然后收尾临时副本；`.noindex` 不能代替退出后的注册清理。
+- 清理前核实应用路径、Bundle ID、运行进程及工作树；保留当前运行的应用、开发依赖、安装包和用户数据。冗余测试应用先撤销注册，再移入废纸篓保留恢复路径；不重置整个 LaunchServices/Spotlight 数据库，不处理其他项目的 Electron。
+
+### 版本发布
+
+- tag 使用带 `v` 的语义化版本和附注标签，只发布已进入 main 的确定提交。按 `docs/RELEASING.md` 和 `scripts/release.py` 操作。
+- 发布前更新 CHANGELOG 并通过完整 CI；已发布 tag 和资产不得移动、删除重打或覆盖。
+- 2026-10-01 维护者授权更名时一次性清理已备份的旧 Pi Agent Release/tag，以 EasyAgent `v0.1.0` 重新起始；该例外不延伸到后续发布，仍保留完整代码历史。
+- main 的 SHA 自动部署与正式 Release 分开，不为每次合并自动打版本标签。
 
 ## 项目文档
 
-- 项目介绍 & 架构：`README.md` / `docs/PROJECT_CONTEXT.md`
+- 项目介绍 & 架构：`README.md` / `docs/ARCHITECTURE.md`
 - 开发流程 & 编码规范（分支命名、commit 格式等）：`docs/CONTRIBUTING.md`
+- 并行开发 & worktree（会话提交纪律、收尾清理）：`docs/WORKTREES.md`
 - 架构决策：`docs/decisions/`
 - 竞品调研：`docs/research/`
 
@@ -59,6 +89,7 @@ sdk/agent/ sdk/ai/ sdk/session/ …      ← 核心层（零领域知识）
 | 接口 | 文件 | 作用 |
 |------|------|------|
 | `agent.Tool` | `sdk/agent/tool.go` | 工具系统，可选接口：`ToolWithMode`、`ConcurrencySafeChecker`、`ToolWithPrepareArguments` |
+| `skillmarket.Client` | `sdk/skillmarket/skillmarket.go` | 技能市场客户端：store 搜索/详情 + 本地安装/卸载（见 `docs/SKILL_MARKET.md`） |
 | `providers.Provider` | `sdk/ai/providers/interface.go` | LLM Provider 注册制（Name + Stream + StreamSimple） |
 | `runtime.Application` | `sdk/runtime/application.go` | Platform↔App 解耦点：`BuildTools()` + `BuildPrompt()` + `NewSessionExt()` |
 | `operations.Operations` | `sdk/operations/interface.go` | 本地/SSH 执行后端切换 |
@@ -75,7 +106,7 @@ sdk/agent/ sdk/ai/ sdk/session/ …      ← 核心层（零领域知识）
 
 ### Provider 注册
 
-`sdk/ai/providers/register.go` 注册 builtins，`internal/app/app.go` 组装注入。新增 Provider：实现接口 → `registerProvider()` 注册 → 添加配置 env。
+Provider 接口与实现位于 `sdk/ai/providers/`，应用入口组装注入。新增 Provider 必须同时接入实际配置选择逻辑并覆盖测试；不要仅添加实现后假定 CLI 会自动发现。
 
 ### 会话持久化
 
@@ -95,15 +126,18 @@ go test ./sdk/tools/ -v                # 单包测试
 ./easyagent serve --listen :8080             # HTTP 服务
 ```
 
-Provider 开发用 `mock`（`EA_PROVIDER=mock`），不调真实 LLM。
-`EA_*` 为当前环境变量前缀；程序仍兼容读取旧的 `PI_GO_*` 变量。
+Provider 开发使用测试中注入的 mock 或本地模拟 HTTP 服务，不调真实 LLM。CLI 当前不接受 `EA_PROVIDER=mock`。
+`EA_*` 为当前环境变量前缀；旧的 `PI_GO_*` 配置需要迁移，不会自动回退读取。
 
 ## 环境变量
 
-核心变量（完整列表见 `docs/CONTRIBUTING.md`）：
+核心变量（配置说明见 `docs/CONFIG.md`）：
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `EA_PROVIDER` | `mock` | `anthropic` / `openai` / `deepv` / `mock` |
+| `EA_PROVIDER` | 空，需显式配置 | `anthropic` / `openai` |
 | `EA_ENABLE_BASH` | `false` | 启用 Bash 工具 |
 | `EA_DATA_DIR` | `./data` | 会话数据目录 |
+| `EA_SKILL_MARKET` | `true` | 技能市场（官方 store 搜索/安装）；设 `0` 关闭 |
+| `EA_SKILL_MARKET_BASE_URL` | `https://skills.deepvlab.ai` | 技能市场 API 地址 |
+| `EA_SKILL_MARKET_SKILL_DIR` | `~/.agents/skills` | 市场技能安装目录 |

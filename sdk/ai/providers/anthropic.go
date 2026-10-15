@@ -52,9 +52,10 @@ func (p *AnthropicProvider) StreamSimple(ctx context.Context, req ai.SimpleStrea
 // ─── Anthropic API 请求/响应结构 ──────────────────────────────────────────────────
 
 type anthropicImageSource struct {
+	URL       string `json:"url,omitempty"`
 	Type      string `json:"type"` // "base64"
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
 }
 
 type anthropicContentBlock struct {
@@ -184,6 +185,7 @@ func (p *AnthropicProvider) handleSSE(ctx context.Context, stream *ai.EventStrea
 	// 追踪每个 tool_use content block index → ToolCall 在 partial.ToolCalls 中的位置
 	toolCallIndexMap := map[int]int{}
 	toolCallCounter := 0
+	terminalSeen := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -195,6 +197,13 @@ func (p *AnthropicProvider) handleSSE(ctx context.Context, stream *ai.EventStrea
 		if strings.HasPrefix(line, "data: ") {
 			data := strings.TrimPrefix(line, "data: ")
 			p.handleSSEEvent(ctx, stream, partial, currentEvent, data, blockTypes, toolCallIndexMap, &toolCallCounter)
+			if partial.StopReason == ai.StopReasonError {
+				return len(partial.ToolCalls) > 0 || partial.Text != "" || partial.Thinking != "", errors.New(partial.ErrorMsg)
+			}
+			if currentEvent == "message_stop" {
+				terminalSeen = true
+				break
+			}
 			currentEvent = ""
 		}
 	}
@@ -211,15 +220,13 @@ func (p *AnthropicProvider) handleSSE(ctx context.Context, stream *ai.EventStrea
 		}
 		return received, err
 	}
-	if partial.StopReason == "" {
-		// 空流：上游可能被 LB 掐断（连 message_stop 都没发），
-		// 不装作正常完成（空消息会污染会话），交给调用方重试/报错
-		if !received {
-			return false, nil
-		}
-		partial.StopReason = ai.StopReasonStop
-		_ = stream.Push(ctx, ai.EventDone{Reason: partial.StopReason, Message: *partial})
-		stream.SetResult(*partial, nil)
+	if !received {
+		return false, nil
+	}
+	// message_delta 的 stop_reason 不是传输终态；未收到 message_stop
+	// 就结束的 body 属于中断，不能合成 Done 或丢弃已收到的用量。
+	if !terminalSeen {
+		return received, errors.New("upstream stream ended without message_stop terminal event")
 	}
 	return received, nil
 }
@@ -243,24 +250,31 @@ func (p *AnthropicProvider) handleSSEEvent(
 				ID    string `json:"id"`
 				Model string `json:"model"`
 				Usage struct {
-					InputTokens int `json:"input_tokens"`
+					InputTokens int  `json:"input_tokens"`
+					CacheRead   *int `json:"cache_read_input_tokens"`
+					CacheWrite  int  `json:"cache_creation_input_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
 		}
 		_ = json.Unmarshal([]byte(data), &msg)
-		if msg.Message.Usage.InputTokens > 0 {
-			partial.Usage = ai.Usage{InputTokens: msg.Message.Usage.InputTokens}
+		if msg.Message.Usage.InputTokens > 0 || msg.Message.Usage.CacheRead != nil || msg.Message.Usage.CacheWrite > 0 {
+			u := msg.Message.Usage
+			partial.Usage = ai.Usage{InputTokens: u.InputTokens + u.CacheWrite, CachedInputTokens: u.CacheRead}
+			if u.CacheRead != nil {
+				partial.Usage.InputTokens += *u.CacheRead
+			}
 		}
 
 	case "content_block_start":
 		var raw struct {
 			Index        int `json:"index"`
 			ContentBlock struct {
-				Type  string `json:"type"`
-				ID    string `json:"id,omitempty"`
-				Name  string `json:"name,omitempty"`
-				Text  string `json:"text,omitempty"`
-				Input any    `json:"input,omitempty"`
+				Type     string `json:"type"`
+				ID       string `json:"id,omitempty"`
+				Name     string `json:"name,omitempty"`
+				Text     string `json:"text,omitempty"`
+				Thinking string `json:"thinking,omitempty"`
+				Input    any    `json:"input,omitempty"`
 			} `json:"content_block"`
 		}
 		if err := json.Unmarshal([]byte(data), &raw); err != nil {
@@ -279,7 +293,10 @@ func (p *AnthropicProvider) handleSSEEvent(
 			*toolCallCounter++
 			_ = stream.Push(ctx, ai.EventToolCallStart{ContentIndex: idx, Partial: *partial})
 		case "thinking":
-			// thinking 块暂不详细处理
+			if raw.ContentBlock.Thinking != "" {
+				partial.Thinking += raw.ContentBlock.Thinking
+				_ = stream.Push(ctx, ai.EventThinkingDelta{Delta: raw.ContentBlock.Thinking})
+			}
 		}
 
 	case "content_block_delta":
@@ -303,6 +320,7 @@ func (p *AnthropicProvider) handleSSEEvent(
 			_ = stream.Push(ctx, ai.EventTextDelta{ContentIndex: idx, Delta: raw.Delta.Text, Partial: *partial})
 		case "thinking_delta":
 			partial.Thinking += raw.Delta.Thinking
+			_ = stream.Push(ctx, ai.EventThinkingDelta{Delta: raw.Delta.Thinking})
 		case "input_json_delta":
 			if tcIdx, ok := toolCallIndexMap[idx]; ok && tcIdx < len(partial.ToolCalls) {
 				partial.ToolCalls[tcIdx].Args += raw.Delta.PartialJSON
@@ -362,6 +380,9 @@ func (p *AnthropicProvider) handleSSEEvent(
 		}
 
 	case "message_stop":
+		if partial.StopReason == "" {
+			partial.StopReason = ai.StopReasonStop
+		}
 		_ = stream.Push(ctx, ai.EventDone{Reason: partial.StopReason, Message: *partial})
 		stream.SetResult(*partial, nil)
 
@@ -379,8 +400,7 @@ func (p *AnthropicProvider) handleSSEEvent(
 		}
 		partial.StopReason = ai.StopReasonError
 		partial.ErrorMsg = errMsg
-		_ = stream.Push(ctx, ai.EventError{Reason: "error", Error: errMsg})
-		stream.SetResult(*partial, fmt.Errorf("API error: %s", errMsg))
+		// 交给 Stream 的统一失败收尾发一次错误并关闭，不等待下一帧/EOF。
 	}
 }
 
@@ -475,10 +495,22 @@ func convertToAnthropicMessages(msgs []ai.Message) []anthropicMessage {
 			result = append(result, anthropicMessage{Role: "assistant", Content: blocks})
 
 		case ai.ToolResultMessage:
+			contents := []anthropicContentBlock{{Type: "text", Text: m.Content}}
+			for _, image := range m.Images {
+				mediaType := image.MediaType
+				if mediaType == "" {
+					mediaType = "image/png"
+				}
+				if len(image.Data) > 0 {
+					contents = append(contents, anthropicContentBlock{Type: "image", Source: &anthropicImageSource{Type: "base64", MediaType: mediaType, Data: base64.StdEncoding.EncodeToString(image.Data)}})
+				} else if image.URL != "" {
+					contents = append(contents, anthropicContentBlock{Type: "image", Source: &anthropicImageSource{Type: "url", URL: image.URL}})
+				}
+			}
 			block := anthropicContentBlock{
 				Type:      "tool_result",
 				ToolUseID: m.ToolCallID,
-				Content:   []anthropicContentBlock{{Type: "text", Text: m.Content}},
+				Content:   contents,
 				IsError:   m.IsError,
 			}
 			// Merge consecutive tool results into a single user message

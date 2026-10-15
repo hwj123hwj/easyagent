@@ -12,6 +12,7 @@
 export const zh = {
   // ── common ────────────────────────────────────────────────────────────────
   'common.cancel': '取消',
+  'common.dismiss': '关闭',
   'common.close': '关闭',
   'common.back': '返回',
   'common.save': '保存',
@@ -135,6 +136,8 @@ export const zh = {
   'permission.title': '需要你的批准',
 
   // ── ask_user_question (multi-choice cards) ───────────────────────────────────────
+  "ask.invalid": "问题格式无效，请跳过后让 Agent 重新提问。",
+  "ask.submitting": "提交中…",
   'ask.title': '请回答以下问题',
   'ask.other': '其他（自定义输入）…',
   'ask.otherPlaceholder': '输入你的回答…',
@@ -215,6 +218,7 @@ export const zh = {
   'tool.status.pending': '等待',
   'tool.status.in_progress': '执行中',
   'tool.status.completed': '完成',
+  'tool.status.declined': '已拒绝',
   'tool.status.failed': '失败',
 
   // ── tool result summaries (single-line description, VSCode-plugin style) ───────────────
@@ -316,6 +320,7 @@ export const zh = {
   'update.updateNow': '立即更新',
   'update.later': '稍后',
   'update.skip': '跳过此版本',
+  'update.autoIdle': '离开应用后自动安装；有任务、终端或未保存编辑时等待。',
   'update.downloading': '正在下载更新…',
   'update.downloaded': '更新已下载完成',
   'update.installNow': '立即安装',
@@ -324,6 +329,7 @@ export const zh = {
   'update.installingWin': '即将退出并运行安装程序…',
   'update.failed': '更新失败',
   'update.retry': '重试',
+  'update.releasePage': '查看发布页',
   'update.minimize': '最小化（后台继续下载）',
   'update.expand': '展开更新进度',
   // settings → 软件更新
@@ -404,6 +410,7 @@ export const zh = {
   'files.binary': '二进制文件',
   'files.loadFailed': '文件加载失败',
   'files.edit': '编辑',
+  'files.export': '导出',
   'files.save': '保存',
   'files.cancel': '取消',
   'files.unsaved': '未保存',
@@ -443,4 +450,47 @@ export const zh = {
   'mobile.chats': '聊天',
   'mobile.settings': '设置',
   'mobile.server': '服务器',
+
+
+  // ── skill market ───────────────────────────────────────────────────────────
+  'settings.skillMarket.title': '技能市场',
+  'settings.skillMarket.subtitle': '从官方技能市场浏览并安装技能；安装后新会话立即可用，当前会话下一轮生效。',
+  'settings.skillMarket.searchPlaceholder': '搜索技能…',
+  'settings.skillMarket.sortFeatured': '推荐',
+  'settings.skillMarket.sortInstalls': '热门',
+  'settings.skillMarket.sortName': '名称',
+  'settings.skillMarket.sortInstalled': '已安装',
+  'settings.skillMarket.allSections': '全部',
+  'settings.skillMarket.loading': '加载中…',
+  'settings.skillMarket.empty': '没有匹配的技能，换个关键词试试。',
+  'settings.skillMarket.emptyInstalled': '还没有已安装的技能，去市场逛逛吧。',
+  'settings.skillMarket.featured': '推荐',
+  'settings.skillMarket.install': '安装',
+  'settings.skillMarket.installing': '安装中…',
+  'settings.skillMarket.installDone': '已安装，新会话即可使用。',
+  'settings.skillMarket.installedBadge': '已安装',
+  'settings.skillMarket.uninstall': '卸载',
+  'settings.skillMarket.confirmUninstall': '确认卸载？',
+  'settings.skillMarket.installs': '{count} 次安装',
+  'settings.skillMarket.loadMore': '加载更多',
+  'settings.skillMarket.usageTitle': '使用示例',
+  'settings.skillMarket.usageSubtitle': '复制这段提示词，直接开始使用这个技能',
+  'settings.skillMarket.usageCopy': '复制提示词',
+  'settings.skillMarket.usageCopied': '已复制',
+  'settings.skillMarket.previewTitle': '产出效果',
+  'settings.skillMarket.previewSubtitle': '查看这个技能的实际产出效果',
+  'settings.skillMarket.previewCountOne': '1 张预览图',
+  'settings.skillMarket.previewCountMany': '{count} 张预览图',
+  'settings.skillMarket.previewImageAlt': '{name} 产出预览 {index}',
+  'settings.skillMarket.filesTitle': '示例文件',
+  'settings.skillMarket.filesSubtitle': '这个技能附带的示例产物',
+  'settings.skillMarket.fileDownload': '下载',
+  'settings.skillMarket.previous': '上一张',
+  'settings.skillMarket.next': '下一张',
+  'settings.skillMarket.phase.resolving': '获取信息',
+  'settings.skillMarket.phase.downloading': '下载中',
+  'settings.skillMarket.phase.verifying': '校验中',
+  'settings.skillMarket.phase.extracting': '解压安装',
+  'settings.skillMarket.phase.done': '完成',
+
 } as const;

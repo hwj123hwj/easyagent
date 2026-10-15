@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/hwj123hwj/easyagent/sdk/ai/providers"
@@ -34,7 +35,7 @@ type Options struct {
 	CompactionSettings compaction.Settings      // 上下文压缩设置
 	SummarizeFunc      compaction.SummarizeFunc // 可选：摘要生成函数
 	LifecycleHooks     LifecycleHooks           // 可选：工具执行生命周期钩子
-	HookSystem         HookSystemInterface      // 可选：增强型 Hook 系统（优先级排序、超时、policy 集成）
+	HookSystem         HookSystemInterface      // 可选：增强型 Hook 系统（优先级排序、超时）
 	ConfirmFunc        ConfirmFunc              // 可选：危险工具执行前向用户确认（未注入则默认放行）
 	LoopDetectSettings LoopDetectSettings       // 循环检测设置（默认启用，连续相同 tool call 触发提醒）
 }
@@ -46,7 +47,7 @@ type Agent struct {
 	model              ai.Model
 	system             string
 	tools              map[string]Tool
-	listeners          []EventHandler
+	listeners          []*eventSubscription
 	steeringQueue      *MessageQueue
 	followUpQueue      *MessageQueue
 	maxTurns           int
@@ -55,7 +56,7 @@ type Agent struct {
 	compactionSettings compaction.Settings
 	summarizeFunc      compaction.SummarizeFunc
 	lifecycleHooks     LifecycleHooks
-	hookSystem         HookSystemInterface      // 增强型 Hook 系统（可选）
+	hookSystem         HookSystemInterface // 增强型 Hook 系统（可选）
 	confirmFunc        ConfirmFunc
 	loopDetectSettings LoopDetectSettings
 	loopDetect         loopDetector
@@ -84,7 +85,7 @@ func New(opts Options) *Agent {
 		model:              opts.Model,
 		system:             opts.System,
 		tools:              tools,
-		listeners:          make([]EventHandler, 0),
+		listeners:          make([]*eventSubscription, 0),
 		steeringQueue:      NewMessageQueue(),
 		followUpQueue:      NewMessageQueue(),
 		maxTurns:           opts.MaxTurns,
@@ -99,26 +100,30 @@ func New(opts Options) *Agent {
 	}
 }
 
+type eventSubscription struct{ handler EventHandler }
+
 func (a *Agent) Subscribe(handler EventHandler) func() {
+	subscription := &eventSubscription{handler: handler}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.listeners = append(a.listeners, handler)
-	idx := len(a.listeners) - 1
+	a.listeners = append(a.listeners, subscription)
+	a.mu.Unlock()
 	return func() {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if idx >= 0 && idx < len(a.listeners) {
-			a.listeners = append(a.listeners[:idx], a.listeners[idx+1:]...)
+		for i, item := range a.listeners {
+			if item == subscription {
+				a.listeners = append(a.listeners[:i], a.listeners[i+1:]...)
+				break
+			}
 		}
 	}
 }
-
 func (a *Agent) emit(ctx context.Context, event AgentEvent) {
 	a.mu.RLock()
-	listeners := append([]EventHandler(nil), a.listeners...)
+	listeners := append([]*eventSubscription(nil), a.listeners...)
 	a.mu.RUnlock()
 	for _, listener := range listeners {
-		listener(ctx, event)
+		listener.handler(ctx, event)
 	}
 }
 
@@ -211,11 +216,15 @@ func (a *Agent) Prompt(ctx context.Context, msg ai.Message) (ai.AssistantMessage
 // 最终结果通过最后一个 AgentStreamResult 事件传递。
 func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentStreamEvent, error) {
 	ch := make(chan AgentStreamEvent, 64)
+	var timingMu sync.Mutex
+	toolStarts := map[string]int64{}
 
 	// 订阅事件，转发到 channel（带背压控制）
 	unsubscribe := a.Subscribe(func(ctx context.Context, event AgentEvent) {
 		var ev AgentStreamEvent
 		switch e := event.(type) {
+		case EventContextUsage:
+			ev = AgentStreamEvent{Type: StreamEventContextUsage, ContextUsage: &e.Usage}
 		case EventTurnEnd:
 			ev = AgentStreamEvent{Type: StreamEventTurnEnd, Message: e.Message}
 		case EventToolExecutionStart:
@@ -225,9 +234,9 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 		case EventToolExecutionEnd:
 			ev = AgentStreamEvent{Type: StreamEventToolEnd, ToolName: e.ToolName, ToolCallID: e.ToolCallID, ToolResult: e.Result, ToolDetails: e.Details, IsError: e.IsError}
 		case EventCompacted:
-			ev = AgentStreamEvent{Type: StreamEventCompacted, Summary: e.Summary, TrimmedFrom: e.TrimmedFrom, TrimmedTo: e.TrimmedTo}
+			ev = AgentStreamEvent{Type: StreamEventCompacted, CompactionInfo: e.Info, Summary: e.Summary, TrimmedFrom: e.TrimmedFrom, TrimmedTo: e.TrimmedTo}
 		case EventCompactionFailed:
-			ev = AgentStreamEvent{Type: StreamEventError, Error: "compaction failed: " + e.Error}
+			ev = AgentStreamEvent{Type: StreamEventCompactionFailed, Error: e.Error}
 		case EventConfirmationRequest:
 			ev = AgentStreamEvent{Type: StreamEventConfirmationReq, ToolCallID: e.ToolCallID, ToolName: e.ToolName, Description: e.Description}
 		case EventConfirmationResult:
@@ -235,10 +244,22 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 		case EventLoopDetected:
 			ev = AgentStreamEvent{Type: StreamEventLoopDetected, ToolName: e.ToolName, RepeatCount: e.RepeatCount}
 		case EventMicroCompacted:
-			ev = AgentStreamEvent{Type: StreamEventMicroCompacted, ClearedCount: e.ClearedResults}
+			ev = AgentStreamEvent{Type: StreamEventMicroCompacted, ClearedCount: e.ClearedResults, TokensBefore: e.TokensBefore, TokensAfter: e.TokensAfter}
 		default:
 			return
 		}
+		ev.Timestamp = time.Now().UnixMilli()
+		timingMu.Lock()
+		if ev.Type == StreamEventToolStart {
+			toolStarts[ev.ToolCallID] = ev.Timestamp
+		}
+		if ev.Type == StreamEventToolEnd {
+			if start, ok := toolStarts[ev.ToolCallID]; ok {
+				ev.DurationMS = ev.Timestamp - start
+				delete(toolStarts, ev.ToolCallID)
+			}
+		}
+		timingMu.Unlock()
 		select {
 		case ch <- ev:
 		case <-ctx.Done():
@@ -281,37 +302,72 @@ func (a *Agent) PromptStream(ctx context.Context, msg ai.Message) (<-chan AgentS
 		// PromptStream 的 stream consumer：转发 text delta 事件到 channel
 		consume := func(stream *ai.EventStream) (ai.StreamAssistantMessage, error) {
 			var streamMsg ai.StreamAssistantMessage
-			for event := range stream.Events() {
-				select {
-				case <-ctx.Done():
-					return streamMsg, ctx.Err()
-				default:
+			var streamErr error
+			var thinkingStart time.Time
+			var thinkingDuration time.Duration
+			finishThinking := func() {
+				if thinkingStart.IsZero() {
+					return
 				}
+				duration := time.Since(thinkingStart)
+				thinkingDuration += duration
+				select {
+				case ch <- AgentStreamEvent{Type: StreamEventThinkingEnd, Timestamp: time.Now().UnixMilli(), DurationMS: duration.Milliseconds()}:
+				case <-ctx.Done():
+				}
+				thinkingStart = time.Time{}
+			}
+			defer finishThinking()
+			for event := range stream.Events() {
 				switch e := event.(type) {
+				case ai.EventThinkingDelta:
+					if thinkingStart.IsZero() {
+						thinkingStart = time.Now()
+					}
+					select {
+					case ch <- AgentStreamEvent{Type: StreamEventThinkingDelta, TextDelta: e.Delta, Timestamp: time.Now().UnixMilli()}:
+					case <-ctx.Done():
+					}
+				case ai.EventToolCallStart:
+					finishThinking()
 				case ai.EventTextDelta:
+					finishThinking()
 					select {
 					case ch <- AgentStreamEvent{Type: StreamEventTextDelta, TextDelta: e.Delta}:
 					case <-ctx.Done():
-						return streamMsg, ctx.Err()
 					}
 				case ai.EventDone:
+					finishThinking()
 					streamMsg = e.Message
+					streamMsg.ThinkingDurationMS = thinkingDuration.Milliseconds()
 				case ai.EventError:
-					select {
-					case ch <- AgentStreamEvent{Type: StreamEventError, Error: e.Error}:
-					case <-ctx.Done():
-						return streamMsg, ctx.Err()
-					}
+					streamErr = fmt.Errorf("llm error: %s", e.Error)
 				}
 			}
-			return streamMsg, nil
+			finishThinking()
+			result, err := streamConsumptionResult(ctx, stream, streamMsg, streamErr)
+			result.ThinkingDurationMS = thinkingDuration.Milliseconds()
+			return result, err
 		}
 
 		lastAssistant, err := runAgentLoop(ctx, a, provider, consume)
-		if err != nil {
-			ch <- AgentStreamEvent{Type: StreamEventError, Error: err.Error()}
+		// 消费者取消后可能停止读取，终态仍优先送入可用缓冲，但不能让
+		// 已结束的 provider/Agent 因无人接收终态而一直占用会话。
+		sendTerminal := func(event AgentStreamEvent) {
+			select {
+			case ch <- event:
+				return
+			default:
+			}
+			select {
+			case ch <- event:
+			case <-ctx.Done():
+			}
 		}
-		ch <- AgentStreamEvent{Type: StreamEventDone, FinalMessage: lastAssistant, Usage: lastAssistant.Usage}
+		if err != nil {
+			sendTerminal(AgentStreamEvent{Type: StreamEventError, Error: err.Error()})
+		}
+		sendTerminal(AgentStreamEvent{Type: StreamEventDone, FinalMessage: lastAssistant, Usage: lastAssistant.Usage})
 
 		a.mu.Lock()
 		a.state = StateIdle
@@ -362,7 +418,8 @@ func (a *Agent) CompactNow(ctx context.Context, customInstructions string) (stri
 	}
 
 	// 4. Persist compaction entry to session storage.
-	if err := a.session.AppendCompaction(ctx, summary); err != nil {
+	info := compactionInfo("manual", customInstructions, history, summary, recentPart)
+	if err := a.session.AppendCompactionKeeping(ctx, summary, recentPart, info); err != nil {
 		return "", 0, 0, fmt.Errorf("persist compaction: %w", err)
 	}
 
@@ -370,6 +427,7 @@ func (a *Agent) CompactNow(ctx context.Context, customInstructions string) (stri
 	trimmedTo := len(recentPart) + 1 // +1 for the summary message
 
 	a.emit(ctx, EventCompacted{
+		Info:        info,
 		Summary:     summary,
 		TrimmedFrom: trimmedFrom,
 		TrimmedTo:   trimmedTo,
@@ -411,7 +469,7 @@ func (a *Agent) appendToolResult(call ai.ToolCall, result ToolResult) ai.ToolRes
 	if content == "" {
 		content = "ok"
 	}
-	return ai.ToolResultMessage{ToolCallID: call.ID, Content: content, IsError: result.IsError, Details: result.Details}
+	return ai.ToolResultMessage{ToolCallID: call.ID, Content: content, IsError: result.IsError, Details: result.Details, Images: result.Images}
 }
 
 func (a *Agent) llmRequest(messages []ai.Message) ai.StreamRequest {
@@ -427,12 +485,13 @@ func (a *Agent) llmRequest(messages []ai.Message) ai.StreamRequest {
 
 func (a *Agent) handleAssistantMessage(message ai.StreamAssistantMessage) (ai.AssistantMessage, error) {
 	assistant := ai.AssistantMessage{
-		Text:       message.Text,
-		Thinking:   message.Thinking,
-		ToolCalls:  message.ToolCalls,
-		StopReason: message.StopReason,
-		ErrorMsg:   message.ErrorMsg,
-		Usage:      message.Usage,
+		Text:               message.Text,
+		Thinking:           message.Thinking,
+		ThinkingDurationMS: message.ThinkingDurationMS,
+		ToolCalls:          message.ToolCalls,
+		StopReason:         message.StopReason,
+		ErrorMsg:           message.ErrorMsg,
+		Usage:              message.Usage,
 	}
 	return assistant, nil
 }
@@ -453,39 +512,49 @@ func (a *Agent) decodeToolArgs(raw string, tool Tool) (json.RawMessage, error) {
 type StreamEventType string
 
 const (
-	StreamEventTextDelta       StreamEventType = "text_delta"
-	StreamEventTurnEnd         StreamEventType = "turn_end"
-	StreamEventToolStart       StreamEventType = "tool_start"
-	StreamEventToolUpdate      StreamEventType = "tool_update"
-	StreamEventToolEnd         StreamEventType = "tool_end"
-	StreamEventDone            StreamEventType = "done"
-	StreamEventError           StreamEventType = "error"
-	StreamEventCompacted       StreamEventType = "compacted"
-	StreamEventConfirmationReq StreamEventType = "confirmation_request"
-	StreamEventConfirmationRes StreamEventType = "confirmation_result"
-	StreamEventLoopDetected    StreamEventType = "loop_detected"
-	StreamEventMicroCompacted  StreamEventType = "micro_compacted"
+	StreamEventTextDelta        StreamEventType = "text_delta"
+	StreamEventThinkingDelta    StreamEventType = "thinking_delta"
+	StreamEventThinkingEnd      StreamEventType = "thinking_end"
+	StreamEventContextUsage     StreamEventType = "context_usage"
+	StreamEventTurnEnd          StreamEventType = "turn_end"
+	StreamEventToolStart        StreamEventType = "tool_start"
+	StreamEventToolUpdate       StreamEventType = "tool_update"
+	StreamEventToolEnd          StreamEventType = "tool_end"
+	StreamEventDone             StreamEventType = "done"
+	StreamEventError            StreamEventType = "error"
+	StreamEventCompacted        StreamEventType = "compacted"
+	StreamEventCompactionFailed StreamEventType = "compaction_failed"
+	StreamEventConfirmationReq  StreamEventType = "confirmation_request"
+	StreamEventConfirmationRes  StreamEventType = "confirmation_result"
+	StreamEventLoopDetected     StreamEventType = "loop_detected"
+	StreamEventMicroCompacted   StreamEventType = "micro_compacted"
 )
 
 type AgentStreamEvent struct {
-	Type          StreamEventType     `json:"type"`
-	TextDelta     string              `json:"text_delta,omitempty"`
-	Message       ai.Message          `json:"message,omitempty"`
-	ToolName      string              `json:"tool_name,omitempty"`
-	ToolCallID    string              `json:"tool_call_id,omitempty"`
-	ToolArgs      any                 `json:"tool_args,omitempty"` // raw arguments for diff preview
-	ToolResult    any                 `json:"tool_result,omitempty"`
-	ToolDetails   any                 `json:"tool_details,omitempty"` // 结构化附加数据（如 PlayDetails）
-	PartialResult any                 `json:"partial_result,omitempty"`
-	IsError       bool                `json:"is_error,omitempty"`
-	FinalMessage  ai.AssistantMessage `json:"final_message,omitempty"`
-	Error         string              `json:"error,omitempty"`
-	Summary       string              `json:"summary,omitempty"`
-	TrimmedFrom   int                 `json:"trimmed_from,omitempty"`
-	TrimmedTo     int                 `json:"trimmed_to,omitempty"`
-	Description   string              `json:"description,omitempty"`   // 确认请求：工具给出的操作描述
-	Approved      bool                `json:"approved,omitempty"`      // 确认结果：是否放行
-	RepeatCount   int                 `json:"repeat_count,omitempty"`  // 循环检测：连续重复次数
-	ClearedCount  int                 `json:"cleared_count,omitempty"` // MicroCompact：清理的 tool result 数
-	Usage         ai.Usage            `json:"usage,omitempty"`         // token usage from final assistant message
+	ContextUsage   *ContextUsage           `json:"context_usage,omitempty"`
+	Timestamp      int64                   `json:"timestamp,omitempty"`
+	DurationMS     int64                   `json:"duration_ms,omitempty"`
+	Type           StreamEventType         `json:"type"`
+	TextDelta      string                  `json:"text_delta,omitempty"`
+	Message        ai.Message              `json:"message,omitempty"`
+	ToolName       string                  `json:"tool_name,omitempty"`
+	ToolCallID     string                  `json:"tool_call_id,omitempty"`
+	ToolArgs       any                     `json:"tool_args,omitempty"` // raw arguments for diff preview
+	ToolResult     any                     `json:"tool_result,omitempty"`
+	ToolDetails    any                     `json:"tool_details,omitempty"` // 结构化附加数据（如 PlayDetails）
+	PartialResult  any                     `json:"partial_result,omitempty"`
+	IsError        bool                    `json:"is_error,omitempty"`
+	FinalMessage   ai.AssistantMessage     `json:"final_message,omitempty"`
+	Error          string                  `json:"error,omitempty"`
+	CompactionInfo *session.CompactionInfo `json:"compaction_info,omitempty"`
+	Summary        string                  `json:"summary,omitempty"`
+	TrimmedFrom    int                     `json:"trimmed_from,omitempty"`
+	TrimmedTo      int                     `json:"trimmed_to,omitempty"`
+	Description    string                  `json:"description,omitempty"`  // 确认请求：工具给出的操作描述
+	Approved       bool                    `json:"approved,omitempty"`     // 确认结果：是否放行
+	RepeatCount    int                     `json:"repeat_count,omitempty"` // 循环检测：连续重复次数
+	TokensBefore   int                     `json:"tokens_before,omitempty"`
+	TokensAfter    int                     `json:"tokens_after,omitempty"`
+	ClearedCount   int                     `json:"cleared_count,omitempty"` // MicroCompact：清理的 tool result 数
+	Usage          ai.Usage                `json:"usage,omitempty"`         // token usage from final assistant message
 }

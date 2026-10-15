@@ -32,6 +32,7 @@ export type IconName =
   | 'tasks'
   | 'terminal'
   | 'diff'
+  | 'git-branch'
   // status
   | 'circle'
   | 'circle-check'
@@ -63,6 +64,8 @@ export type IconName =
   | 'home'
   | 'lock'
   | 'external-link'
+  | 'download'
+  | 'star'
   | 'panel-bottom'
   | 'panel-right'
   | 'split'
@@ -130,6 +133,8 @@ const PATHS: Record<IconName, string> = {
   terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
   diff:
     '<path d="M12 4v6"/><path d="M9 7h6"/><path d="M9 17h6"/>',
+  'git-branch':
+    '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   circle: '<circle cx="12" cy="12" r="9"/>',
   'circle-check': '<circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/>',
   'circle-dot': '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/>',
@@ -174,6 +179,8 @@ const PATHS: Record<IconName, string> = {
   home: '<path d="M3 9.5 12 2l9 7.5"/><path d="M5 10v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V10"/>',
   lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/>',
   'external-link': '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  star: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/>',
   'panel-bottom': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/>',
   'panel-right': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
   split: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/>',

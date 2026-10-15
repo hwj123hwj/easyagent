@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/hwj123hwj/easyagent/sdk/ai"
+	"github.com/hwj123hwj/easyagent/sdk/session"
 )
 
 type AgentEvent interface {
@@ -58,6 +59,7 @@ func (EventToolExecutionEnd) agentEventMarker() {}
 
 // EventCompacted 上下文压缩完成事件。
 type EventCompacted struct {
+	Info        *session.CompactionInfo
 	Summary     string
 	TrimmedFrom int
 	TrimmedTo   int
@@ -121,8 +123,14 @@ func (EventLoopDetected) agentEventMarker() {}
 // EventMicroCompacted 在 MicroCompact（清旧 tool result）执行后发出。
 // UI 可据此展示"已清理 N 个旧工具结果，节省上下文"。
 type EventMicroCompacted struct {
+	TokensAfter    int
 	ClearedResults int
 	TokensBefore   int
 }
 
 func (EventMicroCompacted) agentEventMarker() {}
+
+// EventContextUsage describes this request, never cumulative billed tokens.
+type EventContextUsage struct{ Usage ContextUsage }
+
+func (EventContextUsage) agentEventMarker() {}

@@ -42,16 +42,22 @@ type AfterToolCallHook func(ctx context.Context, call ToolCallContext, result To
 // ConfirmationRequest 描述一次需要用户确认的工具调用。
 // 当工具实现了 ToolWithConfirmation 且 RequiresConfirmation 返回 ok=true 时构造。
 type ConfirmationRequest struct {
-	ToolCallID  string
-	ToolName    string
-	Args        json.RawMessage // validated + prepared args
-	Description string          // 工具给出的操作描述，展示给用户
+	// RequiresApproval marks integrations whose trust is independent of the
+	// ordinary dangerous-tool confirmation toggle.
+	RequiresApproval bool
+	// ForceConfirmation prevents global auto-approve from bypassing this request.
+	ForceConfirmation bool
+	ToolCallID        string
+	ToolName          string
+	Args              json.RawMessage // validated + prepared args
+	Description       string          // 工具给出的操作描述，展示给用户
 }
 
 // ConfirmDecision 是用户对一次确认请求的裁决。
 type ConfirmDecision struct {
-	Approved bool   // true=放行执行；false=阻断
-	Reason   string // 拒绝理由（approved=false 时回告 LLM，让 Agent 知道动作未做成）
+	Response json.RawMessage // Structured user input, if the tool needs more than approval.
+	Approved bool            // true=放行执行；false=阻断
+	Reason   string          // 拒绝理由（approved=false 时回告 LLM，让 Agent 知道动作未做成）
 }
 
 // ConfirmFunc 由各入口（chat/serve/feishu）注入，负责向用户发起确认并同步等待裁决。
@@ -179,4 +185,11 @@ func runPreCompressHooks(ctx context.Context, hooks []PreCompressHook, e PreComp
 type ToolWithPrepareArguments interface {
 	Tool
 	PrepareArguments(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+}
+
+// ToolWithConfirmedExecution consumes structured input collected at the confirmation gate.
+// The decision belongs to this invocation, never shared mutable tool state.
+type ToolWithConfirmedExecution interface {
+	Tool
+	ExecuteConfirmed(context.Context, json.RawMessage, ConfirmDecision, func(PartialResult)) (ToolResult, error)
 }

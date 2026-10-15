@@ -3,17 +3,20 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/hwj123hwj/easyagent/internal/dynamicflow"
 	"log/slog"
+	"path/filepath"
+	"sync"
 
-	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/internal/agents/coding"
+	"github.com/hwj123hwj/easyagent/internal/profile"
+	"github.com/hwj123hwj/easyagent/internal/scheduler"
+	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/ai/providers"
 	"github.com/hwj123hwj/easyagent/sdk/config"
 	"github.com/hwj123hwj/easyagent/sdk/extensions"
 	"github.com/hwj123hwj/easyagent/sdk/operations"
-	"github.com/hwj123hwj/easyagent/internal/profile"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
-	"github.com/hwj123hwj/easyagent/internal/scheduler"
 	"github.com/hwj123hwj/easyagent/sdk/sessionmgr"
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
 )
@@ -22,17 +25,22 @@ import (
 // It assembles dependencies (providers, session manager, runtime registry, etc.)
 // but does NOT carry session-specific behavior — that belongs to AgentSession.
 type App struct {
-	cfg          config.Config
-	skillDirs    []string
-	sessionMgr   *sessionmgr.Manager
-	registry     *providers.Registry
-	sessionStore *runtime.SessionRegistry
-	extRegistry  *extensions.Registry
-	application  runtime.Application            // default application (backward compat)
-	applications map[string]runtime.Application // named applications for per-session selection
-	extraTools   []agent.ExternalToolDef
-	profile      *profile.Store // unified user profile (shared across agents)
-	loopMgr      *scheduler.LoopManager
+	mcpState          mcpState
+	skillMarket       *skillMarketState
+	workflowConfirmMu sync.Mutex
+	flows             *dynamicflow.Manager
+	cfgMu             sync.Mutex
+	cfg               config.Config
+	skillDirs         []string
+	sessionMgr        *sessionmgr.Manager
+	registry          *providers.Registry
+	sessionStore      *runtime.SessionRegistry
+	extRegistry       *extensions.Registry
+	application       runtime.Application            // default application (backward compat)
+	applications      map[string]runtime.Application // named applications for per-session selection
+	extraTools        []agent.ExternalToolDef
+	profile           *profile.Store // unified user profile (shared across agents)
+	loopMgr           *scheduler.LoopManager
 }
 
 // AppOptions holds the options for creating a new App.
@@ -88,7 +96,7 @@ func New(opts AppOptions) (*App, error) {
 		apps["coding"] = application
 	}
 
-	return &App{
+	result := &App{
 		cfg:          cfg,
 		skillDirs:    opts.SkillDirs,
 		sessionMgr:   mgr,
@@ -99,7 +107,15 @@ func New(opts AppOptions) (*App, error) {
 		applications: apps,
 		profile:      opts.Profile,
 		loopMgr:      scheduler.NewLoopManager(),
-	}, nil
+	}
+	flows, err := dynamicflow.New(filepath.Join(cfg.DataDir, "dynamic-workflows"), dynamicflow.RuntimePath(), workflowHost{app: result})
+	if err != nil {
+		return nil, err
+	}
+	result.flows = flows
+	result.initMCP()
+	result.skillMarket = initSkillMarket(cfg)
+	return result, nil
 }
 
 // ApplicationNames returns the names of all registered applications.
@@ -114,12 +130,16 @@ func (a *App) ApplicationNames() []string {
 // ResolveApplication returns the Application for the given name.
 // Falls back to the default application if name is empty or unknown.
 func (a *App) ResolveApplication(name string) runtime.Application {
-	if name != "" {
-		if app, ok := a.applications[name]; ok {
-			return app
-		}
+	application := a.application
+	if selected, ok := a.applications[name]; name != "" && ok {
+		application = selected
 	}
-	return a.application
+	if configurable, ok := application.(interface {
+		WithRuntimeOverrides(config.Config) runtime.Application
+	}); ok {
+		application = configurable.WithRuntimeOverrides(a.Config())
+	}
+	return application
 }
 
 // Profile returns the unified user profile store (may be nil if not configured).
@@ -131,19 +151,36 @@ func (a *App) Profile() *profile.Store {
 func (a *App) NewSession(ctx context.Context) (*runtime.AgentSession, error) {
 	deps := a.deps()
 	opts := runtime.AgentSessionOptions{
-		Config:    a.cfg,
+		Config:    a.Config(),
 		SkillDirs: a.skillDirs,
 	}
-	return a.sessionStore.Create(ctx, opts, deps)
+	sess, err := a.sessionStore.Create(ctx, opts, deps)
+	if err == nil {
+		if err = a.sessionMgr.SaveMeta(sess.SessionID(), sess.Workspace(), "coding"); err != nil {
+			_ = a.sessionStore.Delete(sess.SessionID())
+			return nil, err
+		}
+	}
+	return sess, err
 }
 
 // LoadSession loads an existing AgentSession by ID.
 // If already loaded in the registry, returns the cached instance.
 func (a *App) LoadSession(ctx context.Context, sessionID string) (*runtime.AgentSession, error) {
+	if a.flows != nil && a.flows.ActorSession(sessionID) {
+		return a.loadWorkflowActor(ctx, sessionID)
+	}
 	deps := a.deps()
 	opts := runtime.AgentSessionOptions{
-		Config:    a.cfg,
+		Config:    a.Config(),
 		SkillDirs: a.skillDirs,
+	}
+	workspace, application := a.sessionMgr.Metadata(sessionID)
+	if workspace != "" {
+		opts.Config.Workspace = workspace
+	}
+	if application != "" {
+		deps = a.SessionDepsWithApp(application)
 	}
 	return a.sessionStore.Load(ctx, sessionID, opts, deps)
 }
@@ -178,12 +215,24 @@ func (a *App) SessionDepsWithApp(appName string) runtime.Dependencies {
 	d := a.deps()
 	if appName != "" {
 		d.Application = a.ResolveApplication(appName)
+		if appName == "coding" {
+			d.Application = workflowApplication{Application: d.Application, app: a}
+		}
 	}
 	return d
 }
 
-// Config returns the current configuration.
+// ReloadRuntimeOverrides refreshes saved settings for future sessions only.
+func (a *App) ReloadRuntimeOverrides() {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	a.cfg.LoadRuntimeOverrides(a.cfg.DataDir)
+}
+
+// Config returns a snapshot of the current configuration.
 func (a *App) Config() config.Config {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
 	return a.cfg
 }
 
@@ -199,6 +248,10 @@ func (a *App) LoopManager() *scheduler.LoopManager {
 
 // Close cleans up all resources.
 func (a *App) Close() error {
+	a.closeMCP()
+	if a.flows != nil {
+		a.flows.Close()
+	}
 	if a.loopMgr != nil {
 		a.loopMgr.StopAll()
 	}
@@ -213,11 +266,15 @@ func (a *App) SetExternalTools(tools []agent.ExternalToolDef) {
 // deps constructs the Dependencies struct for AgentSession creation.
 func (a *App) deps() runtime.Dependencies {
 	return runtime.Dependencies{
-		Registry:       a.registry,
-		SessionMgr:     a.sessionMgr,
-		ExtRegistry:    a.extRegistry,
-		Application:    a.application,
-		ExternalTools:  a.extraTools,
+		Registry:        a.registry,
+		SessionMgr:      a.sessionMgr,
+		ExtRegistry:     a.extRegistry,
+		Application:     workflowApplication{Application: a.ResolveApplication(""), app: a},
+		ExternalTools:   a.extraTools,
+		AdditionalTools: func(workspace string) []agent.Tool { return a.additionalTools(workspace) },
+		ToolRevision:    a.combinedToolRevision,
+		PrepareTools:    a.prepareMCP,
+		AcquireTools:    a.acquireMCP,
 		BuildOperations: func(cfg config.Config, workspace string) *operations.Operations {
 			switch cfg.ExecutionMode {
 			case "ssh":
@@ -233,10 +290,32 @@ func (a *App) deps() runtime.Dependencies {
 	}
 }
 
+// additionalTools returns MCP tools plus the skill-market tool for the
+// given workspace. Used as runtime.Dependencies.AdditionalTools.
+func (a *App) additionalTools(workspace string) []agent.Tool {
+	list := a.MCP(workspace).AllTools()
+	if tool := a.SkillMarketTool(); tool != nil {
+		list = append(list, tool)
+	}
+	return list
+}
+
+// combinedToolRevision merges the MCP and skill-market revision counters so
+// either one triggers a session rebuild on change.
+func (a *App) combinedToolRevision(workspace string) uint64 {
+	rev := a.mcpRevision(workspace)
+	if sm := a.skillMarketRevision(); sm > 0 {
+		// Compose both counters: MCP revisions can be small numbers, so
+		// offset the skill-market counter into a disjoint range.
+		rev += sm << 32
+	}
+	return rev
+}
+
 // ToolNames returns the names of tools available given the current config and extensions.
 // This accounts for EnableBash, AllowedTools, BlockedTools, and extension tools.
 func (a *App) ToolNames() []string {
-	cfg := a.cfg
+	cfg := a.Config()
 
 	// Try to delegate to Application
 	type toolNamer interface {
@@ -261,6 +340,13 @@ func (a *App) ToolNames() []string {
 		baseNames = append(baseNames, def.Name)
 	}
 
+	baseNames = append(baseNames, "create_workflow", "get_workflow", "resume_workflow")
+	if a.skillMarket != nil {
+		baseNames = append(baseNames, "skill_market")
+	}
+	for _, tool := range a.MCP(cfg.Workspace).AllTools() {
+		baseNames = append(baseNames, tool.Name())
+	}
 	// Apply filtering
 	if len(cfg.AllowedTools) == 0 && len(cfg.BlockedTools) == 0 {
 		return baseNames
@@ -325,6 +411,9 @@ func (a *App) ListSessionsInfo() ([]slashcmd.SessionInfo, error) {
 	for i, s := range sessions {
 		result[i] = slashcmd.SessionInfo{
 			ID:           s.ID,
+			Title:        s.Title,
+			Workspace:    s.Workspace,
+			Application:  s.Application,
 			MessageCount: s.MessageCount,
 			LastActive:   s.LastActive,
 		}

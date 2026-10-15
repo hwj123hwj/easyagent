@@ -17,11 +17,11 @@ if [ -z "$ZIPALIGN" ]; then
   exit 1
 fi
 
-APK="${1:-mobile/android/app/build/outputs/apk/release/app-release.apk}"
+APK="${1:-desktop/android/app/build/outputs/apk/release/app-release.apk}"
 
 if [ ! -f "$APK" ]; then
   echo "ERROR: APK not found at $APK"
-  echo "Build one first: cd mobile/android && ./gradlew assembleRelease"
+  echo "Build one first: bash scripts/build-android.sh release"
   exit 1
 fi
 

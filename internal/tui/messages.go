@@ -14,6 +14,9 @@ type StreamTextMsg struct {
 	Delta string
 }
 
+// StreamTurnEndMsg commits one model turn before the next starts.
+type StreamTurnEndMsg struct{ Text string }
+
 // ToolStartMsg signals a tool has started executing.
 type ToolStartMsg struct {
 	ID   string
@@ -54,6 +57,7 @@ type ConfirmationMsg struct {
 
 // CompactionMsg signals context compaction completed.
 type CompactionMsg struct {
+	Kind    string // empty = full, micro, failed
 	Summary string
 }
 

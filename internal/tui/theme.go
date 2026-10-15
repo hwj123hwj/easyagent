@@ -13,14 +13,14 @@ type Theme struct {
 	SystemLabel    lipgloss.Style
 
 	// Message content
-	UserContent    lipgloss.Style
+	UserContent      lipgloss.Style
 	AssistantContent lipgloss.Style
-	SystemContent  lipgloss.Style
+	SystemContent    lipgloss.Style
 
 	// Tool panels
-	ToolHeader      lipgloss.Style
-	ToolBody        lipgloss.Style
-	ToolErrorBorder lipgloss.Style
+	ToolHeader       lipgloss.Style
+	ToolBody         lipgloss.Style
+	ToolErrorBorder  lipgloss.Style
 	ToolActiveBorder lipgloss.Style
 	ToolDoneBorder   lipgloss.Style
 
@@ -36,21 +36,21 @@ type Theme struct {
 	InputDimText lipgloss.Style
 
 	// Status bar
-	StatusBar      lipgloss.Style
-	StatusReady    lipgloss.Style
-	StatusBusy     lipgloss.Style
-	StatusError    lipgloss.Style
-	StatusDim      lipgloss.Style
-	StatusAccent   lipgloss.Style
+	StatusBar    lipgloss.Style
+	StatusReady  lipgloss.Style
+	StatusBusy   lipgloss.Style
+	StatusError  lipgloss.Style
+	StatusDim    lipgloss.Style
+	StatusAccent lipgloss.Style
 
 	// General
-	Separator  lipgloss.Style
-	Spinner    lipgloss.Style
-	Timestamp  lipgloss.Style
-	ErrorText  lipgloss.Style
+	Separator   lipgloss.Style
+	Spinner     lipgloss.Style
+	Timestamp   lipgloss.Style
+	ErrorText   lipgloss.Style
 	SuccessText lipgloss.Style
-	WarnText   lipgloss.Style
-	HelpText   lipgloss.Style
+	WarnText    lipgloss.Style
+	HelpText    lipgloss.Style
 }
 
 var defaultTheme *Theme
@@ -66,15 +66,14 @@ func DefaultTheme() *Theme {
 
 func newDefaultTheme() *Theme {
 	// Color palette — adaptive (light/dark)
-	cPrimary  := lipgloss.AdaptiveColor{Light: "#0969DA", Dark: "#58A6FF"}
-	cSuccess  := lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#3FB950"}
-	cError    := lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#F85149"}
-	cWarn     := lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#D29922"}
-	cMagenta  := lipgloss.AdaptiveColor{Light: "#8250DF", Dark: "#BC8CFF"}
-	cDim      := lipgloss.AdaptiveColor{Light: "#656D76", Dark: "#8B949E"}
-	cBorder   := lipgloss.AdaptiveColor{Light: "#D0D7DE", Dark: "#30363D"}
+	cPrimary := lipgloss.AdaptiveColor{Light: "#087F78", Dark: "#82D5CA"}
+	cSuccess := lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#3FB950"}
+	cError := lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#F85149"}
+	cWarn := lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#D29922"}
+	cDim := lipgloss.AdaptiveColor{Light: "#656D76", Dark: "#8B949E"}
+	cBorder := lipgloss.AdaptiveColor{Light: "#D0D7DE", Dark: "#30363D"}
 	cBorderErr := lipgloss.AdaptiveColor{Light: "#FFB8AE", Dark: "#F85149"}
-	cBorderActive := lipgloss.AdaptiveColor{Light: "#218BFF", Dark: "#58A6FF"}
+	cBorderActive := lipgloss.AdaptiveColor{Light: "#087F78", Dark: "#82D5CA"}
 	cBorderDone := lipgloss.AdaptiveColor{Light: "#4AC26B", Dark: "#3FB950"}
 
 	t := &Theme{
@@ -83,7 +82,7 @@ func newDefaultTheme() *Theme {
 			Foreground(cPrimary).
 			Bold(true),
 		AssistantLabel: lipgloss.NewStyle().
-			Foreground(cMagenta).
+			Foreground(cPrimary).
 			Bold(true),
 		SystemLabel: lipgloss.NewStyle().
 			Foreground(cWarn).

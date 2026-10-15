@@ -1,14 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Capacitor } from '@capacitor/core';
-import { useStore, type SessionView } from '../store';
-import { Icon } from './Icon';
-import { useT, type TFunc } from '../i18n/useT';
-import { isElectron } from '../platform';
-import { checkMobileUpdate, getAppVersion } from '../mobile-updater';
-import appIcon from '../assets/app-icon.png';
+import { useEffect, useMemo, useState } from "react";
+import { Capacitor } from "@capacitor/core";
+import { useStore, type SessionView } from "../store";
+import { Icon } from "./Icon";
+import { useT, type TFunc } from "../i18n/useT";
+import { checkMobileUpdate, getAppVersion } from "../mobile-updater";
 
 function projectName(cwd: string): string {
-  const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/);
+  const parts = cwd.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || cwd;
 }
 
@@ -22,19 +20,56 @@ export function Sidebar() {
   const order = useStore((s) => s.order);
   const sessions = useStore((s) => s.sessions);
   const active = useStore((s) => s.activeSessionId);
+  const unreadSessions = useStore((s) => s.unreadSessions);
   const setActive = useStore((s) => s.setActive);
   const createSession = useStore((s) => s.createSession);
+  const forkSession = useStore((s) => s.forkSession);
   const deleteSession = useStore((s) => s.deleteSession);
   const refreshSessions = useStore((s) => s.refreshSessions);
+  const updateSession = useStore((s) => s.updateSession);
   const pickFolder = useStore((s) => s.pickFolder);
   const t = useT();
 
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState('');
+  const [filter, setFilter] = useState("");
+  const [archived, setArchived] = useState(false);
+  const [editing, setEditing] = useState<string>();
+  const [titleDraft, setTitleDraft] = useState("");
+  const [actionError, setActionError] = useState("");
+  const savePreferences = async (
+    id: string,
+    patch: { title?: string; pinned?: boolean; archived?: boolean },
+  ) => {
+    setActionError("");
+    try {
+      await updateSession(id, patch);
+      setEditing(undefined);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "保存失败");
+    }
+  };
   const [showNewMenu, setShowNewMenu] = useState(false);
 
+  useEffect(() => {
+    const dismiss = (event: Event) => {
+      const target = event.target as Element;
+      for (const menu of document.querySelectorAll<HTMLDetailsElement>(
+        ".session-preferences[open]",
+      )) {
+        if (
+          (event instanceof KeyboardEvent && event.key === "Escape") ||
+          (event.type === "mousedown" && !menu.contains(target))
+        )
+          menu.open = false;
+      }
+    };
+    document.addEventListener("mousedown", dismiss);
+    document.addEventListener("keydown", dismiss);
+    return () => {
+      document.removeEventListener("mousedown", dismiss);
+      document.removeEventListener("keydown", dismiss);
+    };
+  }, []);
   const toggleCollapse = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -48,14 +83,15 @@ export function Sidebar() {
     if (!showNewMenu) return;
     const onDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('.new-session-wrap')) setShowNewMenu(false);
+      if (!target.closest(".new-session-wrap")) setShowNewMenu(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setShowNewMenu(false);
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) =>
+      e.key === "Escape" && setShowNewMenu(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
     };
   }, [showNewMenu]);
 
@@ -66,9 +102,16 @@ export function Sidebar() {
   }, [refreshSessions]);
 
   const { chats, projects } = useMemo(() => {
-    const views = order.map((id) => sessions[id]).filter(Boolean) as SessionView[];
+    const views = order
+      .map((id) => sessions[id])
+      .filter((view) => view && !!view.meta.archived === archived)
+      .sort(
+        (a, b) => Number(!!b.meta.pinned) - Number(!!a.meta.pinned),
+      ) as SessionView[];
     const filtered = filter
-      ? views.filter((v) => v.meta.title.toLowerCase().includes(filter.toLowerCase()))
+      ? views.filter((v) =>
+          v.meta.title.toLowerCase().includes(filter.toLowerCase()),
+        )
       : views;
     const chatViews: SessionView[] = [];
     const projectMap = new Map<string, ProjectGroup>();
@@ -86,27 +129,16 @@ export function Sidebar() {
       g.views.push(v);
     }
     return { chats: chatViews, projects: [...projectMap.values()] };
-  }, [order, sessions, filter]);
+  }, [order, sessions, filter, archived]);
 
   const onClick = (id: string) => {
     setActive(id);
   };
 
-  const startEdit = (id: string, title: string) => {
-    setEditingId(id);
-    setDraft(title);
-  };
-  const commitEdit = (id: string) => {
-    const title = draft.trim();
-    setEditingId(null);
-    if (title) {
-      useStore.setState((s) => {
-        const v = s.sessions[id];
-        if (!v) return {};
-        return { sessions: { ...s.sessions, [id]: { ...v, meta: { ...v.meta, title } } } };
-      });
-    }
-  };
+  const reportError = (error: unknown) =>
+    useStore.setState({
+      connectionError: error instanceof Error ? error.message : "操作未完成",
+    });
 
   const handleNew = async (application?: string) => {
     setShowNewMenu(false);
@@ -115,127 +147,191 @@ export function Sidebar() {
     const opts: { cwd?: string; application?: string } = {};
     if (currentCwd) opts.cwd = currentCwd;
     if (application) opts.application = application;
-    await createSession(Object.keys(opts).length > 0 ? opts : undefined);
+    await createSession(Object.keys(opts).length > 0 ? opts : undefined).catch(
+      reportError,
+    );
   };
 
   const handleNewInProject = async (cwd: string) => {
-    await createSession({ cwd });
+    await createSession({ cwd }).catch(reportError);
   };
 
   const handleNewProject = async () => {
-    const folder = await pickFolder();
-    if (folder) {
-      await createSession({ cwd: folder });
+    try {
+      const folder = await pickFolder();
+      if (folder) await createSession({ cwd: folder });
+    } catch (error) {
+      reportError(error);
     }
   };
 
   const handleDelete = async (id: string) => {
-    await deleteSession(id);
+    await deleteSession(id).catch(reportError);
   };
 
   const renderCard = (v: SessionView, nested: boolean) => (
     <div
       key={v.meta.id}
-      className={`session-item ${nested ? 'nested' : ''} ${active === v.meta.id ? 'active' : ''}`}
-      onClick={() => onClick(v.meta.id)}
+      className={`session-item ${nested ? "nested" : ""} ${active === v.meta.id ? "active" : ""}`}
     >
-      <div className="session-row">
-        <span className={`status-dot ${v.meta.status}`} />
-        {editingId === v.meta.id ? (
-          <input
-            className="session-title-edit"
-            value={draft}
-            autoFocus
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => commitEdit(v.meta.id)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); commitEdit(v.meta.id); }
-              else if (e.key === 'Escape') setEditingId(null);
-            }}
-          />
-        ) : (
-          <>
-            <span
-              className="session-title"
-              title={t('sidebar.dblClickRename')}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                startEdit(v.meta.id, v.meta.title);
-              }}
-            >
-              {v.meta.title}
-            </span>
-            {v.meta.application && (
-              <span className={`session-badge ${v.meta.application}`}>
-                {v.meta.application}
+      <button
+        className="session-open"
+        onClick={() => onClick(v.meta.id)}
+        aria-current={active === v.meta.id ? "page" : undefined}
+      >
+        <div className="session-row">
+          <span className={`status-dot ${v.meta.status}`} />
+          <span className="session-title" title={v.meta.title}>
+            {v.meta.pinned && <Icon name="circle-check" size={12} />}
+            {v.meta.forked_from && (
+              <span title="从此会话分叉" style={{ display: 'inline-flex', verticalAlign: 'middle', marginRight: 4, opacity: 0.85 }}>
+                <Icon name="git-branch" size={11} />
               </span>
             )}
-          </>
-        )}
-      </div>
-      <div className="session-row">
-        <span className="session-sub">{relTime(t, v.meta.updatedAt)}</span>
-      </div>
-      <div className="session-actions">
-        <button
-          className="icon-btn"
-          title={t('common.rename')}
-          onClick={(e) => { e.stopPropagation(); startEdit(v.meta.id, v.meta.title); }}
+            {v.meta.title}
+          </span>
+          {!!unreadSessions[v.meta.id] && (
+            <span className="unread-badge" title={`${unreadSessions[v.meta.id]} 条新结果`}>
+              {unreadSessions[v.meta.id]}
+            </span>
+          )}
+          {v.meta.application && (
+            <span className={`session-badge ${v.meta.application}`}>
+              {v.meta.application}
+            </span>
+          )}
+          <span className="session-time">{relTime(t, v.meta.updatedAt)}</span>
+        </div>
+      </button>
+      <details className="session-preferences">
+        <summary aria-label="会话操作">···</summary>
+        <div className="session-preferences-menu">
+          <button
+            onClick={() =>
+              void savePreferences(v.meta.id, { pinned: !v.meta.pinned })
+            }
+          >
+            {v.meta.pinned ? "取消置顶" : "置顶"}
+          </button>
+          <button
+            onClick={() => {
+              void (async () => {
+                try {
+                  await forkSession(v.meta.id);
+                } catch (error) {
+                  reportError(error);
+                }
+              })();
+            }}
+          >
+            分叉会话
+          </button>
+          <button
+            onClick={() => {
+              setEditing(v.meta.id);
+              setTitleDraft(v.meta.title);
+            }}
+          >
+            重命名
+          </button>
+          <button
+            onClick={() =>
+              void savePreferences(v.meta.id, { archived: !v.meta.archived })
+            }
+          >
+            {v.meta.archived ? "恢复对话" : "归档"}
+          </button>
+          <button onClick={() => void handleDelete(v.meta.id)}>
+            {t("common.delete")}
+          </button>
+        </div>
+      </details>
+      {editing === v.meta.id && (
+        <form
+          className="session-rename"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void savePreferences(v.meta.id, { title: titleDraft });
+          }}
         >
-          <Icon name="edit" size={14} />
-        </button>
-        <button
-          className="icon-btn"
-          title={t('common.delete')}
-          onClick={(e) => { e.stopPropagation(); void handleDelete(v.meta.id); }}
-        >
-          <Icon name="x" size={14} />
-        </button>
-      </div>
+          <input
+            autoFocus
+            aria-label="会话名称"
+            maxLength={160}
+            value={titleDraft}
+            onChange={(event) => setTitleDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setEditing(undefined);
+            }}
+          />
+          <button type="submit" disabled={!titleDraft.trim()}>
+            保存
+          </button>
+          <button type="button" onClick={() => setEditing(undefined)}>
+            取消
+          </button>
+        </form>
+      )}
     </div>
   );
 
   const isEmpty = chats.length === 0 && projects.length === 0;
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" id="session-sidebar" aria-label="会话列表">
       <div className="sidebar-head">
-        <div className="brand">
-          <img className="brand-mark" src={appIcon} alt="EasyAgent" />
-          EasyAgent
+        <div className="sidebar-heading">
+          <span>对话</span>
+          <span className="sidebar-session-count">{order.length}</span>
         </div>
         <div className="sidebar-head-actions">
           <div className="new-session-wrap">
             <button className="btn-new" onClick={() => void handleNew()}>
               <Icon name="plus" size={15} />
-              {t('sidebar.newSession')}
+              {t("sidebar.newSession")}
             </button>
             <button
               className="btn-new-dropdown"
               onClick={() => setShowNewMenu(!showNewMenu)}
-              title={t('mode.chooseMode')}
+              title={t("mode.chooseMode")}
+              aria-label={t("mode.chooseMode")}
+              aria-expanded={showNewMenu}
+              aria-controls="new-session-menu"
             >
               <Icon name="chevron-down" size={12} />
             </button>
             {showNewMenu && (
-              <div className="new-session-menu">
-                <button className="new-session-option" onClick={() => void handleNew()}>
+              <div className="new-session-menu" id="new-session-menu">
+                <button
+                  className="new-session-option"
+                  onClick={() => void handleNew()}
+                >
                   <Icon name="cpu" size={14} />
-                  {t('mode.coding')}
+                  {t("mode.coding")}
                 </button>
-                <button className="new-session-option" onClick={() => void handleNew('music')}>
+                <button
+                  className="new-session-option"
+                  onClick={() => void handleNew("music")}
+                >
                   <Icon name="sparkle" size={14} />
-                  {t('mode.music')}
+                  {t("mode.music")}
                 </button>
-                <button className="new-session-option" onClick={() => void handleNew('kb')}>
+                <button
+                  className="new-session-option"
+                  onClick={() => void handleNew("kb")}
+                >
                   <Icon name="search" size={14} />
-                  {t('mode.kb')}
+                  {t("mode.kb")}
                 </button>
               </div>
             )}
           </div>
-          <button className="btn-new-project" onClick={() => void handleNewProject()} title={t('sidebar.newProject') || 'New Project'}>
+          <button
+            className="btn-new-project"
+            onClick={() => void handleNewProject()}
+            title={t("sidebar.newProject") || "New Project"}
+            aria-label={t("sidebar.newProject") || "New Project"}
+          >
             <Icon name="folder-open" size={15} />
           </button>
         </div>
@@ -244,36 +340,67 @@ export function Sidebar() {
       <div className="sidebar-search">
         <Icon name="search" size={14} />
         <input
-          placeholder={t('sidebar.searchPlaceholder')}
+          placeholder={t("sidebar.searchPlaceholder")}
+          aria-label={t("sidebar.searchPlaceholder")}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
       </div>
 
+      <div className="session-filter-tabs" aria-label="会话范围">
+        <button aria-pressed={!archived} onClick={() => setArchived(false)}>
+          最近对话
+        </button>
+        <button aria-pressed={archived} onClick={() => setArchived(true)}>
+          已归档
+        </button>
+      </div>
+      {actionError && (
+        <p className="session-action-error" role="alert">
+          {actionError}
+        </p>
+      )}
       <div className="session-list">
-        {isEmpty && <div className="group-label">{t('sidebar.noSessions')}</div>}
+        {isEmpty && (
+          <div className="sidebar-empty" role="status">
+            {filter ? "没有匹配的对话" : t("sidebar.noSessions")}
+          </div>
+        )}
 
         {chats.length > 0 && (
           <div className="sidebar-section">
-            <div className="group-label">{t('sidebar.chats') || 'Chats'}</div>
+            <div className="group-label">{t("sidebar.chats") || "Chats"}</div>
             <div className="project-group">
               <button
                 className="project-header"
-                onClick={() => toggleCollapse('__chats__')}
+                onClick={() => toggleCollapse("__chats__")}
+                aria-expanded={!collapsed.has("__chats__")}
               >
-                <Icon name={collapsed.has('__chats__') ? 'chevron-right' : 'chevron-down'} size={14} />
+                <Icon
+                  name={
+                    collapsed.has("__chats__")
+                      ? "chevron-right"
+                      : "chevron-down"
+                  }
+                  size={14}
+                />
                 <Icon name="folder" size={14} />
-                <span className="project-name">{t('sidebar.chatsFolder') || 'Chats'}</span>
+                <span className="project-name">
+                  {t("sidebar.chatsFolder") || "Chats"}
+                </span>
                 <span className="project-count">{chats.length}</span>
               </button>
-              {!collapsed.has('__chats__') && chats.map((v) => renderCard(v, true))}
+              {!collapsed.has("__chats__") &&
+                chats.map((v) => renderCard(v, true))}
             </div>
           </div>
         )}
 
         {projects.length > 0 && (
           <div className="sidebar-section">
-            <div className="group-label">{t('sidebar.projects') || 'Projects'}</div>
+            <div className="group-label">
+              {t("sidebar.projects") || "Projects"}
+            </div>
             {projects.map((g) => (
               <div key={g.cwd} className="project-group">
                 <div className="project-header-row">
@@ -281,21 +408,34 @@ export function Sidebar() {
                     className="project-header"
                     title={g.cwd}
                     onClick={() => toggleCollapse(g.cwd)}
+                    aria-expanded={!collapsed.has(g.cwd)}
                   >
-                    <Icon name={collapsed.has(g.cwd) ? 'chevron-right' : 'chevron-down'} size={14} />
+                    <Icon
+                      name={
+                        collapsed.has(g.cwd) ? "chevron-right" : "chevron-down"
+                      }
+                      size={14}
+                    />
                     <Icon name="folder" size={14} />
                     <span className="project-name">{g.name}</span>
                     <span className="project-count">{g.views.length}</span>
                   </button>
                   <button
                     className="project-new-btn"
-                    title={t('sidebar.newInProject') || 'New conversation in project'}
-                    onClick={(e) => { e.stopPropagation(); void handleNewInProject(g.cwd); }}
+                    title={
+                      t("sidebar.newInProject") || "New conversation in project"
+                    }
+                    aria-label={`${t("sidebar.newInProject")} ${g.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleNewInProject(g.cwd);
+                    }}
                   >
                     <Icon name="plus" size={12} />
                   </button>
                 </div>
-                {!collapsed.has(g.cwd) && g.views.map((v) => renderCard(v, true))}
+                {!collapsed.has(g.cwd) &&
+                  g.views.map((v) => renderCard(v, true))}
               </div>
             ))}
           </div>
@@ -303,44 +443,65 @@ export function Sidebar() {
       </div>
 
       <div className="sidebar-foot">
-        <span className="avatar">
-          <Icon name="cpu" size={14} />
-        </span>
-        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          EasyAgent
-        </span>
+        <div className="sidebar-foot-actions">
+          <button
+            className="sidebar-foot-action"
+            title="设置"
+            aria-label="设置"
+            onClick={() => useStore.getState().openSettings(true)}
+          >
+            <Icon name="settings" size={15} />
+            <span>设置</span>
+          </button>
+          <button
+            className="sidebar-foot-action"
+            title="飞书机器人"
+            aria-label="飞书机器人"
+            onClick={() => useStore.getState().openSettings(true, "feishu")}
+          >
+            <Icon name="feishu" size={15} />
+            <span>飞书</span>
+          </button>
+        </div>
         {/* Mobile: check-for-update button */}
         {Capacitor.isNativePlatform() && (
           <button
             className="icon-btn sidebar-check-update"
             title="检查更新"
             onClick={async () => {
-              const btn = document.querySelector('.sidebar-check-update') as HTMLButtonElement;
-              if (btn) { btn.textContent = '⋯'; btn.disabled = true; }
+              const btn = document.querySelector(
+                ".sidebar-check-update",
+              ) as HTMLButtonElement;
+              if (btn) {
+                btn.textContent = "⋯";
+                btn.disabled = true;
+              }
               try {
                 const ver = await getAppVersion();
                 const info = await checkMobileUpdate();
                 if (info) {
-                  window.dispatchEvent(new CustomEvent('pi-go-show-update', { detail: info }));
+                  window.dispatchEvent(
+                    new CustomEvent("pi-go-show-update", { detail: info }),
+                  );
                 } else {
-                  alert(`当前版本 v${ver}\nGitHub 最新版检查完毕，可能已是最新或网络受限。\n如需手动更新，请用浏览器访问:\ngithub.com/hwj123hwj/easyagent/releases`);
+                  alert(
+                    `当前版本 v${ver}\nGitHub 最新版检查完毕，可能已是最新或网络受限。\n如需手动更新，请用浏览器访问:\ngithub.com/hwj123hwj/easyagent/releases`,
+                  );
                 }
               } catch (e) {
-                alert('检查更新失败: ' + (e instanceof Error ? e.message : '未知错误') + '\n请用浏览器访问 github.com/hwj123hwj/easyagent/releases');
+                alert(
+                  "检查更新失败: " +
+                    (e instanceof Error ? e.message : "未知错误") +
+                    "\n请用浏览器访问 github.com/hwj123hwj/easyagent/releases",
+                );
               }
-              if (btn) { btn.textContent = '↻'; btn.disabled = false; }
+              if (btn) {
+                btn.textContent = "↻";
+                btn.disabled = false;
+              }
             }}
           >
             <Icon name="refresh" size={15} />
-          </button>
-        )}
-        {isElectron && (
-          <button
-            className="icon-btn"
-            title={t('sidebar.newProject') || 'New Project'}
-            onClick={() => void handleNewProject()}
-          >
-            <Icon name="folder-open" size={15} />
           </button>
         )}
       </div>
@@ -349,12 +510,12 @@ export function Sidebar() {
 }
 
 function relTime(t: TFunc, ts: number): string {
-  if (!ts) return '';
+  if (!ts) return "";
   const diff = Date.now() - ts;
   const m = Math.floor(diff / 60000);
-  if (m < 1) return t('time.justNow');
-  if (m < 60) return t('time.minutesAgo', { m });
+  if (m < 1) return t("time.justNow");
+  if (m < 60) return t("time.minutesAgo", { m });
   const h = Math.floor(m / 60);
-  if (h < 24) return t('time.hoursAgo', { h });
-  return t('time.daysAgo', { d: Math.floor(h / 24) });
+  if (h < 24) return t("time.hoursAgo", { h });
+  return t("time.daysAgo", { d: Math.floor(h / 24) });
 }

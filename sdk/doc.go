@@ -13,8 +13,8 @@
 //   - operations — 本地 / SSH 执行后端抽象
 //   - tools — 内置通用工具（read/write/edit/bash/grep/find/ls）
 //   - runtime — AgentSession 生命周期与 Application 接口（Platform 层）
-//   - slashcmd / skill / extensions / hooks / policy / prompt / config —
-//     命令框架、技能、扩展、钩子、权限、提示与配置
+//   - slashcmd / skill / extensions / hooks / prompt / config —
+//     命令框架、技能、扩展、钩子、提示与配置
 //
 // # 架构约束
 //

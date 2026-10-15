@@ -31,6 +31,8 @@ type ContentBlock struct {
 
 type UserMessage struct {
 	Content []ContentBlock `json:"content"`
+	// DisplayText is an optional concise history representation. Providers receive Content.
+	DisplayText string `json:"display_text,omitempty"`
 }
 
 func (UserMessage) Role() Role     { return RoleUser }
@@ -42,22 +44,25 @@ func NewTextUserMessage(text string) UserMessage {
 }
 
 type AssistantMessage struct {
-	Text       string     `json:"text,omitempty"`
-	Thinking   string     `json:"thinking,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	StopReason StopReason `json:"stop_reason,omitempty"`
-	ErrorMsg   string     `json:"error_msg,omitempty"`
-	Usage      Usage      `json:"usage,omitempty"`
+	ThinkingDurationMS int64      `json:"thinking_duration_ms,omitempty"`
+	Text               string     `json:"text,omitempty"`
+	Thinking           string     `json:"thinking,omitempty"`
+	ToolCalls          []ToolCall `json:"tool_calls,omitempty"`
+	StopReason         StopReason `json:"stop_reason,omitempty"`
+	ErrorMsg           string     `json:"error_msg,omitempty"`
+	Usage              Usage      `json:"usage,omitempty"`
 }
 
 func (AssistantMessage) Role() Role     { return RoleAssistant }
 func (AssistantMessage) messageMarker() {}
 
 type ToolResultMessage struct {
-	ToolCallID string `json:"tool_call_id"`
-	Content    string `json:"content"`
-	IsError    bool   `json:"is_error,omitempty"`
-	Details    any    `json:"details,omitempty"` // structured附加数据（如 PlayDetails），可选
+	Images     []ImageBlock `json:"images,omitempty"`
+	DurationMS int64        `json:"duration_ms,omitempty"`
+	ToolCallID string       `json:"tool_call_id"`
+	Content    string       `json:"content"`
+	IsError    bool         `json:"is_error,omitempty"`
+	Details    any          `json:"details,omitempty"` // structured附加数据（如 PlayDetails），可选
 }
 
 func (ToolResultMessage) Role() Role     { return RoleTool }
@@ -99,8 +104,9 @@ type Model struct {
 }
 
 type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens       int  `json:"input_tokens"`
+	OutputTokens      int  `json:"output_tokens"`
+	CachedInputTokens *int `json:"cached_input_tokens,omitempty"`
 }
 
 type StopReason string
@@ -114,12 +120,13 @@ const (
 )
 
 type StreamAssistantMessage struct {
-	Text       string     `json:"text,omitempty"`
-	Thinking   string     `json:"thinking,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	StopReason StopReason `json:"stop_reason,omitempty"`
-	ErrorMsg   string     `json:"error_msg,omitempty"`
-	Usage      Usage      `json:"usage,omitempty"`
+	ThinkingDurationMS int64      `json:"thinking_duration_ms,omitempty"`
+	Text               string     `json:"text,omitempty"`
+	Thinking           string     `json:"thinking,omitempty"`
+	ToolCalls          []ToolCall `json:"tool_calls,omitempty"`
+	StopReason         StopReason `json:"stop_reason,omitempty"`
+	ErrorMsg           string     `json:"error_msg,omitempty"`
+	Usage              Usage      `json:"usage,omitempty"`
 }
 
 type StreamRequest struct {

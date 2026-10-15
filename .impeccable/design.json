@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-27T08:39:29.829251+00:00",
+  "generatedAt": "2026-09-27T11:45:50.335538+00:00",
   "title": "Design System: EasyAgent 青夜",
   "extensions": {
     "colorMeta": {
@@ -122,6 +122,13 @@
       "description": "青夜模型菜单的静态样例：搜索、模型名与服务商、当前选择和键盘提示。实际组件支持 API 确认后更新模型、首条消息前应用偏好及可见视口定位。",
       "html": "<section class=\"ds-model-menu\" aria-label=\"选择模型\"><div class=\"ds-model-heading\"><span>选择模型</span><span class=\"ds-model-count\">1 个模型</span></div><input class=\"ds-model-search\" type=\"search\" aria-label=\"搜索模型\" placeholder=\"搜索名称或服务商…\"><div class=\"ds-model-options\"><div class=\"ds-model-option\" aria-current=\"true\"><span class=\"ds-model-copy\"><span class=\"ds-model-name\">示例模型</span><span class=\"ds-model-provider\">示例服务商</span></span><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" aria-hidden=\"true\"><path d=\"m5 12 4 4 10-10\"/></svg></div></div><div class=\"ds-model-hint\">↑ ↓ 选择 · Enter 确认 · Esc 关闭</div></section>",
       "css": ".ds-model-menu{width:336px;max-width:calc(100% - 24px);display:flex;flex-direction:column;overflow:hidden;padding:12px;border:1px solid var(--border-strong,#526f6c);border-radius:12px;background:var(--bg-secondary,#162526);color:var(--text-primary,#e5efeb);font:13px/1.6 -apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif}.ds-model-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px 10px;font-weight:600}.ds-model-count{font-size:11px;font-weight:400;color:var(--text-tertiary,#8fa79b)}.ds-model-search{min-width:0;padding:9px 11px;border:1px solid var(--border,#304746);border-radius:8px;background:var(--bg-base,#101b1c);color:var(--text-primary,#e5efeb);font:inherit}.ds-model-search::placeholder{color:var(--text-tertiary,#8fa79b)}.ds-model-search:focus-visible{outline:2px solid var(--accent,#82d5ca);outline-offset:3px}.ds-model-options{min-height:0;max-height:320px;overflow-y:auto;margin:8px -4px 0;padding:0 4px}.ds-model-option{display:flex;align-items:center;gap:12px;padding:10px;margin:2px 0;border-radius:6px}.ds-model-option:hover{background:var(--bg-hover,#213333)}.ds-model-option[aria-current=true]{background:var(--accent-dim,#203c39);color:var(--accent,#82d5ca)}.ds-model-copy{flex:1;min-width:0}.ds-model-name{display:block;font-size:13px;line-height:1.5;overflow-wrap:anywhere}.ds-model-provider{display:block;margin-top:2px;font-size:11px;color:var(--text-tertiary,#8fa79b)}.ds-model-option svg{flex-shrink:0}.ds-model-hint{margin-top:8px;padding:10px 4px 0;border-top:1px solid var(--border-subtle,#253a39);font-size:11px;color:var(--text-tertiary,#8fa79b)}@media(max-width:760px){.ds-model-search{font-size:16px}}"
+    },
+    {
+      "name": "动态工作流运行目录",
+      "kind": "custom",
+      "description": "紧凑运行记录，以名称和文字状态区分任务；选中行使用沉青底与描边。实际界面在手机上移至执行详情上方。",
+      "html": "<div class=\"ds-runs\"><button class=\"ds-run\" aria-pressed=\"true\"><span class=\"ds-run-name\">方案研究与汇总</span><span class=\"ds-run-status\">已完成</span></button><button class=\"ds-run\" aria-pressed=\"false\"><span class=\"ds-run-name\">评估实施风险</span><span class=\"ds-run-status\">等待恢复</span></button></div>",
+      "css": ".ds-runs{display:flex;flex-direction:column;gap:6px}.ds-run{text-align:left;background:transparent;border:1px solid transparent;border-radius:8px;padding:12px;color:var(--text-primary,#e5efeb);cursor:pointer;font:14px/1.6 -apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif}.ds-run:hover{background:var(--bg-hover,#213333)}.ds-run[aria-pressed=true]{background:var(--accent-dim,#203c39);border-color:var(--border,#304746)}.ds-run:focus-visible{outline:2px solid var(--accent,#82d5ca);outline-offset:3px}.ds-run-name{display:block;overflow-wrap:anywhere}.ds-run-status{display:block;margin-top:6px;font-size:12px;color:var(--text-secondary,#acbeb6)}"
     }
   ],
   "narrative": {
@@ -131,7 +138,7 @@
       "深色同色系表面与实线边界组成层次。",
       "紧凑导航和可搜索历史围绕连续可用的输入区。",
       "回复以正文呈现，工具过程通过原生展开控件渐进披露。",
-      "同一套视觉语言覆盖对话、独立流水线和会话管理。"
+      "同一套视觉语言覆盖对话、动态工作流、独立流水线和会话管理。"
     ],
     "rules": [
       {

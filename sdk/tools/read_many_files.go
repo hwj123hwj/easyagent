@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/agent"
 	"github.com/hwj123hwj/easyagent/sdk/operations"
@@ -22,6 +23,7 @@ type ReadManyFilesTool struct {
 	workspace    string
 	maxOutputLen int
 	ops          operations.FileOperations
+	readTracker  *ReadTracker
 }
 
 type ReadManyFilesParams struct {
@@ -34,6 +36,11 @@ type ReadManyFilesParams struct {
 }
 
 type ReadManyFilesOption func(*ReadManyFilesTool)
+
+// WithReadManyFilesTracker sets the ReadTracker to record read files.
+func WithReadManyFilesTracker(tracker *ReadTracker) ReadManyFilesOption {
+	return func(t *ReadManyFilesTool) { t.readTracker = tracker }
+}
 
 // WithReadManyFilesPathPolicy explicitly controls access outside the workspace.
 func WithReadManyFilesPathPolicy(policy PathPolicy) ReadManyFilesOption {
@@ -250,6 +257,14 @@ func (t *ReadManyFilesTool) Execute(ctx context.Context, raw json.RawMessage, _ 
 		// Skip binary files
 		if isBinaryFile(data) {
 			continue
+		}
+
+		if t.readTracker != nil {
+			var modTime time.Time
+			if stat, statErr := os.Stat(fp); statErr == nil {
+				modTime = stat.ModTime()
+			}
+			t.readTracker.Record(fp, data, modTime)
 		}
 
 		content := string(data)

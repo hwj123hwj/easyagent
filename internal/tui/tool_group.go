@@ -129,5 +129,8 @@ func (m *TuiModel) finishToolGroups(interrupted bool) {
 			msg.ToolsExpanded = failed
 		}
 		m.viewport.invalidateFrom(i)
+		if m.toolFocus && m.focusedTool.message == i && !msg.ToolsExpanded {
+			m.focusedTool.tool = -1
+		}
 	}
 }

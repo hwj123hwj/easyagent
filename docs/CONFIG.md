@@ -1,131 +1,104 @@
-# 配置参考
+# 配置
 
-> EasyAgent 的完整配置项说明。配置优先级：**环境变量 > .env 文件 > YAML > 默认值**。
+环境变量示例见 [`.env.example`](../.env.example)，配置实现见 [`sdk/config/config.go`](../sdk/config/config.go)。当前只读取 `EA_*` 名称，不再回退到 `PI_GO_*`；飞书桥接地址 `PI_AGENT_URL` 是仍在使用的独立变量。
 
-新配置使用 `EA_*` 环境变量；已有的 `PI_GO_*` 环境变量和 `PI_GO_ENV_FILE` 仍会作为兼容回退读取。
+## 加载顺序
 
----
+核心入口先查找当前目录 `easyagent.yaml`，否则查找 `~/.easyagent/config.yaml`，再应用环境变量，最后应用已解析的命令行运行选项。
 
-## 快速配置
+环境加载会补充 `.env` → `.env.local` → `~/.easyagent/.env` → `~/.easyagent/.env.local`，已有的非空环境值不会被覆盖。因此 `.env.local` **不是覆盖层**。设置 `EA_ENV_FILE` 时仅加载指定文件及其 `.local` 文件。`EA_HOME` 可改变默认用户配置目录。
 
-安装后编辑配置文件：
+桥接的 dotenv 加载与核心不同：指定 `EA_ENV_FILE` 时只加载该文件，否则加载当前目录和用户配置目录中的 `.env`；另可读取 `/feishu setup` 保存的凭据。systemd 部署建议使用显式 EnvironmentFile，见 [部署文档](MINI_DEPLOY.md)。
 
-```bash
-nano ~/.easyagent/.env
-```
+## 模型与认证
 
-最简配置（OpenAI 兼容）：
-```env
+OpenAI 兼容服务：
+
+```dotenv
 EA_PROVIDER=openai
-EA_API_KEY=your-api-key
 EA_BASE_URL=http://localhost:4001
-EA_MODEL=longcat-opus
+EA_MODEL=your-model-id
+EA_API_KEY=your-api-key
 ```
 
-网关模式（`EA_PROVIDER=openai`）启动时从网关的 `/v1/models` 加载模型，`/models` 只显示该目录中的模型；本地模型文件用于补充元数据。加载失败时会输出警告并回退到本地目录。修改地址或凭据后需重启 EasyAgent，再执行 `/models` 验证，并从列表选择 `EA_MODEL`，不要沿用网关已移除的模型。
+应显式填写自己的模型与地址。`EA_MODEL`、`EA_BASE_URL`、`EA_API_KEY` 分别优先于 `OPENAI_MODEL`、`OPENAI_BASE_URL`、`OPENAI_API_KEY`。
 
-本地网关使用 `EA_BASE_URL=http://localhost:4001`，`EA_API_KEY` 填该网关的认证密钥。安装器中的 Base URL 提示需要输入完整地址或回车使用默认值，不能填菜单序号。
+Anthropic 使用 `EA_PROVIDER=anthropic` 和 `ANTHROPIC_API_KEY`、`ANTHROPIC_MODEL`、`ANTHROPIC_BASE_URL`。CLI 当前支持 `openai` / `anthropic`；开发测试注入 mock 或使用本地模拟接口，`EA_PROVIDER=mock` 不是有效的 CLI 配置。Provider 默认为空，正常使用需配置。
 
-TUI 中输入 `/models` 后回车（或按 `Ctrl+P`）打开模型选择器，使用上下键选择、回车切换、`Esc` 取消。选择器默认定位当前模型，长列表随选中项滚动。旧的 `--legacy` 命令行模式仍输出文本列表。
+`EA_SERVER_API_KEY` 单独设置 HTTP API Bearer 令牌，不改变上游模型密钥。未设置时兼容使用 `EA_API_KEY` 作为服务令牌。使用 Anthropic 时，上游密钥来自 `ANTHROPIC_API_KEY`。
 
-TUI 使用独立全屏缓冲区，鼠标滚轮用于滚动会话或选择模型，不再滚动到启动前的终端历史。也可用 PageUp/PageDown 滚动会话；原生文本划选需使用终端提供的鼠标报告绕过修饰键。退出后恢复原终端内容。
+桌面客户端启动自己的本地服务时生成独立的随机 `EA_SERVER_API_KEY`，保留用户模型配置；远程连接使用目标服务的令牌。
 
+| 服务配置 | 默认 / 行为 |
+|---|---|
+| `EA_HOST` / `EA_PORT` | `127.0.0.1` / `8080`；`serve --listen` 可指定监听地址 |
+| `EA_SERVER_API_KEY` | HTTP API 独立令牌，优先于 `EA_API_KEY`；`/health` 公开 |
+| `EA_API_KEY` | OpenAI 兼容上游密钥，兼容作为未单独配置时的服务令牌 |
+| 未设置 API Key | 默认仅接受 loopback 来源的 API 请求 |
+| `EA_ALLOW_NO_AUTH=1` | 显式放开普通 API；不能用于绕过飞书设置管理接口的认证 |
+| `EA_ALLOWED_ORIGINS` | 逗号分隔的允许来源，按部署需求配置 |
 
-使用 Anthropic Claude：
-```env
-EA_PROVIDER=anthropic
-ANTHROPIC_API_KEY=your-key
-ANTHROPIC_MODEL=claude-sonnet-4-20250514
-```
+Web 页面可加载不代表 API 已获授权。远程使用需要登录；WebSocket 的认证细节见 [API](API.md)。
 
----
+## 工具和文件路径
 
-## 环境变量
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `EA_WORKSPACE` | 当前工作目录 | 会话工作目录 |
+| `EA_DATA_DIR` | `./data` | 会话与工作流运行数据 |
+| `EA_HOME` | `~/.easyagent` | 用户配置与凭据目录 |
+| `EA_ENABLE_BASH` | `false` | 启用命令执行工具 |
+| `EA_AUTO_APPROVE` | `false` | 跳过交互工具确认，对应 `-y` |
+| `EA_ALLOW_OUTSIDE_WORKSPACE` | `false` | 允许文件工具访问工作区外路径 |
+| `EA_ENABLE_WEB` | `false` | 启用网页抓取工具 |
+| `EA_ENABLE_WEB_SEARCH` | `false` | 启用搜索工具 |
+| `EA_WEB_TIMEOUT_SECONDS` | `30` | 网页请求超时 |
+| `EA_MAX_OUTPUT_LEN` | `51200` | 工具输出长度上限（50KB，对齐 pi） |
+| `EA_SYNOPSIS_THRESHOLD` | `51200` | 输出概览化阈值：超过该长度的大输出对模型替换为结构概览（可用 `full_output` 工具按 ref 取回全文）。read/grep 等内容型工具豁免 |
+| `EA_ALLOWED_TOOLS` / `EA_BLOCKED_TOOLS` | 空 | 逗号分隔的工具过滤名单 |
+| `EA_PROMPT_TEMPLATE` | 空 | 自定义系统提示模板 |
 
-### Provider 与模型
+`easyagent serve --allow-outside-workspace` 与环境开关等效。默认检查绝对路径、相对路径及符号链接，防止文件工具逃出工作区；放开后仍受运行用户的系统权限限制。此开关与 `-y`、API 认证独立。HTTP 工作区文件接口仍有自己的路径检查，不能把文件工具开关理解为所有 API 的任意路径访问许可。
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_PROVIDER` | _(必填)_ | LLM Provider：`anthropic` / `openai` |
-| `EA_API_KEY` | - | Provider API Key（优先） |
-| `OPENAI_API_KEY` | - | OpenAI API Key（后备） |
-| `EA_MODEL` | - | 模型名称（优先） |
-| `OPENAI_MODEL` | - | OpenAI 模型名称（后备） |
-| `EA_BASE_URL` | - | API 地址（优先） |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI API 地址（后备） |
-| `ANTHROPIC_API_KEY` | - | Anthropic API Key |
-| `ANTHROPIC_MODEL` | - | Anthropic 模型名称 |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic API 地址 |
+Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。serve 模式的 Web 与桌面客户端提供工具审批，等待批准会在两分钟后自动拒绝。SDK 调用者须提供自己的确认回调；不能依赖 TUI 的提示保护服务。`-y` / `EA_AUTO_APPROVE=true` 会显式跳过审批，包括未信任的 MCP 工具。
 
-### 服务器
+## 可选能力
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_HOST` | `127.0.0.1` | HTTP 监听地址 |
-| `EA_PORT` | `8080` | HTTP 监听端口 |
-| `EA_DATA_DIR` | `./data` | 数据目录 |
+| 配置 | 用途 |
+|---|---|
+| `EA_EXECUTION_MODE=ssh`、`EA_SSH_HOST`、`EA_SSH_PORT`、`EA_SSH_WORKDIR` | SSH 执行后端；端口默认 22 |
+| `EA_WORKFLOW_RUNTIME` | 动态工作流 bundle 绝对路径，见 [构建说明](DYNAMIC_WORKFLOW.md) |
+| `EA_MCP_CONFIG` / `--mcp-config` / YAML `mcp_config` | 用户 MCP 配置文件，默认 `EA_HOME/mcp.json`；项目文件与授权见 [MCP](MCP.md) |
+| `EA_KB_REPO_PATH` | 知识库目录；未设置时运行入口使用 `~/agent-lessons` |
+| `EA_SKILL_MARKET`、`EA_SKILL_MARKET_BASE_URL`、`EA_SKILL_MARKET_SKILL_DIR` | 技能市场（EasyCode 官方 skill store）；默认开启，`EA_SKILL_MARKET=0` 关闭。安装到 `EA_SKILL_MARKET_SKILL_DIR`（默认 `~/.agents/skills`），下一轮或新会话生效，见 [技能市场](SKILL_MARKET.md) |
+| `SILICONFLOW_API_KEY`、`SILICONFLOW_EMBEDDING_MODEL`、`SILICONFLOW_BASE_URL` | 可选知识库向量搜索 |
+| `ASR_API_KEY`、`ASR_MODEL`、`ASR_BASE_URL` | 语音识别；未设置 ASR Key 时可回退到 SiliconFlow Key |
+| `EA_FEISHU_ENV_FILE`、`FEISHU_OWNER_STATE_FILE` | 托管飞书配置与配对状态，见 [飞书](FEISHU.md) |
 
-### 工具
+不要将运行 `.env`、访问令牌或配对状态提交到 Git。部署更新保留这些独立文件。
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_ENABLE_BASH` | `false` | 是否启用 Bash 工具 |
-| `EA_ENABLE_WEB` | `false` | 是否启用 Web Fetch 工具 |
-| `EA_WEB_TIMEOUT_SECONDS` | `30` | Web Fetch 超时（秒） |
-| `EA_MAX_OUTPUT_LEN` | `30000` | 工具输出最大字符数 |
-| `EA_WORKSPACE` | 当前目录 | 工作目录 |
-| `EA_ALLOWED_TOOLS` | - | 工具白名单（逗号分隔） |
-| `EA_ALLOW_NO_AUTH` | - | `1` 时未配置 API key 也完全开放（仅限本机调试） |
-| `EA_ALLOWED_ORIGINS` | - | CORS 白名单（逗号分隔 Origin；默认不返回跨域头） |
-| `EA_BLOCKED_TOOLS` | - | 工具黑名单（逗号分隔） |
+### 语音识别的网关回退
 
-### 执行后端
+`ASR_API_KEY` 与 `ASR_BASE_URL` 可显式配置专用语音服务；文件中的专用 ASR 凭据、地址与模型会保留。没有专用配置时，`SILICONFLOW_API_KEY` 使用默认 SiliconFlow 地址；否则复用 OpenAI 兼容网关的密钥和地址。显式设置其他 `ASR_BASE_URL` 时必须同时提供语音密钥，不会将网关或 SiliconFlow 凭据转发到该地址。地址可包含 `/v1`，网关需支持 `audio/transcriptions` 与 `ASR_MODEL`（默认 `TeleAI/TeleSpeechASR`）。
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_EXECUTION_MODE` | `local` | 执行后端：`local` 或 `ssh` |
-| `EA_SSH_HOST` | - | SSH 模式目标主机 |
-| `EA_SSH_PORT` | `22` | SSH 端口 |
-| `EA_SSH_WORKDIR` | - | SSH 模式远程工作目录 |
+本机飞书设置支持扫码授权并确认保存应用凭据；授权凭据存于该主机的 EasyAgent 配置目录，不回显密钥。保存不会自动启动桥接，需另行启动或重启 `easyagent-bridge`。托管 systemd 桥接继续使用已有自建应用和使用者配对设置。扫码使用飞书注册接口，服务不可用时可使用自建应用。
 
-### 个人助手
+## 实验性电脑控制
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_KB_REPO_PATH` | `~/agent-lessons` | 知识库仓库路径 |
-| `SILICONFLOW_API_KEY` | - | KB 向量搜索 API Key |
-| `SILICONFLOW_EMBEDDING_MODEL` | `bge-m3` | KB Embedding 模型 |
-| `SILICONFLOW_BASE_URL` | - | Embedding API 地址 |
+`EA_ENABLE_COMPUTER_USE`（默认 `false`）与 `EA_COMPUTER_APPROVAL_POLICY`（`ask` 默认，或 `auto`）控制新建/重新加载的编码会话。桌面设置保存在数据目录的 `settings.json`，启动时覆盖环境与 YAML 中的对应项；已加载会话保持配置快照。
 
-### 提示与历史
+从 v0.14.0 起，macOS 14+ 的桌面安装包内置原生 `EasyAgent Computer Use` helper，自动从应用资源目录发现，不需要安装或配置 CUA MCP。首次使用在「实验」设置中启用并点击「请求系统权限」，按照 macOS 提示为 EasyAgent / EasyAgent Computer Use 授予辅助功能和屏幕录制权限；返回应用会自动刷新状态。如系统要求退出重开，请重启 EasyAgent。系统授权不会被应用自动代办。当前安装包为 ad hoc 测试签名，更新后已有授权可能因签名变化而失效：即使系统开关显示开启，进程的权限探测仍会返回未授权。此时在辅助功能和屏幕录制中移除旧 EasyAgent 条目，再用「+」添加 `/Applications/EasyAgent.app`，并退出重开；两项权限需分别处理。Linux、Windows 及旧版 macOS 暂不支持。
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EA_PROMPT_TEMPLATE` | - | 自定义提示模板路径 |
+从 v0.15.0 起，电脑控制改为后台目标窗口模式：先由 `list_apps` 获取应用和窗口身份，再为截图、状态与动作指定 `bundle_id`、`pid`、`window_id`；坐标以目标窗口左上角为原点。截图可读取被其他应用遮挡的目标窗口，点击、文本选择、编辑与滚动通过指定窗口的辅助功能控件执行，普通按键发往目标进程，不移动用户鼠标或激活应用。文本点击与输入应放在同一动作批；未适配的控件（例如缺少辅助功能支持的画布）明确报错，不能改用全局鼠标。滚动量按窗口中心滚动区的宽高换算为滚动位置增量，正向右/下，不保证精确像素距离。你可继续使用其他应用；同时编辑同一目标窗口仍会冲突。窗口关闭、身份变化或应用不支持后台操作时明确停止，不退回全局前台控制。旧会话中的无目标动作需要重新观察并指定目标。
 
----
+电脑控制包括应用与窗口列表、目标窗口截图、目标窗口的辅助功能元素树、坐标点击、文字输入、组合键、滚动及等待。截图直接作为图像回传给支持视觉输入的模型，并在会话历史中持久化；仅文本模型不能正确使用截图。每个截图像素对应目标窗口内的逻辑坐标，元素树也使用相同坐标，密码字段不读取值也不输入。截图与会话保存在本机数据目录，需按会话数据对待；图像会随模型请求发送给所选 Provider。原生 helper 不依赖 shell、AppleScript、第三方 MCP 或外部下载。
 
-## YAML 配置
+审批策略独立于编码会话的完全权限；`ask` 批次及 `auto` 中退出/注销/锁屏/强制退出组合键必须经交互批准。单批最多 20 个动作、累计等待最多 50 秒，整批先校验再执行；取消会终止 helper 并释放占用，但已发生的操作不回滚。审计列表记录实际控制过的应用，不是允许列表。已加载会话保留配置快照，新建或重新加载后生效。CLI 单独安装仍可使用可执行文件旁或 PATH 中兼容的 helper。
 
-除了环境变量和 .env 文件，你也可以用 YAML 配置文件（优先级低于环境变量）：
+兼容 helper 的 CLI 契约：`status` 返回 `accessibility` / `screen_recording` 布尔值；`request-permissions` 打开权限面板；`tool screenshot --args '{"output_dir":"…"}'` 返回 `path`；`tool app_state` 返回 JSON 应用状态；`tool perform_action --args '{"actions":[…]}'` 仅整批完成时返回 `{"success":true,"focused_app":"应用 ID"}`，失败返回非零退出码或 `{"success":false,"error":"原因"}`。批次按顺序执行，不保证回滚，失败不可盲目重放。所有输出走 stdout，诊断走 stderr。
 
-```yaml
-provider: openai
-openai_api_key: your-key
-openai_base_url: http://localhost:4001
-openai_model: longcat-opus
-host: 127.0.0.1
-port: 8080
-enable_bash: true
-workspace: /home/user/project
-max_turns: 200
-```
+### 命令超时与自动压缩
 
----
+`bash` 未指定 `timeout` 时默认等待 120 秒；模型可为构建、测试等显式指定更长秒数，用户停止任务仍会取消命令。界面显示的是本次命令的超时，而非工具的固定上限。
 
-## 安全提示
-
-- ✅ v0.10.3+ 会自动清洗配置值中的 ANSI 转义码
-- ✅ `.env` 文件应设置权限：`chmod 600 ~/.easyagent/.env`
-- ✅ 不要把 API Key 提交到 Git
-- ✅ 生产环境使用 `EA_API_KEY` 环境变量做 HTTP API 认证
+自动压缩估算包含消息、系统提示词和工具定义，与桌面上下文用量一致。默认超过窗口 60% 时尝试清理旧工具输出，累计至少节省 2048 tokens 才持久化；超过 80% 或侵入输出预留区（默认 16384 tokens）时直接调用 LLM 做深度摘要，不先微压缩来推迟摘要。保留最近约 20000 tokens，不删除 JSONL 中的原始会话记录。SDK 可用 `compaction.Settings` 调整比例、预留与回收阈值；没有摘要通道的 SDK 调用方只能做微压缩。

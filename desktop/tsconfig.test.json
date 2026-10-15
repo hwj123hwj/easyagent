@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": ".test-output",
+    "rootDir": ".",
+    "esModuleInterop": true
+  },
+  "include": [
+    "src/client/**/*.ts",
+    "src/types.ts",
+    "src/store.ts",
+    "src/vite-env.d.ts",
+    "electron/profile-store.ts",
+    "electron/main.ts"
+  ]
+}

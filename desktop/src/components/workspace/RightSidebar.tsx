@@ -37,6 +37,7 @@ export function RightSidebar() {
   const rightWidth = useStore((s) => s.workspace.rightWidth);
   const toggleView = useStore((s) => s.toggleWorkspaceView);
   const t = useT();
+  if (!rightView) return null;
 
   let content: ReactNode = null;
   if (rightView === 'review') content = <ReviewPanel />;
@@ -46,33 +47,32 @@ export function RightSidebar() {
   else if (rightView === 'kb') content = <KbPanel />;
   else if (rightView === 'profile') content = <ProfilePanel />;
 
-  const hasContent = rightView != null;
-
   return (
     <div
-      className={`rsidebar ${hasContent ? '' : 'launcher'}`}
-      style={hasContent ? { flexBasis: rightWidth, width: rightWidth } : undefined}
+      className="rsidebar"
+      style={{ flexBasis: rightWidth, width: rightWidth }}
     >
-      {hasContent && (
-        <div className="rsidebar-content">
-          {/* Mobile close button — floating X in top-left of the panel */}
-          <button
-            className="rsidebar-mobile-close"
-            onClick={() => {
-              useStore.getState().toggleWorkspaceRight();
-            }}
-            aria-label="Close panel"
-          >
-            <Icon name="arrow-left" size={18} />
-          </button>
-          {content}
-        </div>
-      )}
+      <button
+        className="rsidebar-mobile-close"
+        onClick={() => {
+          useStore.getState().toggleWorkspaceRight();
+          document.querySelector<HTMLButtonElement>('.connection-workbench')?.focus();
+        }}
+        aria-label={t('common.close')}
+      >
+        <Icon name="arrow-left" size={18} />
+      </button>
+      <div className="rsidebar-content">
+        {content}
+      </div>
       <RightRail
         items={RAIL}
         rightView={rightView}
-        collapsed={hasContent}
-        onSelect={(item) => toggleView(item.view)}
+        onSelect={(item) => {
+          toggleView(item.view);
+          if (rightView === item.view)
+            document.querySelector<HTMLButtonElement>('.connection-workbench')?.focus();
+        }}
         t={t}
       />
     </div>
@@ -82,18 +82,16 @@ export function RightSidebar() {
 function RightRail({
   items,
   rightView,
-  collapsed,
   onSelect,
   t,
 }: {
   items: RailItem[];
   rightView: RightView | null;
-  collapsed: boolean;
   onSelect: (item: RailItem) => void;
   t: TFunc;
 }) {
   return (
-    <nav className={`rsidebar-rail ${collapsed ? 'collapsed' : ''}`}>
+    <nav className="rsidebar-rail collapsed">
       {items.map((item) => {
         const active = rightView === item.view;
         return (

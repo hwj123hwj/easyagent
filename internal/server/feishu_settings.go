@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+
+	"github.com/hwj123hwj/easyagent/internal/feishu"
 )
 
 // The operator explicitly opts in with a fixed environment file used by the
@@ -164,9 +166,38 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 			http.Error(w, `{"error":"飞书配置需要先设置 EA_API_KEY"}`, http.StatusForbidden)
 			return
 		}
+		if r.URL.Path == "/settings/feishu/bridge/restart" && r.Method == "POST" {
+			// 本机桥接跑在 serve 进程内；systemd 托管的主机继续走 PUT 保存重启。
+			if f.envFile != "" {
+				http.Error(w, `{"error":"此主机的飞书桥接由 systemd 托管，请使用「保存并重启桥接」"}`, http.StatusConflict)
+				return
+			}
+			if s.baseURL == "" {
+				http.Error(w, `{"error":"服务尚未开始监听，无法启动桥接"}`, http.StatusServiceUnavailable)
+				return
+			}
+			_, err := s.localBridge.restart(s.baseURL, s.localBridgeRun())
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
+				return
+			}
+			status, err := s.localFeishuStatus()
+			if err != nil {
+				http.Error(w, `{"error":"无法读取飞书凭据"}`, http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(status)
+			return
+		}
 		if f.envFile == "" || f.ownerFile == "" {
 			if r.Method == "GET" && r.URL.Path == "/settings/feishu" {
-				json.NewEncoder(w).Encode(map[string]any{"managed": false})
+				status, err := s.localFeishuStatus()
+				if err != nil {
+					http.Error(w, `{"error":"无法读取飞书凭据"}`, http.StatusInternalServerError)
+					return
+				}
+				json.NewEncoder(w).Encode(status)
 				return
 			}
 			http.Error(w, `{"error":"此服务器未启用飞书配置管理"}`, http.StatusServiceUnavailable)
@@ -223,4 +254,23 @@ func (s *Server) registerFeishuSettings(mux *http.ServeMux) {
 	mux.HandleFunc("GET /settings/feishu", handler)
 	mux.HandleFunc("PUT /settings/feishu", handler)
 	mux.HandleFunc("GET /settings/feishu/pairing", handler)
+	mux.HandleFunc("POST /settings/feishu/bridge/restart", handler)
+
+	registerFeishuQR(mux, s.apiKey, f.envFile != "" || f.ownerFile != "")
+}
+
+// Restart and GET expose the same status contract, without returning secrets.
+func (s *Server) localFeishuStatus() (map[string]any, error) {
+	creds, err := feishu.LoadCredentials()
+	if err != nil {
+		return nil, err
+	}
+	appID := ""
+	secretConfigured := false
+	if creds != nil {
+		appID = creds.AppID
+		secretConfigured = creds.AppSecret != ""
+	}
+	return map[string]any{"managed": false, "local_mode": true, "app_id": appID,
+		"secret_configured": secretConfigured, "bridge": s.localBridge.status()}, nil
 }

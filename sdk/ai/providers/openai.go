@@ -88,6 +88,9 @@ type openAIToolParam struct {
 }
 
 type openAIRequest struct {
+	StreamOptions *struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options,omitempty"`
 	Model       string            `json:"model"`
 	Messages    []openAIMessage   `json:"messages"`
 	MaxTokens   int               `json:"max_tokens,omitempty"`
@@ -122,6 +125,14 @@ type openAIStreamToolCall struct {
 }
 
 type openAIStreamChunk struct {
+	Error json.RawMessage `json:"error,omitempty"`
+	Usage *struct {
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens *int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+	} `json:"usage,omitempty"`
 	ID      string               `json:"id"`
 	Object  string               `json:"object"`
 	Model   string               `json:"model"`
@@ -226,6 +237,8 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 
 	textAccum := strings.Builder{}
 	textBlockStarted := false
+	terminalSeen := false
+	var upstreamErr error
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -239,12 +252,29 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 			continue
 		}
 		if strings.HasPrefix(payload, "[DONE]") {
+			terminalSeen = true
 			break
 		}
 
 		var chunk openAIStreamChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
+		}
+		if chunk.Usage != nil {
+			partial.Usage = ai.Usage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens, CachedInputTokens: chunk.Usage.PromptTokensDetails.CachedTokens}
+		}
+		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
+			var detail struct {
+				Message string `json:"message"`
+			}
+			_ = json.Unmarshal(chunk.Error, &detail)
+			upstreamErr = errors.New("upstream stream failed")
+			if detail.Message != "" {
+				upstreamErr = fmt.Errorf("upstream stream failed: %s", detail.Message)
+			}
+			// 显式业务错误不能被 finish_reason / [DONE] 或空流重试覆盖。
+			// 先退出读取，再统一收集 partial，避免丢掉已到达的文本和工具参数。
+			break
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -253,12 +283,14 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 		choice := chunk.Choices[0]
 		delta := choice.Delta
 
-		// --- 推理内容（不发事件，累积进最终消息，与 anthropic.go 的 thinking 处理对齐）---
+		// 同时持久化和实时转发上游明确返回的推理片段。
 		if delta.ReasoningContent != "" {
 			partial.Thinking += delta.ReasoningContent
+			_ = stream.Push(ctx, ai.EventThinkingDelta{Delta: delta.ReasoningContent})
 		}
 		if delta.Reasoning != "" {
 			partial.Thinking += delta.Reasoning
+			_ = stream.Push(ctx, ai.EventThinkingDelta{Delta: delta.Reasoning})
 		}
 
 		// --- 文本内容 ---
@@ -289,6 +321,9 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 
 		// --- finish_reason ---
 		if choice.FinishReason != nil {
+			if *choice.FinishReason != "" {
+				terminalSeen = true
+			}
 			switch *choice.FinishReason {
 			case "stop":
 				partial.StopReason = ai.StopReasonStop
@@ -338,7 +373,10 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 
 	// 流异常结束（含空闲超时）：报错而非伪装成正常完成。
 	// 终止事件与结果由调用方统一处理（可能先重试）。
-	resultErr := scanner.Err()
+	resultErr := upstreamErr
+	if resultErr == nil {
+		resultErr = scanner.Err()
+	}
 	if resultErr != nil {
 		if wd.Tripped() {
 			resultErr = idleTimeoutError(streamIdleTimeout)
@@ -350,6 +388,11 @@ func (p *OpenAIProvider) handleSSE(ctx context.Context, stream *ai.EventStream, 
 	// 不装作正常完成（空消息会污染会话），交给调用方重试/报错
 	if !received {
 		return false, nil
+	}
+	// 正常 EOF 只说明 HTTP body 关闭，不能证明模型已完成；兼容单独
+	// finish_reason 或 [DONE]，但两者都缺失时必须保留 partial 并报中断。
+	if !terminalSeen {
+		return received, errors.New("upstream stream ended without a terminal event")
 	}
 
 	if partial.StopReason == "" {
@@ -375,6 +418,12 @@ func (p *OpenAIProvider) buildOpenAIRequest(req ai.StreamRequest, stream bool) o
 		Temperature: 0.7,
 	}
 
+	if stream {
+		oaiReq.StreamOptions = &struct {
+			IncludeUsage bool `json:"include_usage"`
+		}{true}
+	}
+
 	// system prompt 作为第一条 system 消息
 	if req.System != "" {
 		oaiReq.Messages = append(oaiReq.Messages, openAIMessage{
@@ -384,7 +433,7 @@ func (p *OpenAIProvider) buildOpenAIRequest(req ai.StreamRequest, stream bool) o
 	}
 
 	// 转换 messages
-	for _, msg := range req.Messages {
+	for _, msg := range expandToolImages(req.Messages) {
 		switch m := msg.(type) {
 		case ai.UserMessage:
 			hasOnlyText := true
@@ -482,4 +531,35 @@ func (p *OpenAIProvider) buildOpenAIRequest(req ai.StreamRequest, stream bool) o
 	}
 
 	return oaiReq
+}
+
+// Chat Completions supports images on user messages, not tool messages.
+// Flush images only after consecutive tool results so multi-call turns remain valid.
+func expandToolImages(messages []ai.Message) []ai.Message {
+	var result []ai.Message
+	var pending []ai.ContentBlock
+	flush := func() {
+		if len(pending) > 0 {
+			result = append(result, ai.UserMessage{Content: pending})
+			pending = nil
+		}
+	}
+	for _, message := range messages {
+		tool, isTool := message.(ai.ToolResultMessage)
+		if !isTool {
+			flush()
+		}
+		result = append(result, message)
+		if isTool {
+			for _, image := range tool.Images {
+				if len(image.Data) == 0 && image.URL == "" {
+					continue
+				}
+				copy := image
+				pending = append(pending, ai.ContentBlock{Type: "text", Text: "Image from tool call " + tool.ToolCallID}, ai.ContentBlock{Type: "image", Image: &copy})
+			}
+		}
+	}
+	flush()
+	return result
 }

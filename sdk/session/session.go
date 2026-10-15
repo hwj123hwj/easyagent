@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
@@ -51,51 +52,100 @@ func (s *Session) AppendMessage(ctx context.Context, msg ai.Message) error {
 	if err != nil {
 		return fmt.Errorf("failed to get leaf after append: %w", err)
 	}
-	// 持久化 leaf 指针，确保重新加载后可以恢复
+	s.leafID = leaf
+	// Explicit cursor record preserves compatibility with older readers.
 	if err := s.storage.SetLeaf(ctx, leaf); err != nil {
 		return fmt.Errorf("failed to set leaf: %w", err)
 	}
-	s.leafID = leaf
 	return nil
 }
 
-func (s *Session) BuildContext(ctx context.Context) ([]ai.Message, error) {
+// contextEntries reconstructs the logical context and preserves source IDs.
+func (s *Session) contextEntries(ctx context.Context) ([]Entry, error) {
+	return s.buildContextEntries(ctx, true)
+}
+
+func (s *Session) buildContextEntries(ctx context.Context, applyMicro bool) ([]Entry, error) {
 	entries, err := s.storage.GetPathToRoot(ctx, "")
 	if err != nil {
 		return nil, err
 	}
-
-	// Find the last compaction entry (if any).
-	var lastCompaction *Entry
-	var lastCompactionIdx int
+	start := 0
+	var result []Entry
 	for i := len(entries) - 1; i >= 0; i-- {
 		if entries[i].Type == EntryTypeCompaction {
-			e := entries[i]
-			lastCompaction = &e
-			lastCompactionIdx = i
+			msg := ai.NewTextUserMessage("Context summary from previous conversation:\n\n" + entries[i].Summary)
+			result = append(result, Entry{ID: entries[i].ID, Type: EntryTypeMessage, User: &msg})
+			result = append(result, entries[i].Retained...)
+			start = i + 1
 			break
 		}
 	}
-
-	messages := make([]ai.Message, 0, len(entries))
-
-	if lastCompaction != nil {
-		// Inject summary as context header.
-		summaryText := "Context summary from previous conversation:\n\n" + lastCompaction.Summary
-		messages = append(messages, ai.NewTextUserMessage(summaryText))
-
-		// Collect messages after the compaction entry (skip compacted history).
-		for _, entry := range entries[lastCompactionIdx+1:] {
-			messages = append(messages, entryToMessages(entry)...)
+	replacements := make(map[string]string)
+	clearImages := make(map[string]bool)
+	originalImages := make(map[string][]ai.ImageBlock)
+	for _, entry := range entries[start:] {
+		if applyMicro && entry.Type == EntryTypeMicroCompaction {
+			for _, replacement := range entry.ToolReplacements {
+				replacements[replacement.EntryID] = replacement.Content
+				clearImages[replacement.EntryID] = clearImages[replacement.EntryID] || replacement.ClearImages
+			}
 		}
-	} else {
-		// No compaction — use original logic.
-		for _, entry := range entries {
-			messages = append(messages, entryToMessages(entry)...)
+		if len(entryToMessages(entry)) > 0 {
+			result = append(result, entry)
 		}
 	}
+	if !applyMicro {
+		// A full-compaction tail may already contain cleaned tool contents.
+		// Restore their original contents for display, keeping the logical tail.
+		for _, entry := range entries {
+			if entry.Type == EntryTypeMessage && entry.Tool != nil {
+				replacements[entry.ID] = entry.Tool.Content
+				originalImages[entry.ID] = entry.Tool.Images
+			}
+		}
+	}
+	for i, entry := range result {
+		if content, ok := replacements[entry.ID]; ok && entry.Tool != nil {
+			tool := *entry.Tool
+			tool.Content = content
+			if applyMicro && clearImages[entry.ID] {
+				tool.Images = nil
+			}
+			if !applyMicro {
+				tool.Images = originalImages[entry.ID]
+			}
+			result[i].Tool = &tool
+		}
+	}
+	return result, nil
+}
 
+func (s *Session) BuildContext(ctx context.Context) ([]ai.Message, error) {
+	entries, err := s.contextEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]ai.Message, 0, len(entries))
+	for _, entry := range entries {
+		messages = append(messages, entryToMessages(entry)...)
+	}
 	return messages, nil
+}
+
+// Compactions returns full compactions on the active branch, oldest first.
+func (s *Session) Compactions(ctx context.Context) ([]CompactionRecord, error) {
+	entries, err := s.storage.GetPathToRoot(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	records := make([]CompactionRecord, 0)
+	for _, entry := range entries {
+		if entry.Type == EntryTypeCompaction {
+			records = append(records, CompactionRecord{ID: entry.ID, Timestamp: entry.Timestamp, Summary: entry.Summary, Info: entry.Compaction})
+		}
+	}
+	return records, nil
 }
 
 // entryToMessages extracts ai.Message values from an Entry.
@@ -111,13 +161,66 @@ func entryToMessages(entry Entry) []ai.Message {
 	return nil
 }
 
+// BuildContextEntryIDs is position-aligned with BuildContext, including retained
+// messages from compaction snapshots. The summary uses its compaction entry ID.
+func (s *Session) BuildContextEntryIDs(ctx context.Context) ([]string, error) {
+	entries, err := s.contextEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		for range entryToMessages(entry) {
+			ids = append(ids, entry.ID)
+		}
+	}
+	return ids, nil
+}
+
 // AppendCompaction writes a compaction entry to the session storage.
 // The summary replaces all prior messages when BuildContext is called.
 func (s *Session) AppendCompaction(ctx context.Context, summary string) error {
-	entry := Entry{
-		Type:     EntryTypeCompaction,
-		ParentID: s.leafID,
-		Summary:  summary,
+	return s.AppendCompactionKeeping(ctx, summary, nil, nil)
+}
+
+// AppendCompactionKeeping atomically persists the summary and retained tail in
+// one entry. Snapshots keep source IDs and any micro-compacted tool contents.
+func (s *Session) AppendCompactionKeeping(ctx context.Context, summary string, recent []ai.Message, info *CompactionInfo) error {
+	entries, err := s.contextEntries(ctx)
+	if err != nil {
+		return err
+	}
+	if len(recent) > len(entries) {
+		return fmt.Errorf("retained context exceeds stored history")
+	}
+	retained := make([]Entry, 0, len(recent))
+	for i, msg := range recent {
+		original := entries[len(entries)-len(recent)+i]
+		entry := Entry{ID: original.ID, Timestamp: original.Timestamp, Type: EntryTypeMessage}
+		switch m := msg.(type) {
+		case ai.UserMessage:
+			entry.User = &m
+		case ai.AssistantMessage:
+			entry.Assistant = &m
+		case ai.ToolResultMessage:
+			entry.Tool = &m
+		default:
+			return fmt.Errorf("unsupported retained message %T", msg)
+		}
+		retained = append(retained, entry)
+	}
+	entry := Entry{Type: EntryTypeCompaction, ParentID: s.leafID, Summary: summary, Retained: retained, Compaction: info}
+	if len(retained) > 0 {
+		entry.FirstKeptEntryID = retained[0].ID
+	}
+	// JSONL readers have a 16 MiB record limit. Reject before writing, rather
+	// than producing a session that cannot be reopened (e.g. large image tails).
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	if len(data) >= 16*1024*1024-1024 {
+		return fmt.Errorf("retained compaction context exceeds storage record limit")
 	}
 	if err := s.storage.Append(ctx, entry); err != nil {
 		return err

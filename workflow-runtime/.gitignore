@@ -1,0 +1,5 @@
+node_modules/
+dist/
+output/
+vendor/*/dist/
+vendor/dynamic-workflow/src/compiler/libs.generated.ts

@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { MermaidConfig } from 'mermaid';
 import { Icon } from './Icon';
+import { copyText } from '../client/clipboard';
 import { useT } from '../i18n/useT';
 
 /* ── lazy mermaid loader ─────────────────────────────────────────────────── */
@@ -158,11 +159,11 @@ export function Mermaid({ code }: { code: string }) {
   }, [code, themeVersion]);
 
   const copy = () => {
-    void navigator.clipboard?.writeText(code).then(() => {
+    void copyText(code).then(() => {
       setCopied(true);
       if (copyTimer.current) clearTimeout(copyTimer.current);
       copyTimer.current = setTimeout(() => setCopied(false), 1400);
-    });
+    }).catch(error=>setError(error.message));
   };
 
   useEffect(

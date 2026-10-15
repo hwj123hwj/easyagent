@@ -109,14 +109,20 @@ func (s *JSONLStorage) load() error {
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
 		var entry Entry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			return err
 		}
 		s.byID[entry.ID] = entry
-		if entry.Type == EntryTypeLeaf {
+		// Replay the same cursor transitions as Append. A process may stop
+		// after the durable message write but before the following leaf record.
+		switch entry.Type {
+		case EntryTypeLeaf:
 			s.leafID = entry.TargetID
+		case EntryTypeMessage, EntryTypeCompaction, EntryTypeMicroCompaction:
+			s.leafID = entry.ID
 		}
 	}
 	return scanner.Err()
@@ -153,15 +159,13 @@ func (s *JSONLStorage) Append(ctx context.Context, entry Entry) error {
 	// fsync to ensure crash-safe durability (without this, the OS buffer
 	// can lose or half-flush the last line on power failure).
 	if err := s.file.Sync(); err != nil {
-		// Sync failure is non-fatal on some platforms (e.g. network FS);
-		// log but don't block the append.
-		_ = err
+		return fmt.Errorf("sync session append: %w", err)
 	}
 	s.byID[entry.ID] = entry
 	switch entry.Type {
 	case EntryTypeLeaf:
 		s.leafID = entry.TargetID
-	case EntryTypeMessage, EntryTypeCompaction:
+	case EntryTypeMessage, EntryTypeCompaction, EntryTypeMicroCompaction:
 		s.leafID = entry.ID
 	}
 	// Enforce maxEntries cap.
@@ -188,8 +192,12 @@ func (s *JSONLStorage) GetPathToRoot(ctx context.Context, leafID string) ([]Entr
 		if !ok {
 			return nil, fmt.Errorf("entry %q not found", leafID)
 		}
-		path = append([]Entry{entry}, path...)
+		path = append(path, entry)
 		leafID = entry.ParentID
+	}
+	// 沿父链收集后一次反转，避免逐项 prepend 对长会话产生 O(n²) 复制。
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
 	}
 	return path, nil
 }

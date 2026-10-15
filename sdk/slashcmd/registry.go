@@ -15,6 +15,7 @@ type CommandResult struct {
 	Output          string         // command output text
 	SessionSwitchTo SessionContext // non-nil means the caller should switch session
 	ClearScreen     bool           // true means clear the terminal display
+	QueryPrompt     string         // explicit follow-up prompt when ShouldQuery is true
 	ShouldQuery     bool           // true means auto-trigger an agent query after command
 }
 

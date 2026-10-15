@@ -1,21 +1,47 @@
+import { sanitizeInputDrafts } from "./client/input-drafts";
+import {
+  readWorkspaceFiles,
+  saveWorkspaceFiles,
+} from "./client/workspace-files";
 /**
  * store.ts — Single source of truth for the easyagent desktop renderer.
  *
- * Talks directly to the easyagent backend via REST (fetch) + WebSocket.
- * No IPC bridge — the renderer hits the HTTP server managed by Electron's
- * easyagent-manager directly.
+ * Electron proxies authenticated REST + WebSocket through the main process.
+ * Browser preview uses the same typed projection with an in-memory token.
  */
 
-import { create } from 'zustand';
-import { type Lang, loadStoredLang, persistLang, translate } from './i18n/i18n';
-import { type ThemeMode, loadStoredTheme, persistTheme } from './theme';
-import { deriveTitleFromMessage } from './sessionTitle';
-import { getStoredServerUrl } from './platform';
+import { create } from "zustand";
+import { type Lang, loadStoredLang, persistLang, translate } from "./i18n/i18n";
+import { type ThemeMode, loadStoredTheme, persistTheme } from "./theme";
+import { deriveTitleFromMessage } from "./sessionTitle";
+import { getStoredServerUrl, setStoredServerUrl } from "./platform";
+import { commands as localCommands, type Command } from "./client/commands";
+import { AgentTransport } from "./client/transport";
+import {
+  emptyProjection,
+  historyProjection,
+  reduceEnvelope,
+} from "./client/reducer";
+import type {
+  ChatItem,
+  AccessMode,
+  SessionInfo,
+  ConnectionProfile,
+  Envelope,
+  RunProjection,
+  MessageQueue,
+  DraftInputs,
+  PromptInputs,
+} from "./client/protocol";
+import { isActiveRun } from "./client/protocol";
+import { timestampMillis } from "./client/timestamps";
+export type { ChatItem } from "./client/protocol";
 import type {
   AcpToolKind,
   DesktopSessionEvent,
   GitFileDiff,
   ModelInfo,
+  ModelCatalog,
   PlanEntry,
   SessionMeta,
   SessionRunStatus,
@@ -24,16 +50,42 @@ import type {
   ToolLocation,
   UpdateInfo,
   UpdateState,
-} from './types';
+} from "./types";
+
+// ── 会话错误终态持久化 ─────────────────────────────────────────────────────
+// meta.status 只存内存，会话列表重建/重启后会洗成 idle（#124）：把「最后一
+// 次运行的失败终态」落到 localStorage，列表重建时恢复；新一轮 run 启动或
+// 成功结束时清除。
+const lastFailurePrefix = "easyagent.lastFailure.";
+function loadLastFailure(sessionId: string): boolean {
+  try {
+    return localStorage.getItem(lastFailurePrefix + sessionId) === "error";
+  } catch {
+    return false;
+  }
+}
+function saveLastFailure(sessionId: string, failed: boolean): void {
+  try {
+    if (failed) localStorage.setItem(lastFailurePrefix + sessionId, "error");
+    else localStorage.removeItem(lastFailurePrefix + sessionId);
+  } catch {
+    /* 隐私模式等场景下不可写：静默降级为旧行为 */
+  }
+}
 
 // ── REST API helpers ──────────────────────────────────────────────────────
 
-let baseUrl = 'http://127.0.0.1:8080';
+let baseUrl = "http://127.0.0.1:8080";
+let browserToken = "";
+export const wsService = new AgentTransport();
 
 export function setBaseUrl(url: string): void {
   baseUrl = url;
 }
 
+export function authHeaders(): Record<string, string> {
+  return browserToken ? { Authorization: "Bearer " + browserToken } : {};
+}
 export function getBaseUrl(): string {
   return baseUrl;
 }
@@ -45,14 +97,15 @@ function extractLocationsFromText(text: string): ToolLocation[] {
   const locations: ToolLocation[] = [];
   const seen = new Set<string>();
 
-  const knownExt = '(?:md|txt|json|js|ts|go|py|yaml|yml|toml|xml|html|css|sh|bash|rs|java|c|cpp|h|rb|php|sql|graphql|proto|vue|svelte|jsx|tsx|mdx|csv|log|cfg|conf|ini|env|lock|sum|mod)';
+  const knownExt =
+    "(?:md|txt|json|js|ts|go|py|yaml|yml|toml|xml|html|css|sh|bash|rs|java|c|cpp|h|rb|php|sql|graphql|proto|vue|svelte|jsx|tsx|mdx|csv|log|cfg|conf|ini|env|lock|sum|mod)";
 
   // Pattern 1: paths explicitly labeled (文件: /path/to/file)
   // This catches both files and directories after a label prefix.
   const pathPatterns = [
     /(?:文件|File|路径|Path)[:：]\s*(\/[^\s\n]+)/gi,
     // Paths with known extensions (broad match)
-    new RegExp(`(\\/[^\\s\\n]+\\.${knownExt})`, 'gi'),
+    new RegExp(`(\\/[^\\s\\n]+\\.${knownExt})`, "gi"),
     // Directory paths ending with / (e.g. /Users/weijian/agent-lessons/doubao-knowledge/work/)
     /(\/(?:[^\s\n]+\/){2,})/g,
     // Paths with ≥3 segments, no extension in last segment
@@ -70,7 +123,7 @@ function extractLocationsFromText(text: string): ToolLocation[] {
       // Skip very short matches (avoid false positives like "/a")
       if (path.length < 10) continue;
       // Normalize: remove trailing / for dedup, but keep it for display
-      const normalized = path.replace(/\/+$/, '');
+      const normalized = path.replace(/\/+$/, "");
       if (!seen.has(normalized)) {
         seen.add(normalized);
         locations.push({ path });
@@ -81,12 +134,13 @@ function extractLocationsFromText(text: string): ToolLocation[] {
   // Pattern 2: paths without extensions that have ≥2 segments
   // (e.g. /Users/weijian/agent-lessons/doubao-knowledge/work/something)
   // Only match if it follows a label prefix to avoid false positives.
-  const noExtPattern = /(?:文件|File|路径|Path)[:：]\s*(\/(?:[^\s\n]+\/)*[^\s\n/.]+)/gi;
+  const noExtPattern =
+    /(?:文件|File|路径|Path)[:：]\s*(\/(?:[^\s\n]+\/)*[^\s\n/.]+)/gi;
   let match;
   while ((match = noExtPattern.exec(text)) !== null) {
     const path = match[1].trim();
     if (path.length < 10) continue;
-    const normalized = path.replace(/\/+$/, '');
+    const normalized = path.replace(/\/+$/, "");
     if (!seen.has(normalized)) {
       seen.add(normalized);
       locations.push({ path });
@@ -96,10 +150,20 @@ function extractLocationsFromText(text: string): ToolLocation[] {
   return locations;
 }
 
-async function apiRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function apiRequest<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  if (window.piAPI)
+    return window.piAPI.request(method, path, body) as Promise<T>;
   const opts: RequestInit = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      "Content-Type": "application/json",
+      ...(browserToken ? { Authorization: "Bearer " + browserToken } : {}),
+    },
+    signal: AbortSignal.timeout(path.endsWith("/compact") ? 300000 : 20000),
   };
   if (body !== undefined) {
     opts.body = JSON.stringify(body);
@@ -107,123 +171,25 @@ async function apiRequest<T>(method: string, path: string, body?: unknown): Prom
   const res = await fetch(`${baseUrl}${path}`, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `HTTP ${res.status}`);
+    throw new Error(`HTTP ${res.status}: ${err.error || res.statusText}`);
   }
   return res.json();
 }
 
-// ── WebSocket ─────────────────────────────────────────────────────────────
-
-type MessageHandler = (data: any) => void;
-
-class WSService {
-  private ws: WebSocket | null = null;
-  private handlers: Map<string, MessageHandler[]> = new Map();
-  private _connected = false;
-  private reconnectAttempts = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-  get connected(): boolean {
-    return this._connected;
-  }
-
-  connect(url: string): void {
-    if (this._connected && this.ws && this.ws.readyState === WebSocket.OPEN) return;
-    this.disconnect();
-    const wsUrl = url.replace(/^http/, 'ws') + '/ws';
-    console.log(`[ws] Connecting to ${wsUrl}`);
-    this.ws = new WebSocket(wsUrl);
-
-    this.ws.onopen = () => {
-      console.log('[ws] Connected');
-      this._connected = true;
-      this.reconnectAttempts = 0; // reset backoff on successful connection
-      this.emit('connected', {});
-    };
-
-    this.ws.onclose = () => {
-      console.log('[ws] Disconnected');
-      this._connected = false;
-      this.emit('disconnected', {});
-      // Auto-reconnect (exponential backoff: 2s → 4s → 8s, max 30s)
-      const delay = Math.min(2000 * Math.pow(2, this.reconnectAttempts), 30000);
-      this.reconnectAttempts++;
-      this.reconnectTimer = setTimeout(() => this.connect(url), delay);
-    };
-
-    this.ws.onerror = () => {
-      this.emit('error', { error: 'WebSocket error' });
-    };
-
-    this.ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        this.routeMessage(data);
-      } catch (err) {
-        console.error('[ws] Failed to parse message', err);
-      }
-    };
-  }
-
-  private routeMessage(data: any): void {
-    this.emit('message', data);
-    const type = data.type;
-    if (type === 'event' && data.event) {
-      this.emit(`event:${data.event.type}`, data);
-    } else {
-      this.emit(`type:${type}`, data);
-    }
-  }
-
-  send(data: object): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(data));
-    } else {
-      console.warn('[ws] Cannot send, not connected');
-    }
-  }
-
-  disconnect(): void {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close();
-      this.ws = null;
-    }
-    this._connected = false;
-  }
-
-  on(event: string, handler: MessageHandler): () => void {
-    if (!this.handlers.has(event)) this.handlers.set(event, []);
-    this.handlers.get(event)!.push(handler);
-    return () => {
-      const handlers = this.handlers.get(event);
-      if (handlers) {
-        const idx = handlers.indexOf(handler);
-        if (idx >= 0) handlers.splice(idx, 1);
-      }
-    };
-  }
-
-  private emit(event: string, data: any): void {
-    const handlers = this.handlers.get(event);
-    if (handlers) handlers.forEach((h) => h(data));
-  }
-}
-
-export const wsService = new WSService();
-
 // ── View models ────────────────────────────────────────────────────────────
 
-export type ViewDensity = 'normal' | 'verbose' | 'summary';
+export type ViewDensity = "normal" | "verbose" | "summary";
 
-export type PaneKind = 'chat' | 'diff' | 'plan' | 'tasks' | 'terminal' | 'file';
+export type PaneKind = "chat" | "diff" | "plan" | "tasks" | "terminal" | "file";
 
 /** Which feature the right workspace sidebar is showing. */
-export type RightView = 'review' | 'files' | 'plan' | 'tasks' | 'kb' | 'profile';
+export type RightView =
+  | "review"
+  | "files"
+  | "plan"
+  | "tasks"
+  | "kb"
+  | "profile";
 
 /**
  * Global workspace layout — the right feature sidebar + the bottom terminal.
@@ -236,10 +202,7 @@ export interface WorkspaceUiState {
   /** Width (px) of the left session-list sidebar. */
   sidebarWidth: number;
   rightOpen: boolean;
-  /**
-   * Which feature panel is open, or null for "launcher" mode: the right rail
-   * is shown with full labels and no content panel.
-   */
+  /** Selected feature, or null when the entire right sidebar is closed. */
   rightView: RightView | null;
   bottomOpen: boolean;
   rightWidth: number;
@@ -253,32 +216,14 @@ export interface WorkspaceUiState {
 /** Clamp ranges for the draggable regions. */
 export const WORKSPACE_SIZE_LIMITS = {
   sidebarWidth: { min: 200, max: 480, default: 260 },
-  rightWidth: { min: 340, max: 900, default: 520 },
+  rightWidth: { min: 340, max: 900, default: 440 },
   bottomHeight: { min: 120, max: 720, default: 280 },
   fileTreeWidth: { min: 160, max: 480, default: 220 },
 } as const;
 
-export type ChatItem =
-  | { kind: 'user'; id: string; text: string }
-  | { kind: 'assistant'; id: string; text: string }
-  | { kind: 'thought'; id: string; text: string }
-  | { kind: 'system'; id: string; text: string }
-  | { kind: 'error'; id: string; text: string }
-  | {
-      kind: 'tool';
-      id: string;
-      toolCallId: string;
-      title: string;
-      toolKind: AcpToolKind;
-      status: ToolCallStatus;
-      locations?: ToolLocation[];
-      content: ToolCallContent[];
-      terminalOutput?: string;
-      rawInput?: Record<string, unknown>;
-      details?: Record<string, unknown>; // 结构化结果（如 music_play 的 PlayDetails），前端据此渲染
-    };
-
-export interface SessionView {
+export interface SessionView extends RunProjection {
+  accessMode?: AccessMode;
+  queue?: MessageQueue;
   meta: SessionMeta;
   transcript: ChatItem[];
   plan: PlanEntry[];
@@ -288,14 +233,59 @@ export interface SessionView {
   activePane: PaneKind;
   draftAssistantId?: string;
   openFile?: { path: string; content: string };
+  /** Client-only slash command feedback, retained across session switches. */
+  commandOutput?: string;
 }
+
+export type SettingsTab =
+  | "general"
+  | "appearance"
+  | "connections"
+  | "models"
+  | "mcp"
+  | "feishu"
+  | "capabilities"
+  | "skillMarket"
+  | "usage"
+  | "experiments";
 
 interface StoreState {
   ready: boolean;
   connected: boolean;
+  connectionState: string;
+  connectionError?: string;
+  profiles: ConnectionProfile[];
+  selectedProfile: string;
+  settingsOpen: boolean;
+  settingsTab: SettingsTab;
+  loadingSession?: string;
+  drafts: Record<string, string>;
+  draftInputs: Record<string, DraftInputs>;
+  setDraftInputs: (id: string, value: DraftInputs, profileId?: string) => void;
+  pending: Record<string, boolean>;
+  compacting: Record<string, boolean>;
+  compactSession: (id: string, instructions?: string) => Promise<{ summary?: string }>;
+  setDraft: (id: string, text: string) => void;
+  setCommandOutput: (id: string, output: string, profileId?: string) => void;
+  connectProfile: (id: string, token?: string) => Promise<void>;
+  saveProfile: (input: {
+    id: string;
+    name: string;
+    url: string;
+    token?: string;
+  }) => Promise<void>;
+  openSettings: (open?: boolean, tab?: SettingsTab) => void;
+  confirm: (
+    id: string,
+    confirmation: string,
+    approved: boolean,
+    answers?: import("./client/questions").QuestionAnswer[],
+  ) => Promise<void>;
   sessions: Record<string, SessionView>;
   order: string[];
   activeSessionId?: string;
+  unreadSessions: Record<string, number>;
+  forkNotice?: { sessionId: string; message: string };
   lang: Lang;
   setLang: (lang: Lang) => void;
   theme: ThemeMode;
@@ -303,8 +293,14 @@ interface StoreState {
 
   // Models fetched dynamically from backend
   models: ModelInfo[];
+  modelSource?: ModelCatalog["source"];
+  modelsNotice?: string;
+  refreshModels: () => Promise<void>;
   currentModel?: string;
+  commands: Command[];
   pickFolder: () => Promise<string | null>;
+  pathPicker?: { profileId: string; resolve: (path: string | null) => void };
+  resolvePathPicker: (path: string | null) => void;
 
   update: UpdateState | null;
   checkUpdate: () => Promise<void>;
@@ -313,24 +309,62 @@ interface StoreState {
 
   // ── Workspace layout ──
   workspace: WorkspaceUiState;
+  reviewTarget?: { profileId: string; sessionId: string; runId: string; path?: string };
+  reviewRevision: number;
+  openRunReview: (sessionId: string, runId: string, path?: string) => void;
   toggleSidebar: () => void;
   toggleWorkspaceRight: () => void;
   toggleWorkspaceView: (view: RightView) => void;
   toggleWorkspaceBottom: () => void;
   openWorkspaceView: (view: RightView) => void;
-  setWorkspaceSize: (key: keyof typeof WORKSPACE_SIZE_LIMITS, value: number) => void;
+  setWorkspaceSize: (
+    key: keyof typeof WORKSPACE_SIZE_LIMITS,
+    value: number,
+  ) => void;
   openFileTab: (path: string) => void;
   closeFileTab: (path: string) => void;
   setActiveFileTab: (path: string) => void;
 
   init: () => Promise<void>;
   refreshSessions: () => Promise<void>;
+  updateSession: (
+    id: string,
+    patch: { title?: string; pinned?: boolean; archived?: boolean },
+  ) => Promise<void>;
+  changeQueue: (
+    id: string,
+    action: string,
+    messageId?: string,
+    prompt?: string,
+    inputs?: PromptInputs,
+  ) => Promise<void>;
   setActive: (id: string) => Promise<void>;
-  createSession: (opts?: { cwd?: string; model?: string; application?: string }) => Promise<string>;
+  createSession: (opts?: {
+    cwd?: string;
+    model?: string;
+    application?: string;
+  }) => Promise<string>;
+  forkSession: (
+    sourceId: string,
+    opts?: { entryId?: string; beforeMessageIndex?: number },
+  ) => Promise<{
+    id: string;
+    source_id: string;
+    kept_messages: number;
+    kept_user_messages: number;
+    dropped_messages: number;
+  }>;
   deleteSession: (id: string) => Promise<void>;
-  sendPrompt: (id: string, text: string) => Promise<void>;
+  sendPrompt: (
+    id: string,
+    text: string,
+    inputs?: PromptInputs,
+  ) => Promise<void>;
+  retryRun: (id: string) => Promise<void>;
   cancel: (id: string) => Promise<void>;
   setModel: (id: string, modelId: string) => Promise<void>;
+  setAccessMode: (id: string, mode: AccessMode) => Promise<void>;
+  refreshSessionInfo: (id: string) => Promise<void>;
   setDensity: (id: string, density: ViewDensity) => void;
   togglePane: (id: string, pane: PaneKind) => void;
   refreshDiff: (id: string) => Promise<void>;
@@ -369,52 +403,48 @@ let cachedModels: ModelInfo[] = [];
 let cachedCurrentModel: string | undefined;
 
 let initialized = false;
+let connectionEpoch = 0;
+let storedDrafts: Record<string, Record<string, string>> = {};
+let storedInputs: Record<string, Record<string, DraftInputs>> = {};
+const pendingRequests = new Map<string, { id: string; text: string }>();
 
 const newId = (() => {
   let n = 0;
-  return () => `r${Date.now().toString(36)}-${(n++).toString(36)}`;
+  return () =>
+    globalThis.crypto?.randomUUID?.() ||
+    `r${Date.now().toString(36)}-${(n++).toString(36)}`;
 })();
 
 function emptyView(meta: SessionMeta): SessionView {
   return {
+    ...emptyProjection(),
     meta,
-    transcript: [],
     plan: [],
     diffs: [],
-    density: 'normal',
-    panes: ['chat'],
-    activePane: 'chat',
+    density: "normal",
+    panes: ["chat"],
+    activePane: "chat",
   };
 }
 
 function defaultModels(): ModelInfo[] {
-  if (cachedModels.length > 0) return cachedModels;
-  return [
-    { modelId: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-    { modelId: 'glm-5', name: 'GLM-5' },
-    { modelId: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
-  ];
+  return cachedModels;
 }
 
-async function fetchModels(): Promise<void> {
-  try {
-    const resp = await apiRequest<{ models: Array<{ id: string; name: string; provider: string }>; current?: { id: string } }>('GET', '/models');
-    if (resp.models && resp.models.length > 0) {
-      cachedModels = resp.models.map((m) => ({ modelId: m.id, name: m.name }));
-      cachedCurrentModel = resp.current?.id;
-    }
-  } catch (err) {
-    console.error('Failed to fetch models', err);
-  }
+async function fetchModels(): Promise<ModelCatalog> {
+  return apiRequest<ModelCatalog>("GET", "/models");
 }
 
 // ── Workspace layout persistence ────────────────────────────────────────────
 
-const WORKSPACE_KEY = 'pi-go.workspace';
+const WORKSPACE_KEY = "pi-go.workspace";
 
-function clampSize(v: unknown, key: keyof typeof WORKSPACE_SIZE_LIMITS): number {
+function clampSize(
+  v: unknown,
+  key: keyof typeof WORKSPACE_SIZE_LIMITS,
+): number {
   const { min, max, default: dflt } = WORKSPACE_SIZE_LIMITS[key];
-  if (typeof v !== 'number' || !Number.isFinite(v)) return dflt;
+  if (typeof v !== "number" || !Number.isFinite(v)) return dflt;
   return Math.min(max, Math.max(min, v));
 }
 
@@ -434,16 +464,23 @@ function loadWorkspaceUi(): WorkspaceUiState {
     const raw = localStorage.getItem(WORKSPACE_KEY);
     if (raw) {
       const p = JSON.parse(raw) as Partial<WorkspaceUiState>;
+      const rightView =
+        p.rightView &&
+        ["review", "files", "plan", "tasks", "kb", "profile"].includes(
+          p.rightView,
+        )
+          ? p.rightView
+          : null;
       return {
         ...base,
         sidebarOpen: p.sidebarOpen ?? true,
-        sidebarWidth: clampSize(p.sidebarWidth, 'sidebarWidth'),
-        rightOpen: !!p.rightOpen,
-        rightView: p.rightView ?? null,
+        sidebarWidth: WORKSPACE_SIZE_LIMITS.sidebarWidth.default,
+        rightOpen: !!p.rightOpen && rightView != null,
+        rightView,
         bottomOpen: !!p.bottomOpen,
-        rightWidth: clampSize(p.rightWidth, 'rightWidth'),
-        bottomHeight: clampSize(p.bottomHeight, 'bottomHeight'),
-        fileTreeWidth: clampSize(p.fileTreeWidth, 'fileTreeWidth'),
+        rightWidth: clampSize(p.rightWidth, "rightWidth"),
+        bottomHeight: clampSize(p.bottomHeight, "bottomHeight"),
+        fileTreeWidth: clampSize(p.fileTreeWidth, "fileTreeWidth"),
       };
     }
   } catch {
@@ -475,13 +512,242 @@ function persistWorkspaceUi(w: WorkspaceUiState): void {
 export const useStore = create<StoreState>((set, get) => ({
   ready: false,
   connected: false,
+  connectionState: "disconnected",
+  profiles: [],
+  selectedProfile: "",
+  settingsOpen: false,
+  settingsTab: "general",
+  unreadSessions: {},
+  drafts: {},
+  draftInputs: {},
+  setDraftInputs: (id, value, profileId = get().selectedProfile) => {
+    if (profileId === get().selectedProfile)
+      set((state) => ({ draftInputs: { ...state.draftInputs, [id]: value } }));
+    storedInputs[profileId] = {
+      ...(storedInputs[profileId] || {}),
+      [id]: value,
+    };
+    try {
+      sessionStorage.setItem(
+        "easyagent.desktop.inputs.v1",
+        JSON.stringify(storedInputs),
+      );
+    } catch {}
+  },
+  pending: {},
+  compacting: {},
+  setDraft: (id, text) => {
+    set((s) => ({ drafts: { ...s.drafts, [id]: text } }));
+    try {
+      storedDrafts[get().selectedProfile] = get().drafts;
+      sessionStorage.setItem(
+        "easyagent.desktop.drafts.v2",
+        JSON.stringify(storedDrafts),
+      );
+    } catch {
+      /* Memory retains draft when storage is unavailable. */
+    }
+  },
+  openSettings: (open = true, tab) =>
+    set((s) => ({
+      settingsOpen: open,
+      settingsTab: open ? (tab ?? "general") : s.settingsTab,
+    })),
+  setCommandOutput: (id, output, profileId = get().selectedProfile) => {
+    if (profileId !== get().selectedProfile) return;
+    updateView(set, id, (view) => ({ ...view, commandOutput: output }));
+  },
+  saveProfile: async (input) => {
+    if (window.piAPI) {
+      const result = await window.piAPI.saveProfile(input);
+      set({ profiles: result.profiles });
+    } else {
+      setStoredServerUrl(input.url);
+      browserToken = input.token || browserToken;
+      set({
+        profiles: [
+          {
+            id: "browser",
+            kind: "remote",
+            name: input.name,
+            url: input.url,
+            hasToken: !!browserToken,
+          },
+        ],
+      });
+    }
+  },
+  connectProfile: async (id, token) => {
+    const epoch = ++connectionEpoch;
+    get().resolvePathPicker(null);
+    const previousState = get();
+    saveWorkspaceFiles(
+      previousState.selectedProfile,
+      previousState.activeSessionId
+        ? previousState.sessions[previousState.activeSessionId]?.meta.cwd || ""
+        : "",
+      previousState.workspace,
+    );
+    storedDrafts[get().selectedProfile] = get().drafts;
+    storedInputs[get().selectedProfile] = get().draftInputs;
+    set({
+      connected: false,
+      connectionState: "connecting",
+      connectionError: undefined,
+      forkNotice: undefined,
+      selectedProfile: id,
+    });
+    await wsService.disconnect();
+    if (epoch !== connectionEpoch) return;
+    if (token !== undefined) browserToken = token;
+    try {
+      if (window.piAPI) {
+        const result = await window.piAPI.selectProfile(id);
+        set({ profiles: result.profiles });
+        const url = await window.piAPI.getServerUrl();
+        if (epoch !== connectionEpoch) return;
+        setBaseUrl(url || "");
+      } else {
+        const profile = get().profiles.find((p) => p.id === id);
+        if (!profile) throw new Error("请选择服务连接");
+        setBaseUrl(profile.url);
+      }
+      if (epoch !== connectionEpoch) return;
+      cachedModels = [];
+      cachedCurrentModel = undefined;
+      set({
+        drafts: storedDrafts[id] || {},
+        draftInputs: storedInputs[id] || {},
+        pending: {},
+        compacting: {},
+        models: [],
+        currentModel: undefined,
+        modelSource: undefined,
+        modelsNotice: undefined,
+        selectedProfile: id,
+        sessions: {},
+        order: [],
+        activeSessionId: undefined,
+        unreadSessions: {},
+        workspace: {
+          ...get().workspace,
+          fileTabs: [],
+          activeFileTab: undefined,
+        },
+      });
+      void window.piAPI?.setBadge?.(0);
+      await wsService.connect(baseUrl, browserToken);
+      await get().refreshModels();
+      if (epoch !== connectionEpoch) return;
+      try {
+        const catalog = await apiRequest<{
+          commands: Array<{
+            name: string;
+            description: string;
+            subcommands?: Array<{ name: string; description: string }>;
+          }>;
+        }>("GET", "/commands");
+        if (epoch !== connectionEpoch) return;
+        const merged = [...localCommands];
+        for (const item of catalog.commands || []) {
+          const existing = merged.find((c) => c.name === item.name);
+          if (existing) {
+            existing.subcommands = item.subcommands;
+          } else
+            merged.push({
+              name: item.name,
+              label: item.name,
+              description: item.description,
+              subcommands: item.subcommands,
+            });
+        }
+        set({ commands: merged });
+      } catch {
+        /* Older servers retain usable local commands. */
+      }
+      await get().refreshSessions();
+      if (epoch !== connectionEpoch) return;
+      const first = get().order[0];
+      if (first) await get().setActive(first);
+    } catch (error) {
+      if (epoch !== connectionEpoch) return;
+      set({
+        connectionState: "error",
+        connectionError: error instanceof Error ? error.message : "连接失败",
+      });
+    }
+  },
+  confirm: async (id, confirmation, approved, answers) => {
+    const run = get().sessions[id]?.run,
+      epoch = connectionEpoch;
+    if (!run) throw new Error("任务已结束，请刷新会话");
+    try {
+      await apiRequest(
+        "POST",
+        `/sessions/${encodeURIComponent(id)}/run/confirm`,
+        { run_id: run.run_id, confirmation_id: confirmation, approved, answers },
+      );
+    } catch (error) {
+      if (epoch === connectionEpoch && /HTTP 409\b/.test(String(error))) {
+        const snapshot = await apiRequest<Envelope>("GET", `/sessions/${encodeURIComponent(id)}/run`);
+        if (epoch === connectionEpoch)
+          updateView(set, id, (v) => ({ ...v, ...reduceEnvelope(v, snapshot) }));
+      }
+      throw error;
+    }
+    if (epoch === connectionEpoch)
+      updateView(set, id, (v) => ({
+        ...v,
+        confirmations: v.confirmations.filter(
+          (c) => c.confirmation_id !== confirmation,
+        ),
+        phase: v.confirmations.some((c) => c.confirmation_id !== confirmation) ? "approval" : "thinking",
+      }));
+  },
   sessions: {},
   order: [],
   models: [],
   currentModel: undefined,
+  refreshModels: async () => {
+    const epoch = connectionEpoch;
+    try {
+      const catalog = await fetchModels();
+      if (epoch !== connectionEpoch) return;
+      cachedModels = (catalog.models || []).map((m) => ({
+        modelId: m.id,
+        name: m.name || m.id,
+      }));
+      cachedCurrentModel = catalog.current?.id;
+      set({
+        models: cachedModels,
+        currentModel: cachedCurrentModel,
+        modelSource: catalog.source,
+        modelsNotice: catalog.discovery_error,
+      });
+    } catch {
+      if (epoch !== connectionEpoch) return;
+      set({ modelsNotice: "模型列表暂不可用，可在设置中检查模型连接。" });
+    }
+  },
+  commands: localCommands,
   workspace: loadWorkspaceUi(),
+  reviewRevision: 0,
   pickFolder: async () => {
-    return await window.piAPI?.pickFolder() ?? null;
+    if (
+      get().profiles.find((p) => p.id === get().selectedProfile)?.kind !==
+      "local"
+    ) {
+      get().resolvePathPicker(null);
+      return new Promise((resolve) => {
+        set({ pathPicker: { profileId: get().selectedProfile, resolve } });
+      });
+    }
+    return (await window.piAPI?.pickFolder()) ?? null;
+  },
+  resolvePathPicker: (path) => {
+    const picker = get().pathPicker;
+    set({ pathPicker: undefined });
+    picker?.resolve(picker.profileId === get().selectedProfile ? path : null);
   },
   lang: loadStoredLang(),
   setLang: (lang) => {
@@ -495,38 +761,103 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   // ── Global music player ──
-  music: { current: null, playing: false, currentTime: 0, duration: 0, error: false },
+  music: {
+    current: null,
+    playing: false,
+    currentTime: 0,
+    duration: 0,
+    error: false,
+  },
   playMusic: (song) => {
     set((s) => ({
-      music: { ...s.music, current: song, playing: true, currentTime: 0, duration: song.duration || 0, error: false },
+      music: {
+        ...s.music,
+        current: song,
+        playing: true,
+        currentTime: 0,
+        duration: song.duration || 0,
+        error: false,
+      },
     }));
   },
-  setMusicPlaying: (playing) => set((s) => ({ music: { ...s.music, playing } })),
-  setMusicTime: (time) => set((s) => ({ music: { ...s.music, currentTime: time } })),
-  setMusicDuration: (duration) => set((s) => ({ music: { ...s.music, duration } })),
+  setMusicPlaying: (playing) =>
+    set((s) => ({ music: { ...s.music, playing } })),
+  setMusicTime: (time) =>
+    set((s) => ({ music: { ...s.music, currentTime: time } })),
+  setMusicDuration: (duration) =>
+    set((s) => ({ music: { ...s.music, duration } })),
   setMusicError: (error) => set((s) => ({ music: { ...s.music, error } })),
-  toggleMusic: () => set((s) => ({ music: { ...s.music, playing: !s.music.playing } })),
-  clearMusic: () => set((s) => ({ music: { current: null, playing: false, currentTime: 0, duration: 0, error: false } })),
+  toggleMusic: () =>
+    set((s) => ({ music: { ...s.music, playing: !s.music.playing } })),
+  clearMusic: () =>
+    set((s) => ({
+      music: {
+        current: null,
+        playing: false,
+        currentTime: 0,
+        duration: 0,
+        error: false,
+      },
+    })),
 
   update: null,
   checkUpdate: async () => {
+    if (get().update?.phase === "checking") return;
+    set({ update: { supported: true, phase: "checking", currentVersion: __APP_VERSION__ } });
     try {
       const info = await window.piAPI?.checkForUpdate();
       if (info) {
-        set({ update: { supported: true, phase: 'available', info, currentVersion: __APP_VERSION__ } });
+        set({
+          update: {
+            supported: true,
+            phase: "available",
+            info,
+            currentVersion: __APP_VERSION__,
+          },
+        });
       } else {
-        set({ update: { supported: true, phase: 'idle', info: null, currentVersion: __APP_VERSION__ } });
+        set({
+          update: {
+            supported: true,
+            phase: "idle",
+            info: null,
+            currentVersion: __APP_VERSION__,
+          },
+        });
       }
-    } catch {
-      set({ update: { supported: true, phase: 'error', error: 'Check failed', currentVersion: __APP_VERSION__ } });
+    } catch (error) {
+      set({
+        update: {
+          supported: true,
+          phase: "error",
+          error: error instanceof Error
+            ? error.message.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/, "")
+            : "检查桌面更新失败",
+          currentVersion: __APP_VERSION__,
+        },
+      });
     }
   },
   downloadUpdate: async () => {
     const u = get().update;
-    if (u?.info?.downloadUrl) {
-      await window.piAPI?.openDownloadPage(u.info.downloadUrl);
+    if (u?.phase === "error") {
+      await get().checkUpdate();
+      return;
     }
-    set((s) => ({ update: s.update ? { ...s.update, phase: 'idle' } : null }));
+    if (u?.info?.version) {
+      try {
+        const status = await window.piAPI?.desktopUpdateStatus?.();
+        if (status?.supported) {
+          const result = await window.piAPI?.installDesktopUpdate();
+          if (result?.phase === "error") throw Error(result.error);
+          return;
+        }
+        if (status && !status.manualDownload) throw Error(status.message || "固定签名身份未就绪，请检查签名配置后重试");
+        await window.piAPI?.openDownloadPage(u.info.downloadUrl);
+      } catch (error) {
+        set({ update: { ...u, phase: "error", error: error instanceof Error ? error.message : "更新失败，当前版本保留" } });
+      }
+    }
   },
   snoozeUpdate: () =>
     set((s) => (s.update ? { update: { ...s.update, snoozed: true } } : {})),
@@ -534,7 +865,10 @@ export const useStore = create<StoreState>((set, get) => ({
   // ── Workspace layout actions ──
   toggleSidebar: () => {
     set((s) => {
-      const workspace = { ...s.workspace, sidebarOpen: !s.workspace.sidebarOpen };
+      const workspace = {
+        ...s.workspace,
+        sidebarOpen: !s.workspace.sidebarOpen,
+      };
       persistWorkspaceUi(workspace);
       return { workspace };
     });
@@ -543,18 +877,23 @@ export const useStore = create<StoreState>((set, get) => ({
     set((s) => {
       // When opening, default to 'files' if no view is selected yet.
       const rightOpen = !s.workspace.rightOpen;
-      const rightView = rightOpen ? (s.workspace.rightView ?? 'files') : s.workspace.rightView;
-      const workspace: WorkspaceUiState = { ...s.workspace, rightOpen, rightView };
+      const rightView = rightOpen
+        ? (s.workspace.rightView ?? "files")
+        : s.workspace.rightView;
+      const workspace: WorkspaceUiState = {
+        ...s.workspace,
+        rightOpen,
+        rightView,
+      };
       persistWorkspaceUi(workspace);
       return { workspace };
     });
   },
   toggleWorkspaceView: (view) => {
     set((s) => {
-      // If the clicked view is already active, collapse to launcher (rightView = null).
-      // Otherwise, open the selected view.
-      if (s.workspace.rightView === view) {
-        const workspace = { ...s.workspace, rightView: null };
+      // Clicking the visible selected feature closes the entire sidebar.
+      if (s.workspace.rightOpen && s.workspace.rightView === view) {
+        const workspace = { ...s.workspace, rightOpen: false, rightView: null };
         persistWorkspaceUi(workspace);
         return { workspace };
       }
@@ -569,6 +908,11 @@ export const useStore = create<StoreState>((set, get) => ({
       persistWorkspaceUi(workspace);
       return { workspace };
     });
+  },
+  openRunReview: (sessionId, runId, path) => {
+    if (sessionId !== get().activeSessionId) return;
+    set({ reviewTarget: { profileId: get().selectedProfile, sessionId, runId, path } });
+    get().openWorkspaceView("review");
   },
   openWorkspaceView: (view) => {
     set((s) => {
@@ -590,19 +934,40 @@ export const useStore = create<StoreState>((set, get) => ({
       const tabs = s.workspace.fileTabs.includes(path)
         ? s.workspace.fileTabs
         : [...s.workspace.fileTabs, path];
-      const workspace: WorkspaceUiState = { ...s.workspace, fileTabs: tabs, activeFileTab: path, rightOpen: true, rightView: 'files' as RightView };
+      const workspace: WorkspaceUiState = {
+        ...s.workspace,
+        fileTabs: tabs,
+        activeFileTab: path,
+        rightOpen: true,
+        rightView: "files" as RightView,
+      };
       persistWorkspaceUi(workspace);
+      saveWorkspaceFiles(
+        s.selectedProfile,
+        s.activeSessionId ? s.sessions[s.activeSessionId]?.meta.cwd || "" : "",
+        workspace,
+      );
       return { workspace };
     });
   },
   closeFileTab: (path) => {
     set((s) => {
       const tabs = s.workspace.fileTabs.filter((t) => t !== path);
-      const activeFileTab = s.workspace.activeFileTab === path
-        ? (tabs[tabs.length - 1] ?? undefined)
-        : s.workspace.activeFileTab;
-      const workspace: WorkspaceUiState = { ...s.workspace, fileTabs: tabs, activeFileTab };
+      const activeFileTab =
+        s.workspace.activeFileTab === path
+          ? (tabs[tabs.length - 1] ?? undefined)
+          : s.workspace.activeFileTab;
+      const workspace: WorkspaceUiState = {
+        ...s.workspace,
+        fileTabs: tabs,
+        activeFileTab,
+      };
       persistWorkspaceUi(workspace);
+      saveWorkspaceFiles(
+        s.selectedProfile,
+        s.activeSessionId ? s.sessions[s.activeSessionId]?.meta.cwd || "" : "",
+        workspace,
+      );
       return { workspace };
     });
   },
@@ -610,6 +975,11 @@ export const useStore = create<StoreState>((set, get) => ({
     set((s) => {
       const workspace = { ...s.workspace, activeFileTab: path };
       persistWorkspaceUi(workspace);
+      saveWorkspaceFiles(
+        s.selectedProfile,
+        s.activeSessionId ? s.sessions[s.activeSessionId]?.meta.cwd || "" : "",
+        workspace,
+      );
       return { workspace };
     });
   },
@@ -617,195 +987,208 @@ export const useStore = create<StoreState>((set, get) => ({
   init: async () => {
     if (initialized) return;
     initialized = true;
-
-    // Get server URL: Electron uses IPC, mobile/browser uses stored URL
-    if (typeof window !== 'undefined' && window.piAPI) {
-      const serverUrl = await window.piAPI.getServerUrl();
-      if (serverUrl) {
-        setBaseUrl(serverUrl);
-      }
-    } else {
-      // Mobile/PWA: use stored server URL (set via ServerConnect screen)
-      const stored = getStoredServerUrl();
-      if (stored) {
-        setBaseUrl(stored);
-      }
-    }
-
-    // Connect WebSocket
-    const wsUrl = getBaseUrl();
-    wsService.connect(wsUrl);
-
-    wsService.on('connected', () => set({ connected: true }));
-    wsService.on('disconnected', () => set({ connected: false }));
-
-    // ── WebSocket event handlers ──
-
-    wsService.on('type:session_id', (data: any) => {
-      // Server may send a session_id response
+    window.piAPI?.onDesktopUpdate?.((state) => {
+      if (!state.supported || state.phase === "idle") return;
+      set({ update: { supported: true, phase: state.phase, error: state.error, currentVersion: __APP_VERSION__,
+        info: state.version ? { version: state.version, downloadUrl: "", releaseNotes: "" } : undefined } });
     });
-
-    wsService.on('type:status', (data: any) => {
-      const sessionId = data.session_id;
-      if (!sessionId) return;
-      if (!data.streaming) {
-        // Streaming done — finalize the assistant message
-        updateView(set, sessionId, (v) => {
-          const transcript = [...v.transcript];
-          const last = transcript[transcript.length - 1];
-          if (last && last.kind === 'assistant') {
-            transcript[transcript.length - 1] = { ...last };
+    let queue: Envelope[] = [],
+      scheduled = 0;
+    const flush = () => {
+      if (scheduled) cancelAnimationFrame(scheduled);
+      scheduled = 0;
+      const batch = queue;
+      queue = [];
+      const activeId = get().activeSessionId;
+      const unreadDelta: Record<string, number> = {};
+      const finished: { id: string; ok: boolean }[] = [];
+      set((s) => {
+        const sessions = { ...s.sessions };
+        for (const message of batch) {
+          const id = message.session_id;
+          if (!id || !sessions[id]) continue;
+          const v = sessions[id];
+          const wasActive = isActiveRun(v.run);
+          const projection = reduceEnvelope(v, message);
+          const nowActive = isActiveRun(projection.run);
+          // A run reached a terminal state in this batch: count it as unread
+          // for background sessions and queue a system notification.
+          if (wasActive && !nowActive && projection.run) {
+            if (id !== activeId) unreadDelta[id] = (unreadDelta[id] || 0) + 1;
+            const state = projection.run.state;
+            // interrupted/cancelled are not failures: no scary notification.
+            if (state === "completed" || state === "failed")
+              finished.push({ id, ok: state === "completed" });
           }
-          return {
+          const status: SessionRunStatus = nowActive
+            ? "thinking"
+            : projection.phase === "error"
+              ? "error"
+              : "idle";
+          // 失败终态持久化：新 run 启动或成功结束都清除，错误保留到被处理
+          saveLastFailure(id, !nowActive && status === "error");
+          const nextQueue =
+            message.queue && message.queue.revision >= (v.queue?.revision || 0)
+              ? message.queue
+              : v.queue;
+          sessions[id] = {
             ...v,
-            transcript,
-            meta: { ...v.meta, status: 'idle' as SessionRunStatus },
-            draftAssistantId: undefined,
+            ...projection,
+            queue: nextQueue,
+            meta: { ...v.meta, status },
           };
-        });
-      }
-    });
-
-    wsService.on('event:text_delta', (data: any) => {
-      const sessionId = data.session_id;
-      const delta = data.event?.text_delta || '';
-      if (!sessionId || !delta) return;
-      updateView(set, sessionId, (v) => {
-        const transcript = [...v.transcript];
-        const last = transcript[transcript.length - 1];
-        if (last && last.kind === 'assistant') {
-          // Append to existing assistant message
-          transcript[transcript.length - 1] = { ...last, text: last.text + delta };
-        } else {
-          // Last item is a tool/system/etc — create a new assistant item
-          const id = v.draftAssistantId || newId();
-          transcript.push({ kind: 'assistant', id, text: delta });
-          return { ...v, transcript, draftAssistantId: id, meta: { ...v.meta, status: 'thinking' as SessionRunStatus } };
         }
-        return { ...v, transcript, meta: { ...v.meta, status: 'thinking' as SessionRunStatus } };
+        return { sessions };
       });
-    });
-
-    wsService.on('event:tool_start', (data: any) => {
-      const sessionId = data.session_id;
-      if (!sessionId) return;
-      const toolName = data.event?.tool_name || 'tool';
-      const toolCallId = data.event?.tool_call_id || newId();
-      const toolKind = inferToolKind(toolName);
-      const item: ChatItem = {
-        kind: 'tool',
-        id: newId(),
-        toolCallId,
-        title: toolName,
-        toolKind,
-        status: 'in_progress',
-        content: [],
-      };
-      updateView(set, sessionId, (v) => ({
-        ...v,
-        transcript: [...v.transcript, item],
-      }));
-    });
-
-    wsService.on('event:tool_end', (data: any) => {
-      const sessionId = data.session_id;
-      if (!sessionId) return;
-      const toolCallId = data.event?.tool_call_id || '';
-      const result = data.event?.tool_result;
-      const isError = data.event?.is_error || false;
-      // result 可能是字符串（老格式）或 ToolResult 对象（{Content, UserFacing, Details}）
-      // 展示文本优先 UserFacing，次 Content，兼容字符串
-      const resultObj = result && typeof result === 'object' ? result : null;
-      const resultText =
-        (resultObj && (resultObj.UserFacing || resultObj.Content)) ||
-        (typeof result === 'string' ? result : JSON.stringify(result || ''));
-      const details = resultObj?.Details ?? data.event?.tool_details ?? undefined;
-
-      // Extract file paths from result text for clickable locations
-      const locations = extractLocationsFromText(resultText);
-
-      updateView(set, sessionId, (v) => {
-        const transcript = v.transcript.map((item) => {
-          if (item.kind === 'tool' && item.toolCallId === toolCallId) {
-            return {
-              ...item,
-              status: (isError ? 'failed' : 'completed') as ToolCallStatus,
-              content: [{ text: resultText }],
-              details,
-              locations: locations.length > 0 ? locations : item.locations,
-            };
-          }
-          return item;
+      // Post-settle side effects (outside the set() updater, which must stay
+      // pure): unread counters, Dock badge, and native notifications.
+      if (Object.keys(unreadDelta).length) {
+        let total = 0;
+        set((s) => {
+          const unreadSessions = { ...s.unreadSessions };
+          for (const [id, count] of Object.entries(unreadDelta))
+            unreadSessions[id] = (unreadSessions[id] || 0) + count;
+          total = Object.keys(unreadSessions).length;
+          return { unreadSessions };
         });
-        return { ...v, transcript };
-      });
-    });
-
-    wsService.on('event:turn_end', () => {
-      // Turn ended — backend status message will finalize
-    });
-
-    wsService.on('event:error', (data: any) => {
-      const sessionId = data.session_id;
-      const error = data.event?.error || 'Unknown error';
-      if (!sessionId) return;
-      const item: ChatItem = { kind: 'error', id: newId(), text: error };
-      updateView(set, sessionId, (v) => ({
-        ...v,
-        transcript: [...v.transcript, item],
-        meta: { ...v.meta, status: 'error' as SessionRunStatus },
-      }));
-    });
-
-    wsService.on('type:error', (data: any) => {
-      const sessionId = data.session_id;
-      if (sessionId) {
-        const item: ChatItem = { kind: 'error', id: newId(), text: data.message || 'Unknown error' };
-        updateView(set, sessionId, (v) => ({
-          ...v,
-          transcript: [...v.transcript, item],
-          meta: { ...v.meta, status: 'error' as SessionRunStatus },
-        }));
+        void window.piAPI?.setBadge?.(total);
       }
+      for (const { id, ok } of finished) {
+        const title = get().sessions[id]?.meta?.title;
+        void window.piAPI?.notifyRunDone?.({ sessionTitle: title, ok });
+      }
+    };
+    wsService.on("status", (value) =>
+      set({
+        connected: value.state === "connected",
+        connectionState: value.state,
+        connectionError: value.message,
+      }),
+    );
+    wsService.on("backend", (value) => {
+      if (value.state === "error") set({ connectionError: value.message });
     });
-
-    // Fetch models from backend (dynamic from gateway)
-    await fetchModels();
-    set({ models: cachedModels, currentModel: cachedCurrentModel });
-
-    // Load existing sessions
-    await get().refreshSessions();
+    wsService.on("open", () => {
+      const s = get();
+      for (const [id, view] of Object.entries(s.sessions))
+        if (id === s.activeSessionId || isActiveRun(view.run))
+          void wsService.send({
+            type: "subscribe",
+            session_id: id,
+            run_id: view.run?.run_id,
+            after_seq: view.seq || undefined,
+          });
+    });
+    wsService.on("message", (message: Envelope) => {
+      if (message.type === "error") {
+        flush();
+        set({
+          connectionError: message.message || message.error || "请求未完成",
+        });
+        return;
+      }
+      queue.push(message);
+      // The first visible chunk and authoritative transitions render immediately.
+      const view = message.session_id
+        ? get().sessions[message.session_id]
+        : undefined;
+      if (
+        message.type !== "event" ||
+        message.event?.type !== "text_delta" ||
+        !view?.transcript.some(
+          (item) =>
+            item.kind === "assistant" &&
+            item.id.startsWith(view.run?.run_id || "\0"),
+        )
+      )
+        flush();
+      else if (!scheduled) scheduled = requestAnimationFrame(flush);
+    });
+    let id: string;
+    if (window.piAPI) {
+      const saved = await window.piAPI.profiles();
+      set({ profiles: saved.profiles });
+      id = saved.selected;
+    } else {
+      const url = getStoredServerUrl() || "http://127.0.0.1:8080";
+      set({
+        profiles: [
+          {
+            id: "browser",
+            name: "服务连接",
+            kind: "remote",
+            url,
+            hasToken: false,
+          },
+        ],
+      });
+      id = "browser";
+    }
+    try {
+      const drafts = JSON.parse(
+        sessionStorage.getItem("easyagent.desktop.drafts.v2") || "{}",
+      );
+      if (drafts && typeof drafts === "object" && !Array.isArray(drafts)) {
+        for (const [profile, values] of Object.entries(drafts)) {
+          if (values && typeof values === "object" && !Array.isArray(values))
+            storedDrafts[profile] = Object.fromEntries(
+              Object.entries(values).filter(
+                ([, text]) => typeof text === "string",
+              ),
+            ) as Record<string, string>;
+        }
+      }
+    } catch {}
+    try {
+      const saved = JSON.parse(
+        sessionStorage.getItem("easyagent.desktop.inputs.v1") || "{}",
+      );
+      storedInputs = sanitizeInputDrafts(saved);
+    } catch {}
     set({ ready: true });
+    await get().connectProfile(id);
   },
 
   refreshSessions: async () => {
+    const epoch = connectionEpoch;
     try {
-      const raw = await apiRequest<any[]>('GET', '/sessions');
+      const raw = await apiRequest<any[]>("GET", "/sessions");
+      if (epoch !== connectionEpoch) return;
       const sessions: any[] = Array.isArray(raw) ? raw : [];
       set((s) => {
         const newSessions: Record<string, SessionView> = {};
         for (const sess of sessions) {
           // Preserve existing cwd if the backend doesn't provide one
           const existingCwd = s.sessions[sess.id]?.meta.cwd;
-          const cwd = sess.workspace || existingCwd || '';
+          const cwd = sess.workspace || existingCwd || "";
           // Derive title: prefer backend title, then existing local title, then fallback
-          const backendTitle = sess.title ? deriveTitleFromMessage(sess.title) : undefined;
+          const backendTitle = sess.title
+            ? deriveTitleFromMessage(sess.title)
+            : undefined;
           const existingTitle = s.sessions[sess.id]?.meta.title;
           // If existing title is the auto-generated fallback, prefer backend title
-          const isFallback = !existingTitle || existingTitle.startsWith('Session ');
-          const title = isFallback ? (backendTitle || existingTitle || `Session ${sess.id.slice(-6)}`) : existingTitle;
+          const isFallback =
+            !existingTitle || existingTitle.startsWith("Session ");
+          const title =
+            backendTitle ||
+            (isFallback ? `Session ${sess.id.slice(-6)}` : existingTitle!);
           // Read application from backend, fallback to existing
-          const application = sess.application || s.sessions[sess.id]?.meta.application;
+          const application =
+            sess.application || s.sessions[sess.id]?.meta.application;
           const meta: SessionMeta = {
             id: sess.id,
             title,
             cwd,
-            status: 'idle' as SessionRunStatus,
+            // 恢复持久化的失败终态：列表重建不洗掉错误标记（#124）
+            status: (loadLastFailure(sess.id) ? "error" : "idle") as SessionRunStatus,
             model: s.sessions[sess.id]?.meta.model,
             application,
+            pinned: !!sess.pinned,
+            archived: !!sess.archived,
+            forked_from: sess.forked_from,
             availableModels: defaultModels(),
-            createdAt: sess.created_at || 0,
-            updatedAt: sess.last_active || 0,
+            createdAt: timestampMillis(sess.created_at),
+            updatedAt: timestampMillis(sess.last_active),
           };
           newSessions[sess.id] = s.sessions[sess.id] ?? emptyView(meta);
           // Update meta for existing sessions (in case cwd/title/application was loaded from backend)
@@ -817,7 +1200,10 @@ export const useStore = create<StoreState>((set, get) => ({
                 cwd,
                 title,
                 application,
-                updatedAt: sess.last_active || 0,
+                pinned: !!sess.pinned,
+                archived: !!sess.archived,
+                forked_from: sess.forked_from,
+                updatedAt: timestampMillis(sess.last_active),
               },
             };
           }
@@ -825,149 +1211,290 @@ export const useStore = create<StoreState>((set, get) => ({
         return { sessions: newSessions, order: sessions.map((s) => s.id) };
       });
     } catch (err) {
-      console.error('Failed to load sessions', err);
+      if (epoch !== connectionEpoch) return;
+      set({
+        connectionError:
+          err instanceof Error ? err.message : "无法读取会话列表",
+      });
     }
   },
 
+  updateSession: async (id, patch) => {
+    const epoch = connectionEpoch;
+    await apiRequest("PATCH", `/sessions/${encodeURIComponent(id)}`, patch);
+    if (epoch !== connectionEpoch) return;
+    updateView(set, id, (v) => ({ ...v, meta: { ...v.meta, ...patch } }));
+  },
+
   setActive: async (id) => {
-    set({ activeSessionId: id });
-    // Load transcript from backend if this session has no messages yet
-    const view = get().sessions[id];
-    if (view && view.transcript.length === 0) {
-      try {
-        const messages = await apiRequest<any[]>('GET', `/sessions/${id}/messages`);
-        if (!Array.isArray(messages) || messages.length === 0) return;
-
-        const items: ChatItem[] = [];
-        for (const msg of messages) {
-          if (msg.role === 'user' && msg.content) {
-            items.push({ kind: 'user', id: newId(), text: msg.content });
-          } else if (msg.role === 'assistant') {
-            // Thinking
-            if (msg.thinking) {
-              items.push({ kind: 'thought', id: newId(), text: msg.thinking });
-            }
-            // Tool calls (each becomes a completed tool item)
-            if (msg.tool_calls && msg.tool_calls.length > 0) {
-              for (const tc of msg.tool_calls) {
-                const toolKind = inferToolKind(tc.name);
-                // Find matching tool result
-                const resultMsg = messages.find(
-                  (m: any) => m.role === 'tool' && m.tool_call_id === tc.id,
-                );
-                const resultText = resultMsg?.content || '';
-                const isError = resultMsg?.is_error || false;
-                const toolDetails = resultMsg?.tool_details ?? undefined;
-                items.push({
-                  kind: 'tool',
-                  id: newId(),
-                  toolCallId: tc.id,
-                  title: tc.name,
-                  toolKind,
-                  status: isError ? 'failed' : 'completed',
-                  content: [{ text: resultText }],
-                  details: toolDetails,
-                  rawInput: tc.args ? (() => { try { return JSON.parse(tc.args); } catch { return undefined; } })() : undefined,
-                });
-              }
-            }
-            // Text response
-            if (msg.content) {
-              items.push({ kind: 'assistant', id: newId(), text: msg.content });
-            }
-          }
-        }
-
-        // Derive title from first user message
-        const firstUser = messages.find((m: any) => m.role === 'user');
-        const title = firstUser?.content ? deriveTitleFromMessage(firstUser.content) : undefined;
-
-        if (items.length > 0) {
-          updateView(set, id, (v) => ({
-            ...v,
-            transcript: items,
-            ...(title ? { meta: { ...v.meta, title } } : {}),
-          }));
-        }
-      } catch (err) {
-        console.error('Failed to load session transcript', err);
+    const epoch = connectionEpoch;
+    let badge = -1;
+    set((s) => {
+      const unreadSessions = { ...s.unreadSessions };
+      if (unreadSessions[id]) {
+        delete unreadSessions[id];
+        badge = Object.keys(unreadSessions).length;
       }
+      return {
+        activeSessionId: id,
+        unreadSessions,
+        settingsOpen: false,
+        loadingSession: id,
+        workspace: workspaceForSession(s, s.sessions[id]?.meta.cwd),
+      };
+    });
+    if (badge >= 0) void window.piAPI?.setBadge?.(badge);
+    try {
+      const [snapshot, info] = await Promise.all([
+        apiRequest<Envelope>("GET", `/sessions/${encodeURIComponent(id)}/run`),
+        apiRequest<any>("GET", `/sessions/${encodeURIComponent(id)}/info`),
+      ]);
+      if (epoch !== connectionEpoch) return;
+      updateView(set, id, (v) => {
+        const projection = reduceEnvelope(v, snapshot);
+        return {
+          ...projection,
+          accessMode: info.access_mode,
+          contextUsage: isActiveRun(projection.run) ? projection.contextUsage || info.context_usage : info.context_usage,
+          queue: snapshot.queue || v.queue,
+          meta: {
+            ...v.meta,
+            cwd: info.workspace || v.meta.cwd,
+            model: info.model || v.meta.model,
+            status: isActiveRun(projection.run)
+              ? "thinking"
+              : projection.phase === "error"
+                ? "error"
+                : "idle",
+          },
+        };
+      });
+      const view = get().sessions[id];
+      if (
+        !(await wsService.send({
+          type: "subscribe",
+          session_id: id,
+          run_id: view?.run?.run_id,
+          after_seq: view?.seq || undefined,
+        }))
+      )
+        set({ connectionError: "连接恢复后会同步任务状态" });
+    } catch (error) {
+      if (epoch === connectionEpoch)
+        set({
+          connectionError:
+            error instanceof Error ? error.message : "读取会话失败",
+        });
+    } finally {
+      if (epoch === connectionEpoch && get().loadingSession === id)
+        set({ loadingSession: undefined });
     }
   },
 
   createSession: async (opts) => {
+    const epoch = connectionEpoch;
     const body: Record<string, string> = {};
     if (opts?.cwd) body.cwd = opts.cwd;
     if (opts?.model) body.model = opts.model;
     if (opts?.application) body.application = opts.application;
-    const result = await apiRequest<{ id: string; created_at: number }>('POST', '/sessions', body);
+    const result = await apiRequest<{ id: string; created_at: number }>(
+      "POST",
+      "/sessions",
+      body,
+    );
+    if (epoch !== connectionEpoch)
+      throw new Error("运行主机已切换，原服务的会话创建结果已忽略");
     const lang = get().lang;
     const meta: SessionMeta = {
       id: result.id,
-      title: opts?.application === 'music'
-        ? translate(lang, 'session.musicTitle')
-        : opts?.cwd ? projectName(opts.cwd) : translate(lang, 'session.defaultTitle'),
-      cwd: opts?.cwd || '',
-      status: 'idle' as SessionRunStatus,
+      title:
+        opts?.application === "music"
+          ? translate(lang, "session.musicTitle")
+          : opts?.cwd
+            ? projectName(opts.cwd)
+            : translate(lang, "session.defaultTitle"),
+      cwd: opts?.cwd || "",
+      status: "idle" as SessionRunStatus,
       model: opts?.model || cachedCurrentModel,
       application: opts?.application,
       availableModels: defaultModels(),
-      createdAt: result.created_at || Date.now(),
+      createdAt: timestampMillis(result.created_at, Date.now()),
       updatedAt: Date.now(),
     };
     set((s) => ({
       sessions: { ...s.sessions, [result.id]: emptyView(meta) },
       order: [result.id, ...s.order],
       activeSessionId: result.id,
+      workspace: workspaceForSession(s, meta.cwd),
     }));
+    await get().refreshSessionInfo(result.id).catch(error => {
+      if (epoch === connectionEpoch) set({ connectionError: error.message });
+    });
     return result.id;
   },
 
+  forkSession: async (sourceId, opts) => {
+    const epoch = connectionEpoch;
+    const body: Record<string, any> = {};
+    if (opts?.entryId) body.entry_id = opts.entryId;
+    if (typeof opts?.beforeMessageIndex === "number") {
+      body.before_message_index = opts.beforeMessageIndex;
+    }
+    const result = await apiRequest<{
+      id: string;
+      source_id: string;
+      kept_messages: number;
+      kept_user_messages: number;
+      dropped_messages: number;
+    }>("POST", `/sessions/${encodeURIComponent(sourceId)}/fork`, body);
+    if (epoch !== connectionEpoch) {
+      throw new Error("运行主机已切换，原服务的分叉结果已忽略");
+    }
+    await get().refreshSessions();
+    if (epoch !== connectionEpoch) throw new Error("运行主机已切换，原服务的分叉结果已忽略");
+    await get().setActive(result.id);
+    if (epoch !== connectionEpoch) throw new Error("运行主机已切换，原服务的分叉结果已忽略");
+    set({ forkNotice: { sessionId: result.id, message: `已创建分叉会话，保留 ${result.kept_messages} 条对话与工具记录` } });
+    return result;
+  },
+
   deleteSession: async (id) => {
-    await apiRequest('DELETE', `/sessions/${id}`);
+    await apiRequest("DELETE", `/sessions/${id}`);
     set((s) => {
       const sessions = { ...s.sessions };
       delete sessions[id];
       const order = s.order.filter((x) => x !== id);
-      const activeSessionId = s.activeSessionId === id ? (order[0] ?? undefined) : s.activeSessionId;
+      const activeSessionId =
+        s.activeSessionId === id ? (order[0] ?? undefined) : s.activeSessionId;
       return { sessions, order, activeSessionId };
     });
   },
 
-  sendPrompt: async (id, text) => {
-    // Optimistic user message
-    const isFirst = !get().sessions[id]?.transcript.some((i) => i.kind === 'user');
-    if (isFirst) {
-      const title = deriveTitleFromMessage(text);
-      if (title) {
-        updateView(set, id, (v) => ({ ...v, meta: { ...v.meta, title } }));
-      }
-    }
-
-    const userItem: ChatItem = { kind: 'user', id: newId(), text };
-    const assistantItem: ChatItem = { kind: 'assistant', id: newId(), text: '' };
+  changeQueue: async (id, action, messageId, prompt, inputs) => {
+    const epoch = connectionEpoch;
+    const queue = await apiRequest<MessageQueue>(
+      "POST",
+      `/sessions/${encodeURIComponent(id)}/queue`,
+      { action, id: messageId, prompt, inputs },
+    );
+    if (epoch !== connectionEpoch) return;
     updateView(set, id, (v) => ({
       ...v,
-      transcript: [...v.transcript, userItem, assistantItem],
-      meta: { ...v.meta, status: 'thinking' as SessionRunStatus },
-      draftAssistantId: assistantItem.id,
+      queue: queue.revision >= (v.queue?.revision || 0) ? queue : v.queue,
     }));
-
-    // Send via WebSocket
-    wsService.send({ type: 'prompt', session_id: id, prompt: text });
   },
 
+  sendPrompt: async (id, text, inputs) => {
+    if (get().pending[id]) throw new Error("正在等待服务接收消息");
+    if (!get().connected) throw new Error("尚未连接到服务，草稿已保留");
+    const key = get().selectedProfile + ":" + id,
+      epoch = connectionEpoch;
+    const identity = JSON.stringify({ text, inputs: inputs || {} });
+    const requestId =
+      pendingRequests.get(key)?.text === identity
+        ? pendingRequests.get(key)!.id
+        : newId();
+    pendingRequests.set(key, { id: requestId, text: identity });
+    set((s) => ({
+      pending: { ...s.pending, [id]: true },
+      connectionError: undefined,
+    }));
+    try {
+      if (isActiveRun(get().sessions[id]?.run)) {
+        await get().changeQueue(id, "add", requestId, text, inputs);
+        pendingRequests.delete(key);
+        return;
+      }
+      const accepted = await wsService.prompt(id, text, requestId, inputs);
+      if (accepted.state === "interrupted")
+        throw new Error(
+          "此任务因服务重启已中断；请检查已执行结果，再点击重新执行。",
+        );
+      pendingRequests.delete(key);
+      if (epoch !== connectionEpoch) return;
+      updateView(set, id, (v) => ({
+        ...v,
+        meta: {
+          ...v.meta,
+          title:
+            v.transcript.filter((i) => i.kind === "user").length <= 1
+              ? deriveTitleFromMessage(text)
+              : v.meta.title,
+        },
+      }));
+    } finally {
+      if (epoch === connectionEpoch)
+        set((s) => ({ pending: { ...s.pending, [id]: false } }));
+    }
+  },
+  retryRun: async (id) => {
+    const view = get().sessions[id];
+    if (view?.run?.state !== "interrupted")
+      throw new Error("此任务不是中断状态");
+    const latestUser = view.transcript
+      .slice()
+      .reverse()
+      .find((item) => item.kind === "user");
+    const prompt =
+      view.run.prompt || (latestUser?.kind === "user" ? latestUser.text : "");
+    if (!prompt) throw new Error("无法恢复原始消息，请手动输入新任务");
+    const key = get().selectedProfile + ":" + id,
+      previous = pendingRequests.get(key);
+    if (previous?.id === view.run.request_id) pendingRequests.delete(key);
+    get().setDraft(id, prompt);
+    await get().sendPrompt(id, prompt, view.run.inputs);
+    if (get().drafts[id] === prompt) get().setDraft(id, "");
+  },
   cancel: async (id) => {
-    wsService.send({ type: 'cancel', session_id: id });
-    updateView(set, id, (v) => ({ ...v, meta: { ...v.meta, status: 'idle' as SessionRunStatus } }));
+    const run = get().sessions[id]?.run;
+    if (!run) throw new Error("当前没有正在运行的任务");
+    await apiRequest("POST", `/sessions/${encodeURIComponent(id)}/run/cancel`, {
+      run_id: run.run_id,
+    });
   },
 
+  compactSession: async (id, instructions = "") => {
+    if (get().compacting[id]) throw new Error("此会话正在压缩上下文，请稍候");
+    const epoch = connectionEpoch, profile = get().selectedProfile;
+    const current = () => epoch === connectionEpoch && profile === get().selectedProfile;
+    set(s => ({ compacting: { ...s.compacting, [id]: true } }));
+    get().setCommandOutput(id, "正在压缩上下文…", profile);
+    try {
+      const result = await apiRequest<{ summary?: string }>("POST", `/sessions/${encodeURIComponent(id)}/compact`, { custom_instructions: instructions });
+      if (current()) {
+        get().setCommandOutput(id, result.summary || "上下文已压缩", profile);
+        await get().refreshSessionInfo(id);
+      }
+      return result;
+    } catch (error) {
+      if (current()) get().setCommandOutput(id, "上下文压缩失败：" + (error as Error).message, profile);
+      throw error;
+    } finally {
+      if (current()) set(s => { const compacting = { ...s.compacting }; delete compacting[id]; return { compacting }; });
+    }
+  },
+  refreshSessionInfo: async (id) => {
+    const epoch = connectionEpoch;
+    const info = await apiRequest<SessionInfo>("GET", `/sessions/${encodeURIComponent(id)}/info`);
+    if (epoch !== connectionEpoch) return;
+    updateView(set, id, () => ({ accessMode: info.access_mode, contextUsage: info.context_usage }));
+  },
+  setAccessMode: async (id, mode) => {
+    const epoch = connectionEpoch;
+    const result = await apiRequest<{ access_mode: AccessMode }>("POST", `/sessions/${encodeURIComponent(id)}/permissions`, { mode });
+    if (epoch !== connectionEpoch) return;
+    updateView(set, id, () => ({ accessMode: result.access_mode }));
+  },
   setModel: async (id, modelId) => {
     try {
-      await apiRequest('POST', `/sessions/${id}/model`, { model: modelId });
-      updateView(set, id, (v) => ({ ...v, meta: { ...v.meta, model: modelId } }));
+      await apiRequest("POST", `/sessions/${id}/model`, { model: modelId });
+      updateView(set, id, (v) => ({
+        ...v,
+        meta: { ...v.meta, model: modelId },
+      }));
+      await get().refreshSessionInfo(id);
     } catch (err) {
-      console.error('Failed to switch model', err);
+      throw err;
     }
   },
 
@@ -976,35 +1503,59 @@ export const useStore = create<StoreState>((set, get) => ({
   togglePane: (id, pane) =>
     updateView(set, id, (v) => {
       const has = v.panes.includes(pane);
-      const panes = has ? v.panes.filter((p) => p !== pane) : [...v.panes, pane];
-      return { ...v, panes: panes.length ? panes : ['chat'], activePane: has ? v.activePane : pane };
+      const panes = has
+        ? v.panes.filter((p) => p !== pane)
+        : [...v.panes, pane];
+      return {
+        ...v,
+        panes: panes.length ? panes : ["chat"],
+        activePane: has ? v.activePane : pane,
+      };
     }),
 
   refreshDiff: async (id) => {
     const view = get().sessions[id];
     if (!view || !view.meta.cwd) return;
     try {
-      const resp = await apiRequest<{ files: GitFileDiff[] }>('GET', `/sessions/${id}/diff`);
+      const resp = await apiRequest<{ files: GitFileDiff[] }>(
+        "GET",
+        `/sessions/${id}/diff`,
+      );
       updateView(set, id, (v) => ({ ...v, diffs: resp.files || [] }));
     } catch (err) {
-      console.error('Failed to fetch diff', err);
+      console.error("Failed to fetch diff", err);
     }
   },
 
   openFile: async (id, path) => {
     try {
-      const resp = await apiRequest<{ content: string }>('GET', `/sessions/${id}/file?path=${encodeURIComponent(path)}`);
-      updateView(set, id, (v) => ({ ...v, openFile: { path, content: resp.content }, activePane: 'file' }));
+      const resp = await apiRequest<{ content: string }>(
+        "GET",
+        `/sessions/${id}/file?path=${encodeURIComponent(path)}`,
+      );
+      updateView(set, id, (v) => ({
+        ...v,
+        openFile: { path, content: resp.content },
+        activePane: "file",
+      }));
     } catch (err) {
-      console.error('Failed to read file', err);
+      console.error("Failed to read file", err);
     }
   },
 
   saveFile: async (id, path, content) => {
     try {
-      console.log('[saveFile] Saving file:', { id, path, contentLength: content.length });
-      await apiRequest<{ status: string }>('PUT', `/sessions/${id}/file?path=${encodeURIComponent(path)}`, { content });
-      console.log('[saveFile] File saved successfully');
+      console.log("[saveFile] Saving file:", {
+        id,
+        path,
+        contentLength: content.length,
+      });
+      await apiRequest<{ status: string }>(
+        "PUT",
+        `/sessions/${id}/file?path=${encodeURIComponent(path)}`,
+        { content },
+      );
+      console.log("[saveFile] File saved successfully");
       // Update the view with new content
       updateView(set, id, (v) => ({
         ...v,
@@ -1012,7 +1563,7 @@ export const useStore = create<StoreState>((set, get) => ({
       }));
       return true;
     } catch (err) {
-      console.error('Failed to save file', err);
+      console.error("Failed to save file", err);
       return false;
     }
   },
@@ -1020,7 +1571,24 @@ export const useStore = create<StoreState>((set, get) => ({
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-type SetFn = (partial: Partial<StoreState> | ((s: StoreState) => Partial<StoreState>)) => void;
+type SetFn = (
+  partial: Partial<StoreState> | ((s: StoreState) => Partial<StoreState>),
+) => void;
+
+function workspaceForSession(s: StoreState, cwd?: string): WorkspaceUiState {
+  const previousCwd = s.activeSessionId
+    ? s.sessions[s.activeSessionId]?.meta.cwd
+    : undefined;
+  if (previousCwd === cwd) return s.workspace;
+  if (previousCwd)
+    saveWorkspaceFiles(s.selectedProfile, previousCwd, s.workspace);
+  const saved = readWorkspaceFiles(s.selectedProfile, cwd || "");
+  return {
+    ...s.workspace,
+    fileTabs: saved.fileTabs,
+    activeFileTab: saved.activeFileTab,
+  };
+}
 
 function updateView(
   setFn: SetFn,
@@ -1037,21 +1605,50 @@ function updateView(
 function inferToolKind(name: string): AcpToolKind {
   const lower = name.toLowerCase();
   // KB agent tools — must check before generic patterns
-  if (lower === 'kb_search' || lower === 'kb_list' || lower === 'kb_maintain') return 'search';
-  if (lower === 'kb_read') return 'read';
-  if (lower === 'kb_save') return 'edit';
-  if (lower.includes('read') || lower.includes('cat') || lower.includes('view')) return 'read';
-  if (lower.includes('edit') || lower.includes('write') || lower.includes('replace')) return 'edit';
-  if (lower.includes('delete') || lower.includes('remove') || lower.includes('rm')) return 'delete';
-  if (lower.includes('move') || lower.includes('rename')) return 'move';
-  if (lower.includes('search') || lower.includes('grep') || lower.includes('glob') || lower.includes('find')) return 'search';
-  if (lower.includes('bash') || lower.includes('exec') || lower.includes('shell') || lower.includes('run')) return 'execute';
-  if (lower.includes('think') || lower.includes('reason')) return 'think';
-  if (lower.includes('fetch') || lower.includes('http') || lower.includes('web')) return 'fetch';
-  return 'other';
+  if (lower === "kb_search" || lower === "kb_list" || lower === "kb_maintain")
+    return "search";
+  if (lower === "kb_read") return "read";
+  if (lower === "kb_save") return "edit";
+  if (lower.includes("read") || lower.includes("cat") || lower.includes("view"))
+    return "read";
+  if (
+    lower.includes("edit") ||
+    lower.includes("write") ||
+    lower.includes("replace")
+  )
+    return "edit";
+  if (
+    lower.includes("delete") ||
+    lower.includes("remove") ||
+    lower.includes("rm")
+  )
+    return "delete";
+  if (lower.includes("move") || lower.includes("rename")) return "move";
+  if (
+    lower.includes("search") ||
+    lower.includes("grep") ||
+    lower.includes("glob") ||
+    lower.includes("find")
+  )
+    return "search";
+  if (
+    lower.includes("bash") ||
+    lower.includes("exec") ||
+    lower.includes("shell") ||
+    lower.includes("run")
+  )
+    return "execute";
+  if (lower.includes("think") || lower.includes("reason")) return "think";
+  if (
+    lower.includes("fetch") ||
+    lower.includes("http") ||
+    lower.includes("web")
+  )
+    return "fetch";
+  return "other";
 }
 
 function projectName(cwd: string): string {
-  const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/);
+  const parts = cwd.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || cwd;
 }

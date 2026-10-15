@@ -584,10 +584,10 @@ func TestCompact_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "not enough messages")
 }
 
-func TestCompact_TruncatesLongSummary(t *testing.T) {
+func TestCompact_PreservesCompleteUnicodeSummary(t *testing.T) {
 	reg := newRegistry()
 
-	longSummary := strings.Repeat("x", 600)
+	longSummary := strings.Repeat("上下文保留要求", 600)
 	sess := &mockSession{
 		sessionID:     "test",
 		compactResult: longSummary,
@@ -602,7 +602,8 @@ func TestCompact_TruncatesLongSummary(t *testing.T) {
 	result, err := reg.Execute(cmdCtx, "/compact")
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "20 → 5")
-	assert.Contains(t, result.Output, "...")
+	assert.Contains(t, result.Output, longSummary)
+	assert.Contains(t, result.Output, fmt.Sprintf("%d chars", len([]rune(longSummary))))
 }
 
 func TestHelp_IncludesNewCommands(t *testing.T) {
@@ -658,4 +659,64 @@ func TestConfirmCommand_TogglesAndStatus(t *testing.T) {
 	result, err = reg.Execute(cmdCtx, "/confirm blah")
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "用法")
+}
+
+func TestWorkflowCommandProducesExplicitAgentPrompt(t *testing.T) {
+	registry := slashcmd.NewRegistry()
+	RegisterBuiltins(registry)
+	result, err := registry.Execute(slashcmd.Context{}, "/workflow 研究方案")
+	require.NoError(t, err)
+	assert.True(t, result.ShouldQuery)
+	assert.Equal(t, "/workflow 研究方案", result.QueryPrompt)
+	result, err = registry.Execute(slashcmd.Context{}, "/workflow")
+	require.NoError(t, err)
+	assert.False(t, result.ShouldQuery)
+	assert.Contains(t, result.Output, "Actor")
+}
+
+func TestResolveModelSwitch(t *testing.T) {
+	available := []slashcmd.ModelInfo{
+		{Provider: "openai", ModelID: "openai/workbuddy/kimi-k3"},
+		{Provider: "openai", ModelID: "workbuddy/primary-model"},
+		{Provider: "anthropic", ModelID: "claude-x"},
+	}
+
+	// 从 /models 列表复制的全名（含斜杠）精确命中，不再二次拼接 provider。
+	p, m, err := resolveModelSwitch("openai/workbuddy/kimi-k3", available)
+	require.NoError(t, err)
+	assert.Equal(t, "openai", p)
+	assert.Equal(t, "openai/workbuddy/kimi-k3", m)
+
+	// 冒号形式保持支持。
+	p, m, err = resolveModelSwitch("anthropic:claude-x", available)
+	require.NoError(t, err)
+	assert.Equal(t, "anthropic", p)
+	assert.Equal(t, "claude-x", m)
+
+	// 裸名在 ModelID 上唯一命中。
+	p, m, err = resolveModelSwitch("workbuddy/primary-model", available)
+	require.NoError(t, err)
+	assert.Equal(t, "openai", p)
+	assert.Equal(t, "workbuddy/primary-model", m)
+
+	// 未知模型报错并列出候选（用户凭空猜的 ID 不再假成功）。
+	_, _, err = resolveModelSwitch("openai/workbuddy/deepseek-v4.1-flash", available)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown model")
+	assert.Contains(t, err.Error(), "openai/workbuddy/kimi-k3")
+
+	// 目录为空时保持旧行为：冒号拆分 / 裸名继承当前 provider。
+	p, m, err = resolveModelSwitch("gateway:big-model", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "gateway", p)
+	assert.Equal(t, "big-model", m)
+	p, m, err = resolveModelSwitch("big-model", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "", p)
+	assert.Equal(t, "big-model", m)
+}
+
+func TestModelLabelAvoidsDoublePrefix(t *testing.T) {
+	assert.Equal(t, "openai/workbuddy/kimi-k3", modelLabel("openai", "openai/workbuddy/kimi-k3"))
+	assert.Equal(t, "anthropic/claude-x", modelLabel("anthropic", "claude-x"))
 }

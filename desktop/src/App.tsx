@@ -1,18 +1,21 @@
-import { useEffect, useState } from 'react';
-import { useStore, type RightView } from './store';
-import { Sidebar } from './components/Sidebar';
-import { SessionView } from './components/SessionView';
-import { UpdateBanner } from './components/UpdateBanner';
-import { ErrorBoundary } from './components/ErrorBoundary';
-import { RightSidebar } from './components/workspace/RightSidebar';
-import { Resizer } from './components/workspace/Resizer';
-import { Icon } from './components/Icon';
-import { useT } from './i18n/useT';
-import { applyTheme } from './theme';
-import { GlobalMusicBar } from './components/GlobalMusicBar';
-import { ServerConnect } from './components/ServerConnect';
-import { MobileUpdateDialog } from './components/MobileUpdateDialog';
-import { isElectron, isRemotePlatform, getStoredServerUrl } from './platform';
+import { useEffect, useRef, useState } from "react";
+import { useStore, WORKSPACE_SIZE_LIMITS, type RightView } from "./store";
+import { Sidebar } from "./components/Sidebar";
+import { SessionView } from "./components/SessionView";
+import { UpdateBanner } from "./components/UpdateBanner";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { RightSidebar } from "./components/workspace/RightSidebar";
+import { Resizer } from "./components/workspace/Resizer";
+import { Icon } from "./components/Icon";
+import { useT } from "./i18n/useT";
+import { applyTheme } from "./theme";
+import { GlobalMusicBar } from "./components/GlobalMusicBar";
+import { ServerConnect } from "./components/ServerConnect";
+import { MobileUpdateDialog } from "./components/MobileUpdateDialog";
+import { isElectron } from "./platform";
+import { ConnectionBar } from "./components/ConnectionBar";
+import { AgentSettings } from "./components/AgentSettings";
+import { WorkspacePathDialog } from "./components/WorkspacePathDialog";
 
 export function App() {
   const init = useStore((s) => s.init);
@@ -22,87 +25,136 @@ export function App() {
   const musicActive = useStore((s) => s.music.current != null);
   const lang = useStore((s) => s.lang);
   const theme = useStore((s) => s.theme);
+  const settingsOpen = useStore((s) => s.settingsOpen);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
+  const toggleRight = useStore((s) => s.toggleWorkspaceRight);
   const t = useT();
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  const rightPanel = useRef<HTMLDivElement>(null);
+
+  // Stored sizes are preferences; the visible split must still leave room to read.
+  const mobile = viewportWidth < 769;
+  const sidebarWidth = mobile
+    ? workspace.sidebarWidth
+    : WORKSPACE_SIZE_LIMITS.sidebarWidth.default;
+  const sessionWidth = viewportWidth - (!mobile && workspace.sidebarOpen ? sidebarWidth : 0);
+  const floatingWorkbench = !mobile && workspace.rightOpen && !!workspace.rightView && !settingsOpen && sessionWidth < 845;
+  const rightWidth = floatingWorkbench
+    ? Math.min(workspace.rightWidth, 520, sessionWidth - 24)
+    : Math.min(workspace.rightWidth, Math.max(360, sessionWidth - 485));
 
   // Auto-reveal collapsed sidebar on hover (VSCode-style) — desktop only
   const [revealed, setRevealed] = useState(false);
-  const sidebarOpen = workspace.sidebarOpen;
+  const sidebarOpen = workspace.sidebarOpen && !settingsOpen;
   useEffect(() => {
     setRevealed(false);
   }, [sidebarOpen]);
 
-  // On remote platforms (mobile/PWA), show server connect screen first
-  const [serverReady, setServerReady] = useState(false);
   useEffect(() => {
-    if (isRemotePlatform) {
-      const stored = getStoredServerUrl();
-      if (stored) setServerReady(true);
-    } else {
-      setServerReady(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!serverReady) return;
     void init();
-  }, [init, serverReady]);
+  }, [init]);
 
   // Mark body as mobile for CSS targeting
   useEffect(() => {
-    if (!isElectron) {
-      document.body.classList.add('mobile');
-    }
+    const update = () => {
+      setViewportWidth(window.innerWidth);
+      document.body.classList.toggle("mobile", innerWidth < 769);
+    };
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
   }, []);
+
+  useEffect(() => {
+    if (!floatingWorkbench || !ready) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const panel = rightPanel.current;
+    panel?.querySelector<HTMLButtonElement>(".rsidebar-mobile-close")?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        event.preventDefault();
+        toggleRight();
+      }
+      if (event.key !== "Tab" || event.defaultPrevented || !panel) return;
+      const controls = [...panel.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
+      )].filter((control) => control.getClientRects().length > 0);
+      const first = controls[0], last = controls[controls.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (!first) {
+        event.preventDefault();
+        panel.focus();
+      } else if (!active || !controls.includes(active)) {
+        // Switching panes can hide/remove the focused control and leave focus on body.
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (previousFocus?.isConnected && previousFocus.getClientRects().length > 0)
+        previousFocus.focus();
+      else document.querySelector<HTMLButtonElement>(".connection-workbench")?.focus();
+    };
+  }, [floatingWorkbench, ready, toggleRight]);
 
   // Global workspace shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       const typing =
-        el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+        el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.isContentEditable);
       const mod = e.ctrlKey || e.metaKey;
-      if (!mod) return;
+      if (!mod || useStore.getState().settingsOpen) return;
       let view: RightView | null = null;
-      if (e.shiftKey && (e.key === 'G' || e.key === 'g')) view = 'review';
-      else if (!e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P')) view = 'files';
-      else if (!e.shiftKey && !e.altKey && e.key === '`') {
+      if (e.shiftKey && (e.key === "G" || e.key === "g")) view = "review";
+      else if (!e.shiftKey && !e.altKey && (e.key === "p" || e.key === "P"))
+        view = "files";
+      else if (!e.shiftKey && !e.altKey && e.key === "`") {
         e.preventDefault();
         useStore.getState().toggleWorkspaceBottom();
         return;
       }
       if (view) {
-        if (typing && view === 'files') return;
+        if (typing && view === "files") return;
         e.preventDefault();
         useStore.getState().openWorkspaceView(view);
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   useEffect(() => {
-    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+    document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
   }, [lang]);
 
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
 
-  // Show server connect screen on mobile/PWA
-  if (!serverReady) {
-    return <ServerConnect onConnect={() => setServerReady(true)} />;
-  }
-
   if (!ready) {
     return (
       <div className="boot">
         <div className="boot-inner">
-          <span className="brand-mark" style={{ width: 40, height: 40, borderRadius: 12 }}>
+          <span
+            className="brand-mark"
+            style={{ width: 40, height: 40, borderRadius: 12 }}
+          >
             <Icon name="sparkle" size={20} />
           </span>
           <span className="spinner" />
-          <span>{t('app.booting')}</span>
+          <span>{t("app.booting")}</span>
         </div>
       </div>
     );
@@ -110,97 +162,102 @@ export function App() {
 
   return (
     <ErrorBoundary label="app">
-      <div
-        className={`app ${sidebarOpen ? '' : 'sidebar-collapsed'} ${musicActive ? 'music-active' : ''}`}
-        style={{ '--sidebar-w': `${workspace.sidebarWidth}px` } as React.CSSProperties}
-      >
-        {sidebarOpen ? (
-          <>
-            {/* Mobile: tap backdrop to close sidebar drawer */}
-            {!isElectron && (
-              <div
-                className="sidebar-mobile-backdrop"
-                onClick={() => toggleSidebar()}
-                style={{
-                  position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-                  zIndex: 150,
-                }}
-              />
-            )}
-            <ErrorBoundary label="sidebar">
-              <Sidebar />
-            </ErrorBoundary>
-            {isElectron && (
-              <Resizer
-                axis="x"
-                sign={1}
-                title={t('sidebar.resize')}
-                getValue={() => useStore.getState().workspace.sidebarWidth}
-                onChange={(v) => setWorkspaceSize('sidebarWidth', v)}
-              />
-            )}
-          </>
-        ) : (
-          <>
-            {/* Far-left hot zone: hovering it floats the collapsed sidebar out — desktop only */}
-            {isElectron && (
-              <>
-                <div
-                  className="sidebar-reveal-zone"
-                  onMouseEnter={() => setRevealed(true)}
+      <div className="desktop-shell">
+        <ConnectionBar />
+        <div
+          className={`app ${sidebarOpen ? "" : "sidebar-collapsed"} ${musicActive && !settingsOpen ? "music-active" : ""} ${settingsOpen ? "settings-active" : ""} ${floatingWorkbench ? "workbench-floating" : ""}`}
+          style={
+            {
+              "--sidebar-w": `${sidebarWidth}px`,
+              "--display-sidebar-w": `${sidebarWidth}px`,
+              "--workbench-w": `${rightWidth}px`,
+            } as React.CSSProperties
+          }
+        >
+          {sidebarOpen ? (
+            <>
+              {/* Mobile: tap backdrop to close sidebar drawer */}
+              {mobile && (
+                <button
+                  type="button"
+                  className="sidebar-mobile-backdrop"
+                  onClick={() => toggleSidebar()}
+                  aria-label="收起会话列表"
                 />
-                {revealed && (
+              )}
+              <ErrorBoundary label="sidebar">
+                <Sidebar />
+              </ErrorBoundary>
+            </>
+          ) : (
+            <>
+              {/* Far-left hot zone: hovering it floats the collapsed sidebar out — desktop only */}
+              {isElectron && !settingsOpen && (
+                <>
                   <div
-                    className="sidebar-overlay"
-                    onMouseLeave={() => setRevealed(false)}
-                  >
-                    <ErrorBoundary label="sidebar">
-                      <Sidebar />
-                    </ErrorBoundary>
-                  </div>
-                )}
-              </>
-            )}
-            {/* Mobile: floating hamburger to open sidebar */}
-            {!isElectron && (
-              <button
-                className="mobile-sidebar-toggle"
-                onClick={() => toggleSidebar()}
-                aria-label="Open sessions"
-                style={{
-                  position: 'fixed', top: 'calc(env(safe-area-inset-top) + 8px)', left: 12,
-                  zIndex: 100, width: 40, height: 40, borderRadius: 10,
-                  border: '1px solid var(--border)', background: 'var(--bg-elev)',
-                  color: 'var(--text-dim)', display: 'flex',
-                  alignItems: 'center', justifyContent: 'center',
-                }}
-              >
-                <Icon name="menu" size={18} />
-              </button>
-            )}
-          </>
-        )}
-        {/* The workspace shell wraps the session view (chat + optional right sidebar) */}
-        <ErrorBoundary label="session">
-          <SessionView />
-        </ErrorBoundary>
-        {workspace.rightOpen && (
-          <>
-            {isElectron && workspace.rightView && (
-              <Resizer
-                axis="x"
-                getValue={() => useStore.getState().workspace.rightWidth}
-                onChange={(v) => setWorkspaceSize('rightWidth', v)}
-              />
-            )}
-            <ErrorBoundary label="right-sidebar">
-              <RightSidebar />
+                    className="sidebar-reveal-zone"
+                    onMouseEnter={() => setRevealed(true)}
+                  />
+                  {revealed && (
+                    <div
+                      className="sidebar-overlay"
+                      onMouseLeave={() => setRevealed(false)}
+                    >
+                      <ErrorBoundary label="sidebar">
+                        <Sidebar />
+                      </ErrorBoundary>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+          {/* The workspace shell wraps the session view (chat + optional right sidebar) */}
+          <div className="settings-session" hidden={settingsOpen} inert={settingsOpen}>
+            <ErrorBoundary label="session">
+              <SessionView />
             </ErrorBoundary>
-          </>
-        )}
-        <UpdateBanner />
-        <GlobalMusicBar />
-        <MobileUpdateDialog />
+          </div>
+          {settingsOpen && <ErrorBoundary label="settings"><AgentSettings /></ErrorBoundary>}
+          {workspace.rightOpen && workspace.rightView && (
+            <>
+              {floatingWorkbench && (
+                <button
+                  type="button"
+                  className="workbench-backdrop"
+                  aria-label="返回对话"
+                  onClick={toggleRight}
+                  tabIndex={-1}
+                />
+              )}
+              {isElectron && !settingsOpen && workspace.rightView && !floatingWorkbench && !mobile && (
+                <Resizer
+                  axis="x"
+                  getValue={() => rightWidth}
+                  onChange={(v) => setWorkspaceSize("rightWidth", v)}
+                />
+              )}
+              <div
+                className="workspace-right"
+                hidden={settingsOpen}
+                inert={settingsOpen}
+                ref={rightPanel}
+                tabIndex={floatingWorkbench ? -1 : undefined}
+                role={floatingWorkbench ? "dialog" : undefined}
+                aria-modal={floatingWorkbench ? true : undefined}
+                aria-label={floatingWorkbench ? "工作台" : undefined}
+              >
+                <ErrorBoundary label="right-sidebar">
+                  <RightSidebar />
+                </ErrorBoundary>
+              </div>
+            </>
+          )}
+          <UpdateBanner />
+          <GlobalMusicBar />
+          <MobileUpdateDialog />
+          <WorkspacePathDialog />
+        </div>
       </div>
     </ErrorBoundary>
   );

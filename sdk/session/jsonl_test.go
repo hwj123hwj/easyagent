@@ -438,3 +438,50 @@ func TestJSONLStorage_SetMaxEntries(t *testing.T) {
 	// entry1 也应该还在（在路径上）
 	assert.Equal(t, "msg 1", pathEntries[0].User.Content[0].Text)
 }
+
+// Simulate SIGTERM after the message fsync and before the separate leaf write.
+func TestReloadRecoversDurableToolResultWithoutLeaf(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	store := NewJSONLStorage(path)
+	require.NoError(t, store.Init())
+	require.NoError(t, store.Append(ctx, Entry{ID: "call", Type: EntryTypeMessage, Assistant: &ai.AssistantMessage{Text: "running"}}))
+	require.NoError(t, store.SetLeaf(ctx, "call"))
+	require.NoError(t, store.Append(ctx, Entry{ID: "result", ParentID: "call", Type: EntryTypeMessage, Tool: &ai.ToolResultMessage{ToolCallID: "tc", Content: "command canceled: context canceled", IsError: true}}))
+	require.NoError(t, store.Close())
+	restored := NewJSONLStorage(path)
+	require.NoError(t, restored.Init())
+	defer restored.Close()
+	leaf, err := restored.GetLeaf(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "result", leaf)
+	entries, err := restored.GetPathToRoot(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	require.True(t, entries[1].Tool.IsError)
+	// An explicit branch navigation must still override automatic cursor recovery.
+	require.NoError(t, restored.SetLeaf(ctx, "call"))
+	require.NoError(t, restored.Close())
+	again := NewJSONLStorage(path)
+	require.NoError(t, again.Init())
+	defer again.Close()
+	leaf, err = again.GetLeaf(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "call", leaf)
+}
+
+func TestToolImagePersistsAcrossReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "images.jsonl")
+	storage := NewJSONLStorage(path)
+	require.NoError(t, storage.Init())
+	tool := ai.ToolResultMessage{ToolCallID: "shot", Content: "screenshot", Images: []ai.ImageBlock{{MediaType: "image/png", Data: []byte{1, 2, 3}}}}
+	require.NoError(t, storage.Append(context.Background(), Entry{Type: EntryTypeMessage, Tool: &tool}))
+	require.NoError(t, storage.Close())
+	reopened := NewJSONLStorage(path)
+	require.NoError(t, reopened.Init())
+	defer reopened.Close()
+	entries, err := reopened.GetPathToRoot(context.Background(), "")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, tool.Images, entries[0].Tool.Images)
+}

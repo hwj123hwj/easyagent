@@ -68,3 +68,55 @@ func TestWrapConfirmPreservesFullAccessAcrossAgentRebuilds(t *testing.T) {
 	assert.False(t, decision.Approved, "turning confirmation back on must call the handler")
 	assert.Equal(t, 1, confirmCalls)
 }
+
+func TestExplicitAccessModeRetainsMCPApprovalRule(t *testing.T) {
+	session := &AgentSession{}
+	calls := 0
+	confirm := func(context.Context, agent.ConfirmationRequest) agent.ConfirmDecision {
+		calls++
+		return agent.ConfirmDecision{Approved: false}
+	}
+	require.NoError(t, session.TrySetAccessMode(confirm, false))
+	require.Equal(t, "full", session.AccessMode())
+	require.True(t, session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{}).Approved)
+	require.False(t, session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{RequiresApproval: true}).Approved)
+	require.Equal(t, 1, calls)
+	require.NoError(t, session.TrySetConfirmFunc(confirm))
+	require.Equal(t, "full", session.AccessMode())
+	require.NoError(t, session.TrySetAccessMode(confirm, true))
+	require.False(t, session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{}).Approved)
+	require.Equal(t, 2, calls)
+}
+
+func TestContextSnapshotRejectsActiveMutation(t *testing.T) {
+	for _, field := range []string{"running", "mutating"} {
+		t.Run(field, func(t *testing.T) {
+			sess := &AgentSession{agent: agent.New(agent.Options{System: "rules"})}
+			if field == "running" {
+				sess.running = true
+			} else {
+				sess.mutating = true
+			}
+			_, err := sess.ContextSnapshot(context.Background())
+			require.ErrorIs(t, err, agent.ErrAgentBusy)
+			sess.running = false
+			sess.mutating = false
+			snapshot, err := sess.ContextSnapshot(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, "rules", snapshot.System)
+		})
+	}
+}
+
+func TestMandatoryConfirmationSurvivesGlobalAutoApprove(t *testing.T) {
+	session := &AgentSession{cfg: config.Config{AutoApprove: true}}
+	calls := 0
+	confirm := func(context.Context, agent.ConfirmationRequest) agent.ConfirmDecision {
+		calls++
+		return agent.ConfirmDecision{Approved: false}
+	}
+	decision := session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{RequiresApproval: true, ForceConfirmation: true})
+	require.False(t, decision.Approved)
+	require.Equal(t, 1, calls)
+	require.True(t, session.wrapConfirm(confirm)(context.Background(), agent.ConfirmationRequest{RequiresApproval: true}).Approved, "existing explicit server trust remains compatible")
+}

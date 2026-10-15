@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hwj123hwj/easyagent/sdk/agent"
+	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
 )
@@ -26,6 +27,9 @@ func (m *TuiModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.clearSelection()
 	m.copyNotice = ""
+	if msg.Type == tea.KeyF2 && m.toolFocus && !m.confirmation.IsActive() {
+		return m, m.copyFocusedTool()
+	}
 	if msg.Type == tea.KeyF2 {
 		return m, m.copyLastReply()
 	}
@@ -57,8 +61,26 @@ func (m *TuiModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.modelSelect {
 		return m.handleModelSelectKey(msg)
 	}
+	if m.completion.Kind() == CompletionHistory || m.completion.Kind() == CompletionSession {
+		return m.handleSearchPickerKey(msg)
+	}
+	if msg.Type == tea.KeyCtrlR {
+		m.openHistoryPicker()
+		return m, nil
+	}
+	if msg.Type == tea.KeyCtrlG {
+		return m.openSessionPicker()
+	}
 	if m.completion.IsActive() {
 		return m.handleCompletionKey(msg)
+	}
+
+	if m.toolFocus {
+		return m.handleToolFocusKey(msg)
+	}
+	if msg.Type == tea.KeyCtrlT {
+		m.openToolFocus()
+		return m, nil
 	}
 
 	// ── Priority 4: Normal input context ──
@@ -76,7 +98,6 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.streamID++ // discard late events from the cancelled run
 			m.streaming = false
 			m.agentBusy = false
-			m.spinnerOn = false
 			// 真正中断底层 LLM 流/工具执行（否则 token 会烧到本轮结束）
 			m.cancelStream()
 			m.finishToolGroups(true)
@@ -92,6 +113,10 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.appliedStreamLen = 0
 			m.viewport.SetStreaming("")
 			m.viewport.SetMessages(m.messages)
+			return m, nil
+		}
+		if !m.input.IsEmpty() {
+			m.copyNotice = "Draft kept · Ctrl+U: clear · Ctrl+D on empty input: exit"
 			return m, nil
 		}
 		m.quitting = true
@@ -113,6 +138,8 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case ActionOpenModelSelect: // Ctrl+P
 		return m.openModelSelector()
+	case ActionOpenSessions: // Ctrl+G
+		return m.openSessionPicker()
 
 	case ActionSubmit: // Enter
 		if m.agentBusy {
@@ -151,7 +178,7 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ActionSearchHistory: // Ctrl+R
-		m.input.navigateHistory(-1)
+		m.openHistoryPicker()
 		return m, nil
 
 	case ActionPageUp:
@@ -180,9 +207,12 @@ func (m *TuiModel) handleCompletionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch action {
 	case ActionAcceptCompletion:
 		item := m.completion.SelectedItem()
-		if item != nil && msg.Type == tea.KeyEnter && item.InsertText == "/models" {
+		if item != nil && msg.Type == tea.KeyEnter && (item.InsertText == "/models" || item.InsertText == "/sessions") {
 			m.input.Reset()
 			m.completion.Close()
+			if item.InsertText == "/sessions" {
+				return m.openSessionPicker()
+			}
 			return m.openModelSelector()
 		}
 		if item != nil {
@@ -229,6 +259,8 @@ func (m *TuiModel) openModelSelector() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.modelSelect = true
+	m.completion.query = ""
+	m.modelCatalog = append([]CompletionItem(nil), m.completion.items...)
 	for i, item := range m.completion.Items() {
 		if item.InsertText == m.provider+"/"+m.modelID {
 			m.completion.selected = i
@@ -248,6 +280,9 @@ func (m *TuiModel) handleModelSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		// Apply the selected model
 		item := m.completion.SelectedItem()
+		if item == nil {
+			return m, nil
+		}
 		m.modelSelect = false
 		if item != nil {
 			// Parse "provider/modelID" from InsertText
@@ -281,9 +316,52 @@ func (m *TuiModel) handleModelSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyDown:
 		m.completion.Next()
 		return m, nil
-	default:
-		return m, nil
+	case tea.KeyRunes:
+		m.completion.query += strings.ReplaceAll(sanitizeInput(string(msg.Runes)), "\n", " ")
+		m.filterModels()
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		query := []rune(m.completion.query)
+		if len(query) > 0 {
+			m.completion.query = string(query[:len(query)-1])
+			m.filterModels()
+		}
+	case tea.KeyCtrlU:
+		m.completion.query = ""
+		m.filterModels()
 	}
+	return m, nil
+}
+
+func (m *TuiModel) filterModels() {
+	filterPicker(&m.completion, m.modelCatalog)
+}
+
+func filterPicker(cm *CompletionState, catalog []CompletionItem) {
+	selected := ""
+	if item := cm.SelectedItem(); item != nil {
+		selected = item.InsertText
+	}
+	cm.items = nil
+	for _, item := range catalog {
+		match := true
+		for _, word := range strings.Fields(strings.ToLower(cm.query)) {
+			if !strings.Contains(strings.ToLower(item.Label+" "+item.Description+" "+item.InsertText+" "+item.Preview), word) {
+				match = false
+				break
+			}
+		}
+		if match {
+			cm.items = append(cm.items, item)
+		}
+	}
+	cm.selected = 0
+	for i, item := range cm.items {
+		if item.InsertText == selected {
+			cm.selected = i
+			break
+		}
+	}
+
 }
 
 // checkTriggerCompletion evaluates the current input and triggers the
@@ -357,15 +435,17 @@ func (m *TuiModel) sendMessage(input string) (tea.Model, tea.Cmd) {
 	m.input.Reset()
 
 	// Start agent streaming
-	m.streaming = true
+	m.streaming = false
 	m.agentBusy = true
-	m.spinnerOn = true
+	m.err = nil
+	m.runStarted = time.Now()
+	m.toolFocus = false
 	m.streamBuf = ""
 
 	m.viewport.SetMessages(m.messages)
 	m.viewport.GotoBottom()
 
-	return m, m.startAgentStream(input)
+	return m, tea.Batch(m.startAgentStream(input), m.spinnerTick())
 }
 
 // startAgentStream runs the agent stream loop in a goroutine.
@@ -424,8 +504,10 @@ func (m *TuiModel) startAgentStream(input string) tea.Cmd {
 			case agent.StreamEventCompacted:
 				msg = CompactionMsg{Summary: event.Summary}
 
+			case agent.StreamEventCompactionFailed:
+				msg = CompactionMsg{Kind: "failed", Summary: "上下文压缩失败，继续使用原上下文：" + event.Error}
 			case agent.StreamEventMicroCompacted:
-				msg = CompactionMsg{Summary: "micro-compact: " + event.Summary}
+				msg = CompactionMsg{Kind: "micro", Summary: fmt.Sprintf("微压缩：清理 %d 个旧工具输出；消息估算 %d → %d tokens（后续请求沿用清理结果）", event.ClearedCount, event.TokensBefore, event.TokensAfter)}
 
 			case agent.StreamEventLoopDetected:
 				msg = LoopDetectedMsg{Tool: event.ToolName, Count: event.RepeatCount}
@@ -441,8 +523,9 @@ func (m *TuiModel) startAgentStream(input string) tea.Cmd {
 				done = true
 
 			case agent.StreamEventTurnEnd:
-				// Turn ended but stream may continue (multi-turn)
-				continue
+				if message, ok := event.Message.(ai.AssistantMessage); ok {
+					msg = StreamTurnEndMsg{Text: message.Text}
+				}
 			}
 
 			// Send each event immediately to the TUI for live updates.
@@ -467,6 +550,9 @@ func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(input) == "/models" {
 		return m.openModelSelector()
 	}
+	if strings.TrimSpace(input) == "/sessions" || strings.TrimSpace(input) == "/switch" {
+		return m.openSessionPicker()
+	}
 
 	cmdCtx := slashcmd.Context{
 		Ctx:     context.Background(),
@@ -474,6 +560,9 @@ func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		App:     m.app,
 	}
 	result, err := m.slashCmds.Execute(cmdCtx, input)
+	if err == nil && result.ShouldQuery && result.QueryPrompt != "" {
+		return m.sendMessage(result.QueryPrompt)
+	}
 	if err != nil {
 		m.messages = append(m.messages, ChatMessage{
 			Role:    "system",
@@ -495,14 +584,7 @@ func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		if result.SessionSwitchTo != nil {
 			// Convert SessionContext to AgentSession
 			if as, ok := result.SessionSwitchTo.(*runtime.AgentSession); ok {
-				confirmEnabled := m.session.ConfirmEnabled()
-				m.session = as
-				m.wireConfirmationCallback()
-				m.session.SetConfirmEnabled(confirmEnabled)
-				m.provider, m.modelID = as.ModelInfo()
-				m.messages = []ChatMessage{} // clear conversation display
-				m.inputTokens = 0
-				m.outputTokens = 0
+				m.useSession(as)
 			}
 		}
 

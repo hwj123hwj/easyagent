@@ -1,0 +1,23 @@
+.model-config-mode,
+.model-config-fields {
+  border: 0;
+  padding: 0;
+  margin: 24px 0;
+  min-width: 0;
+}
+.model-config-mode legend { margin-bottom: 12px; font-weight: 600; }
+.model-config-mode label { display: inline-flex; align-items: center; gap: 8px; margin: 0 24px 8px 0; }
+.model-config-mode input { width: auto; accent-color: var(--accent); }
+.model-config-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+.model-notice,
+.model-check-result { padding: 12px 0; line-height: 1.6; overflow-wrap: anywhere; }
+.model-notice,
+.model-check-result.failure { color: var(--red); }
+.model-check-result.success { color: var(--accent); }
+.model-check-result > p { display: flex; align-items: flex-start; gap: 8px; }
+.model-check-result > p svg { flex-shrink: 0; margin-top: 3px; }
+.detected-models { display: flex; flex-wrap: wrap; gap: 8px; max-height: 180px; overflow-y: auto; margin-top: 12px; }
+.detected-models .btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-config-fields input:disabled { opacity: .6; }
+.model-settings-link { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 16px; border: 0; border-top: 1px solid var(--border); background: transparent; color: var(--accent); text-align: left; cursor: pointer; }
+.model-settings-link:hover { background: var(--bg-elev); }

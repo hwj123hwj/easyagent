@@ -30,6 +30,13 @@ type EventTextDelta struct {
 
 func (EventTextDelta) eventMarker() {}
 
+// EventThinkingDelta carries only reasoning explicitly returned by the provider.
+type EventThinkingDelta struct {
+	Delta string `json:"delta"`
+}
+
+func (EventThinkingDelta) eventMarker() {}
+
 type EventTextEnd struct {
 	ContentIndex int                    `json:"content_index"`
 	Text         string                 `json:"text"`

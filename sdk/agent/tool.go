@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/hwj123hwj/easyagent/sdk/ai"
 )
 
 type Tool interface {
@@ -25,6 +27,7 @@ type ToolResult struct {
 	UserFacing string
 	Details    any
 	IsError    bool
+	Images     []ai.ImageBlock // Optional model-facing images, persisted with the tool result.
 }
 
 // DisplayText 返回适合展示给用户的内容：优先 UserFacing，为空则 fallback 到 Content。
@@ -89,4 +92,19 @@ type ConcurrencySafeChecker interface {
 type ToolWithConfirmation interface {
 	Tool
 	RequiresConfirmation(params json.RawMessage) (description string, ok bool)
+}
+
+// ToolRequiringConfirmation opts a tool into refusing execution when its
+// confirmation cannot be presented. External tools use this to keep an
+// untrusted server from silently inheriting a headless entrypoint's access.
+type ToolRequiringConfirmation interface {
+	Tool
+	RequiresConfirmationAvailable() bool
+}
+
+// ToolWithMandatoryConfirmation keeps a tool's interactive approval independent
+// of the entrypoint's global full-access / auto-approve setting.
+type ToolWithMandatoryConfirmation interface {
+	Tool
+	RequiresInteractiveConfirmation() bool
 }

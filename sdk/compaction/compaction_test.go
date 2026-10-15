@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -177,4 +178,36 @@ func TestDefaultSettings_MicroFields(t *testing.T) {
 	s := DefaultSettings()
 	assert.InDelta(t, 0.6, s.MicroCompactRatio, 0.001)
 	assert.Equal(t, 5, s.MicroKeepRecent)
+}
+
+func TestSplitMessagesKeepsEntireParallelToolBatch(t *testing.T) {
+	messages := []ai.Message{
+		ai.NewTextUserMessage("older task"), ai.AssistantMessage{Text: "older answer"},
+		ai.NewTextUserMessage("new task"),
+		ai.AssistantMessage{ToolCalls: []ai.ToolCall{{ID: "a", Name: "read"}, {ID: "b", Name: "read"}}},
+		ai.ToolResultMessage{ToolCallID: "a", Content: strings.Repeat("a", 100)},
+		ai.ToolResultMessage{ToolCallID: "b", Content: strings.Repeat("b", 100)},
+		ai.AssistantMessage{Text: "finished"},
+	}
+	// Fits the final result plus answer, but not the first result: previously
+	// this split between a and b, orphaning the b result from its tool call.
+	history, recent := SplitMessages(messages, 30)
+	assert.Equal(t, messages[:2], history)
+	assert.Equal(t, messages[2:], recent)
+}
+
+func TestCompactRejectsEmptySummary(t *testing.T) {
+	_, err := Compact(context.Background(), []ai.Message{ai.NewTextUserMessage("must preserve")}, nil, "", func(context.Context, []ai.Message, []ai.Message, string) (string, error) { return " \n", nil })
+	assert.ErrorContains(t, err, "empty summary")
+}
+
+func TestCompactionThresholdReservesOutputAndHonorsRatio(t *testing.T) {
+	settings := DefaultSettings()
+	assert.False(t, ShouldCompact(102400, 128000, settings))
+	assert.True(t, ShouldCompact(102401, 128000, settings))
+	settings.AutoCompactRatio = 0.95
+	assert.True(t, ShouldCompact(112000, 128000, settings), "reserve boundary overrides higher ratio")
+	settings.AutoCompactRatio = 0
+	assert.True(t, ShouldCompact(102401, 128000, settings), "zero uses default")
+	assert.False(t, ShouldCompact(1000, 0, settings))
 }

@@ -17,6 +17,35 @@ type confirmableTool struct {
 	executed atomic.Int32
 }
 
+type approvalRequiredTool struct{ confirmableTool }
+
+func (*approvalRequiredTool) RequiresConfirmationAvailable() bool { return true }
+
+func TestExternalToolRequiresApprovalChannel(t *testing.T) {
+	for _, approved := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no_channel", true: "explicit_approval"}[approved], func(t *testing.T) {
+			registry := providers.NewRegistry()
+			registry.Register(&mockTestProvider{responses: []mockTestResponse{
+				{toolCalls: []ai.ToolCall{{ID: "c1", Name: "danger", Args: `{}`}}, stop: ai.StopReasonToolUse},
+				{text: "done", stop: ai.StopReasonStop},
+			}})
+			tool := &approvalRequiredTool{}
+			var confirm ConfirmFunc
+			if approved {
+				confirm = func(context.Context, ConfirmationRequest) ConfirmDecision { return ConfirmDecision{Approved: true} }
+			}
+			ag := New(Options{Model: ai.Model{ID: "test", Provider: "mock_test"}, Registry: registry, Tools: []Tool{tool}, ConfirmFunc: confirm, MaxTurns: 5})
+			_, err := ag.Prompt(context.Background(), ai.NewTextUserMessage("do it"))
+			require.NoError(t, err)
+			if approved {
+				assert.Equal(t, int32(1), tool.executed.Load())
+			} else {
+				assert.Zero(t, tool.executed.Load())
+			}
+		})
+	}
+}
+
 func (t *confirmableTool) Name() string        { return "danger" }
 func (t *confirmableTool) Description() string { return "A tool that needs confirmation" }
 func (t *confirmableTool) Parameters() map[string]any {
@@ -60,6 +89,7 @@ func newConfirmableAgent(confirm ConfirmFunc) (*Agent, *confirmableTool) {
 func TestConfirmation_DeclinedBlocksAndReportsToLLM(t *testing.T) {
 	// 捕获回告给 LLM 的 tool result 内容：检查第二轮 provider 收到的 messages。
 	var seenToolResult string
+	var seenDetails any
 	mp := &mockTestProvider{responses: []mockTestResponse{
 		{toolCalls: []ai.ToolCall{{ID: "c1", Name: "danger", Args: `{}`}}, stop: ai.StopReasonToolUse},
 		{text: "ok", stop: ai.StopReasonStop},
@@ -68,6 +98,8 @@ func TestConfirmation_DeclinedBlocksAndReportsToLLM(t *testing.T) {
 		for _, m := range msgs {
 			if tr, ok := m.(ai.ToolResultMessage); ok {
 				seenToolResult = tr.Content
+				seenDetails = tr.Details
+				assert.False(t, tr.IsError, "拒绝不是系统错误")
 			}
 		}
 	}}
@@ -92,6 +124,7 @@ func TestConfirmation_DeclinedBlocksAndReportsToLLM(t *testing.T) {
 	assert.Equal(t, int32(0), tool.executed.Load(), "拒绝时工具不应执行")
 	assert.Contains(t, seenToolResult, "user declined", "回告 LLM 的内容应含拒绝信息")
 	assert.Contains(t, seenToolResult, "too risky", "拒绝理由应回告 LLM")
+	assert.Equal(t, map[string]any{"approval": "declined"}, seenDetails)
 }
 
 // 用户同意时：工具执行，正常继续。
@@ -163,4 +196,35 @@ func (c *capturingProvider) Stream(ctx context.Context, req ai.StreamRequest) (*
 		c.onMessages(req.Messages)
 	}
 	return c.inner.Stream(ctx, req)
+}
+
+type mandatoryApprovalTool struct{ confirmableTool }
+
+func (*mandatoryApprovalTool) RequiresInteractiveConfirmation() bool { return true }
+func TestMandatoryApprovalReachesCallbackAndRefusesHeadless(t *testing.T) {
+	for _, withCallback := range []bool{false, true} {
+		registry := providers.NewRegistry()
+		registry.Register(&mockTestProvider{responses: []mockTestResponse{
+			{toolCalls: []ai.ToolCall{{ID: "c1", Name: "danger", Args: `{}`}}, stop: ai.StopReasonToolUse},
+			{text: "done", stop: ai.StopReasonStop},
+		}})
+		tool := &mandatoryApprovalTool{}
+		calls := 0
+		var confirm ConfirmFunc
+		if withCallback {
+			confirm = func(_ context.Context, req ConfirmationRequest) ConfirmDecision {
+				calls++
+				require.True(t, req.ForceConfirmation)
+				require.True(t, req.RequiresApproval)
+				return ConfirmDecision{Approved: false}
+			}
+		}
+		ag := New(Options{Model: ai.Model{ID: "test", Provider: "mock_test"}, Registry: registry, Tools: []Tool{tool}, ConfirmFunc: confirm, MaxTurns: 5})
+		_, err := ag.Prompt(context.Background(), ai.NewTextUserMessage("do it"))
+		require.NoError(t, err)
+		require.Zero(t, tool.executed.Load())
+		if withCallback {
+			require.Equal(t, 1, calls)
+		}
+	}
 }

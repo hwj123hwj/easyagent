@@ -19,10 +19,10 @@ type AskUserTool struct{}
 
 // AskUserQuestion represents a single question with options.
 type AskUserQuestion struct {
-	Question   string          `json:"question"`
-	Header     string          `json:"header,omitempty"`
-	Options    []AskUserOption `json:"options"`
-	MultiSelect bool           `json:"multiSelect,omitempty"`
+	Question    string          `json:"question"`
+	Header      string          `json:"header,omitempty"`
+	Options     []AskUserOption `json:"options"`
+	MultiSelect bool            `json:"multiSelect,omitempty"`
 }
 
 // AskUserOption represents a single answer option.
@@ -160,8 +160,8 @@ func (t *AskUserTool) Validate(raw json.RawMessage) (json.RawMessage, error) {
 		// Auto-fix header
 		if q.Header == "" {
 			params.Questions[i].Header = "Question"
-		} else if len(q.Header) > 12 {
-			params.Questions[i].Header = q.Header[:12]
+		} else if len([]rune(q.Header)) > 12 {
+			params.Questions[i].Header = string([]rune(q.Header)[:12])
 		}
 	}
 
@@ -188,59 +188,83 @@ func (t *AskUserTool) RequiresConfirmation(raw json.RawMessage) (string, bool) {
 	return b.String(), true
 }
 
-func (t *AskUserTool) Execute(_ context.Context, raw json.RawMessage, _ func(agent.PartialResult)) (agent.ToolResult, error) {
-	var params AskUserParams
-	if err := json.Unmarshal(raw, &params); err != nil {
-		return agent.ToolResult{IsError: true}, err
-	}
+// A question needs an answer even in full-access mode.
+func (t *AskUserTool) RequiresInteractiveConfirmation() bool { return true }
 
-	// Validate again in case normalization changed things
-	if err := t.validateInternal(&params); err != nil {
-		return agent.ToolResult{IsError: true, Content: fmt.Sprintf("AskUserQuestion input error: %v", err)}, err
-	}
-
-	// In a real implementation, this would pause and wait for user answers.
-	// For now, format the questions as a prompt for the UI layer.
-	var b strings.Builder
-	b.WriteString("Questions for you:\n\n")
-	for i, q := range params.Questions {
-		header := q.Header
-		if header == "" {
-			header = "Question"
-		}
-		b.WriteString(fmt.Sprintf("[%s] %s\n", header, q.Question))
-		for j, opt := range q.Options {
-			letter := string(rune('A' + j))
-			desc := ""
-			if opt.Description != "" {
-				desc = fmt.Sprintf(" — %s", opt.Description)
-			}
-			b.WriteString(fmt.Sprintf("  %s) %s%s\n", letter, opt.Label, desc))
-		}
-		if i < len(params.Questions)-1 {
-			b.WriteString("\n")
-		}
-	}
-	b.WriteString("\nPlease answer by selecting from the options above.")
-
-	return agent.ToolResult{Content: b.String()}, nil
+// AskUserAnswer uses option labels and a separate custom-text field. Questions
+// are addressed by their position in the validated request.
+type AskUserAnswer struct {
+	Selected []string `json:"selected"`
+	Text     string   `json:"text,omitempty"`
 }
 
-// validateInternal performs internal validation after potential normalization.
-func (t *AskUserTool) validateInternal(params *AskUserParams) error {
-	if len(params.Questions) == 0 {
-		return fmt.Errorf("at least one question is required")
+func ValidateAskUserAnswers(raw, response json.RawMessage) ([]AskUserAnswer, error) {
+	validated, err := NewAskUserTool().Validate(raw)
+	if err != nil {
+		return nil, err
 	}
-	if len(params.Questions) > 4 {
-		return fmt.Errorf("at most 4 questions may be asked in a single call")
+	var params AskUserParams
+	_ = json.Unmarshal(validated, &params)
+	var answers []AskUserAnswer
+	if err := json.Unmarshal(response, &answers); err != nil {
+		return nil, fmt.Errorf("invalid question answers: %w", err)
+	}
+	if len(answers) != len(params.Questions) {
+		return nil, fmt.Errorf("answer every question (%d required)", len(params.Questions))
 	}
 	for i, q := range params.Questions {
-		if strings.TrimSpace(q.Question) == "" {
-			return fmt.Errorf("questions[%d]: question text must be non-empty", i)
+		answer := &answers[i]
+		answer.Text = strings.TrimSpace(answer.Text)
+		count := len(answer.Selected)
+		if answer.Text != "" {
+			count++
 		}
-		if len(q.Options) < 2 {
-			return fmt.Errorf("questions[%d]: need at least 2 options", i)
+		if count == 0 || (!q.MultiSelect && count != 1) {
+			return nil, fmt.Errorf("question %d: select %s", i+1, "an answer (single-select permits only one)")
+		}
+		seen := map[string]bool{}
+		for _, label := range answer.Selected {
+			valid := false
+			for _, option := range q.Options {
+				if label == option.Label {
+					valid = true
+					break
+				}
+			}
+			if !valid || seen[label] {
+				return nil, fmt.Errorf("question %d: invalid or duplicate option", i+1)
+			}
+			seen[label] = true
 		}
 	}
-	return nil
+	return answers, nil
+}
+
+func (t *AskUserTool) Execute(_ context.Context, _ json.RawMessage, _ func(agent.PartialResult)) (agent.ToolResult, error) {
+	return agent.ToolResult{IsError: true}, fmt.Errorf("ask_user_question requires an interactive answer channel; no answers were collected")
+}
+
+func (t *AskUserTool) ExecuteConfirmed(ctx context.Context, raw json.RawMessage, decision agent.ConfirmDecision, _ func(agent.PartialResult)) (agent.ToolResult, error) {
+	if err := ctx.Err(); err != nil {
+		return agent.ToolResult{IsError: true}, err
+	}
+	if !decision.Approved {
+		return agent.ToolResult{IsError: true}, fmt.Errorf("no user answer was submitted")
+	}
+	answers, err := ValidateAskUserAnswers(raw, decision.Response)
+	if err != nil {
+		return agent.ToolResult{IsError: true}, err
+	}
+	var params AskUserParams
+	_ = json.Unmarshal(raw, &params)
+	var b strings.Builder
+	b.WriteString("User answers:\n")
+	for i, answer := range answers {
+		values := append([]string(nil), answer.Selected...)
+		if answer.Text != "" {
+			values = append(values, answer.Text)
+		}
+		fmt.Fprintf(&b, "%s: %s\n", params.Questions[i].Question, strings.Join(values, "; "))
+	}
+	return agent.ToolResult{Content: b.String(), Details: map[string]any{"answers": answers}}, nil
 }

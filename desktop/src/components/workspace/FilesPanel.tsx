@@ -1,5 +1,9 @@
+import {
+  readWorkspaceFiles,
+  saveFilePosition,
+} from "../../client/workspace-files";
 /**
- * FilesPanel.tsx — VSCode-style file browser for the right sidebar.
+ * FilesPanel.tsx — project explorer and file preview for the right workspace.
  * Features: lazy-loading explorer tree, multiple open-file tabs, breadcrumb,
  * per-extension icons, Markdown preview, code highlighting with line numbers,
  * fuzzy file search, and "Open in" menu (reveal in folder / open in terminal).
@@ -7,19 +11,22 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
-} from 'react';
-import fuzzysort from 'fuzzysort';
-import { useStore, getBaseUrl } from '../../store';
-import { Icon } from '../Icon';
-import { FileIcon } from './FileIcons';
-import { Markdown } from '../Markdown';
-import { Resizer } from './Resizer';
-import { highlightCode } from './codeHighlight';
-import { useT, type TFunc } from '../../i18n/useT';
+} from "react";
+import fuzzysort from "fuzzysort";
+import { useStore, apiRequest } from "../../store";
+import { Icon } from "../Icon";
+import { exportFile } from "../../client/file-delivery";
+import { copyText } from "../../client/clipboard";
+import { FileIcon } from "./FileIcons";
+import { Markdown } from "../Markdown";
+import { highlightCode } from "./codeHighlight";
+import { useT, type TFunc } from "../../i18n/useT";
+import { WORKSPACE_FILE_DRAG } from "../PromptContext";
 
 /** DirEntry shape returned by the /workspace/list-dir endpoint. */
 interface DirEntry {
@@ -28,112 +35,152 @@ interface DirEntry {
   isDir: boolean;
 }
 
+const PDF_EXT = /\.pdf$/i;
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 const MARKDOWN_EXT = /\.(md|markdown)$/i;
 
 /** The last path segment, tolerating both separators. */
 function baseName(p: string): string {
-  const parts = p.replace(/[\\/]+$/, '').split(/[\\/]/);
+  const parts = p.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || p;
 }
 
 /** Breadcrumb segments of `file` relative to `root`. */
 function breadcrumb(root: string, file: string): string[] {
-  const norm = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '');
+  const norm = (s: string) => s.replace(/\\/g, "/").replace(/\/+$/, "");
   const r = norm(root);
   const f = norm(file);
-  const rel = f.startsWith(r + '/') ? f.slice(r.length + 1) : baseName(f);
-  return [baseName(r), ...rel.split('/').filter(Boolean)];
+  const rel = f.startsWith(r + "/") ? f.slice(r.length + 1) : baseName(f);
+  return [baseName(r), ...rel.split("/").filter(Boolean)];
 }
 
 // ── REST API helpers (talk to easyagent backend) ────────────────────────────────
 
+function workspaceResource(resource: string, path: string): string {
+  const params = new URLSearchParams({ path });
+  const sessionId = useStore.getState().activeSessionId;
+  if (sessionId) params.set("session_id", sessionId);
+  return "/workspace/" + resource + "?" + params;
+}
 async function listDir(path: string): Promise<DirEntry[]> {
-  const res = await fetch(`${getBaseUrl()}/workspace/list-dir?path=${encodeURIComponent(path)}`);
-  if (!res.ok) return [];
-  return res.json();
+  return apiRequest("GET", workspaceResource("list-dir", path));
 }
-
 async function searchFiles(root: string): Promise<string[]> {
-  const res = await fetch(`${getBaseUrl()}/workspace/search-files?path=${encodeURIComponent(root)}`);
-  if (!res.ok) return [];
-  return res.json();
+  return apiRequest("GET", workspaceResource("search-files", root));
 }
-
 async function readFileText(path: string): Promise<string> {
-  const res = await fetch(`${getBaseUrl()}/workspace/read-file?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error('read failed');
-  const data = await res.json();
-  return data.content;
+  const value = await apiRequest<{ content: string }>(
+    "GET",
+    workspaceResource("read-file", path),
+  );
+  return value.content;
 }
-
-async function readFileBase64(path: string): Promise<{ data: string; mimeType: string } | null> {
-  const res = await fetch(`${getBaseUrl()}/workspace/read-file-base64?path=${encodeURIComponent(path)}`);
-  if (!res.ok) return null;
-  return res.json();
+async function readFileBase64(
+  path: string,
+): Promise<{ data: string; mimeType: string } | null> {
+  return apiRequest("GET", workspaceResource("read-file-base64", path));
 }
-
 async function writeFileText(path: string, content: string): Promise<boolean> {
-  const res = await fetch(`${getBaseUrl()}/workspace/write-file?path=${encodeURIComponent(path)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  });
-  return res.ok;
+  await apiRequest("PUT", workspaceResource("write-file", path), { content });
+  return true;
 }
 
 export function FilesPanel() {
   const activeId = useStore((s) => s.activeSessionId);
-  const meta = useStore((s) => (activeId ? s.sessions[activeId]?.meta : undefined));
+  const meta = useStore((s) =>
+    activeId ? s.sessions[activeId]?.meta : undefined,
+  );
   const tabs = useStore((s) => s.workspace.fileTabs);
   const activeTab = useStore((s) => s.workspace.activeFileTab);
   const openFileTab = useStore((s) => s.openFileTab);
   const closeFileTab = useStore((s) => s.closeFileTab);
-  const setActiveFileTab = useStore((s) => s.setActiveFileTab);
-  const fileTreeWidth = useStore((s) => s.workspace.fileTreeWidth);
-  const setWorkspaceSize = useStore((s) => s.setWorkspaceSize);
+  const [showTree, setShowTree] = useState(false);
   const t = useT();
 
   const root = meta?.cwd;
+  const browsing = !activeTab || showTree;
+  useEffect(() => {
+    setShowTree(false);
+  }, [root]);
+  const profile = useStore((s) => s.selectedProfile);
+  const openFile = (path: string) => {
+    openFileTab(path);
+    setShowTree(false);
+  };
 
   if (!root) {
     return (
       <div className="ws-panel">
         <div className="ws-panel-head">
           <Icon name="folder" size={15} />
-          <span>{t('files.title')}</span>
+          <span>{t("files.title")}</span>
         </div>
-        <div className="empty">{t('files.noProject')}</div>
+        <div className="empty">{t("files.noProject")}</div>
       </div>
     );
   }
 
   return (
     <div className="ws-panel files-panel">
-      <FileTabs
-        tabs={tabs}
-        activeTab={activeTab}
-        onSelect={setActiveFileTab}
-        onClose={closeFileTab}
-        t={t}
-      />
+      <div className="files-topbar">
+        <button
+          className={`files-tree-toggle ${browsing ? "active" : ""}`}
+          aria-label={browsing && activeTab ? "返回文件预览" : "浏览项目目录"}
+          title={browsing && activeTab ? "返回文件预览" : "浏览项目目录"}
+          aria-pressed={browsing}
+          onClick={() => setShowTree((value) => !value)}
+          disabled={!activeTab}
+        >
+          <Icon
+            name={browsing && activeTab ? "arrow-left" : "folder"}
+            size={14}
+          />
+          <span>{browsing && activeTab ? "返回文件" : "目录"}</span>
+        </button>
+        <FileTabs
+          tabs={tabs}
+          activeTab={activeTab}
+          onSelect={openFile}
+          onClose={closeFileTab}
+          t={t}
+        />
+        {activeTab && !browsing && (
+          <div className="files-topbar-actions">
+            <button
+              className="chip interactive file-export-btn"
+              title={t("files.export")}
+              onClick={() =>
+                void exportFile(activeId!, activeTab).catch((e) =>
+                  window.alert(e.message),
+                )
+              }
+            >
+              <Icon name="download" size={13} />
+              <span className="chip-label">{t("files.export")}</span>
+            </button>
+            <FileOpenIn file={activeTab} t={t} />
+          </div>
+        )}
+      </div>
       <div className="files-body">
-        <div className="files-main">
-          {activeTab ? (
-            <>
-              <FileToolbar root={root} file={activeTab} t={t} />
-              <FileContent path={activeTab} t={t} />
-            </>
-          ) : (
-            <div className="empty">{t('files.noOpenTabs')}</div>
+        <div className="files-main" hidden={browsing}>
+          {activeTab && (
+            <FileContent
+              key={profile + root + activeTab}
+              root={root}
+              path={activeTab}
+              t={t}
+            />
           )}
         </div>
-        <Resizer
-          axis="x"
-          getValue={() => useStore.getState().workspace.fileTreeWidth}
-          onChange={(v) => setWorkspaceSize('fileTreeWidth', v)}
-        />
-        <FileTree root={root} activeTab={activeTab} onOpen={openFileTab} width={fileTreeWidth} />
+        <div className="files-explorer" hidden={!browsing}>
+          <FileTree
+            key={root}
+            root={root}
+            activeTab={activeTab}
+            onOpen={openFile}
+          />
+        </div>
       </div>
     </div>
   );
@@ -159,7 +206,7 @@ function FileTabs({
       <div className="file-tabs">
         <span className="file-tabs-empty">
           <Icon name="folder" size={14} />
-          {t('files.title')}
+          {t("files.title")}
         </span>
       </div>
     );
@@ -169,15 +216,21 @@ function FileTabs({
       {tabs.map((p) => (
         <div
           key={p}
-          className={`file-tab ${activeTab === p ? 'active' : ''}`}
+          className={`file-tab ${activeTab === p ? "active" : ""}`}
           title={p}
-          onClick={() => onSelect(p)}
         >
-          <FileIcon name={baseName(p)} size={14} />
-          <span className="file-tab-name">{baseName(p)}</span>
+          <button
+            className="file-tab-select"
+            onClick={() => onSelect(p)}
+            aria-pressed={activeTab === p}
+          >
+            <FileIcon name={baseName(p)} size={14} />
+            <span className="file-tab-name">{baseName(p)}</span>
+          </button>
           <button
             className="file-tab-close"
-            title={t('files.closeTab')}
+            title={t("files.closeTab")}
+            aria-label={`${t("files.closeTab")} · ${baseName(p)}`}
             onClick={(e) => {
               e.stopPropagation();
               onClose(p);
@@ -191,10 +244,34 @@ function FileTabs({
   );
 }
 
-// ── breadcrumb + "Open in" toolbar ──
+// ── breadcrumb & "Open in" ──
 
-function FileToolbar({ root, file, t }: { root: string; file: string; t: TFunc }) {
+function FileBreadcrumb({ root, file }: { root: string; file: string }) {
   const crumbs = useMemo(() => breadcrumb(root, file), [root, file]);
+  return (
+    <div className="file-breadcrumb" title={file}>
+      {crumbs.map((c, i) => (
+        <span key={i} className="crumb">
+          {i > 0 && <Icon name="chevron-right" size={12} />}
+          <span className={i === crumbs.length - 1 ? "crumb-leaf" : ""}>
+            {c}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function FileOpenIn({
+  file,
+  t,
+}: {
+  file: string;
+  t: TFunc;
+}) {
+  const local = useStore(
+    (s) => s.profiles.find((p) => p.id === s.selectedProfile)?.kind === "local",
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -203,61 +280,52 @@ function FileToolbar({ root, file, t }: { root: string; file: string; t: TFunc }
     const onDown = (e: MouseEvent) => {
       if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenuOpen(false);
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) =>
+      e.key === "Escape" && setMenuOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
     };
   }, [menuOpen]);
 
-  const dir = file.replace(/[\\/][^\\/]*$/, '') || file;
+  const dir = file.replace(/[\\/][^\\/]*$/, "") || file;
 
   return (
-    <div className="file-toolbar">
-      <div className="file-breadcrumb">
-        {crumbs.map((c, i) => (
-          <span key={i} className="crumb">
-            {i > 0 && <Icon name="chevron-right" size={12} />}
-            <span className={i === crumbs.length - 1 ? 'crumb-leaf' : ''}>{c}</span>
-          </span>
-        ))}
-      </div>
-      <span className="grow" />
-      <div ref={menuRef} style={{ position: 'relative' }}>
-        <button
-          className="chip interactive file-open-in"
-          title={t('files.openIn')}
-          onClick={() => setMenuOpen((o) => !o)}
-        >
-          <Icon name="external-link" size={13} />
-          <span className="chip-label">{t('files.openIn')}</span>
-          <Icon name="chevron-down" size={12} className="chip-caret" />
-        </button>
-        {menuOpen && (
-          <div className="menu-pop" style={{ right: 0, top: '120%' }}>
-            <button
-              onClick={() => {
-                void window.piAPI?.revealInFolder(file);
-                setMenuOpen(false);
-              }}
-            >
-              <Icon name="folder-open" size={14} />
-              {t('files.openInFolder')}
-            </button>
-            <button
-              onClick={() => {
-                void window.piAPI?.openInTerminal(dir);
-                setMenuOpen(false);
-              }}
-            >
-              <Icon name="terminal" size={14} />
-              {t('files.openInTerminal')}
-            </button>
-          </div>
-        )}
-      </div>
+    <div ref={menuRef} style={{ position: "relative" }}>
+      <button
+        className="chip interactive file-open-in"
+        disabled={!local}
+        title={local ? t("files.openIn") : "路径属于远程主机，无法在本机打开"}
+        onClick={() => setMenuOpen((o) => !o)}
+      >
+        <Icon name="external-link" size={13} />
+        <span className="chip-label">{t("files.openIn")}</span>
+        <Icon name="chevron-down" size={12} className="chip-caret" />
+      </button>
+      {menuOpen && (
+        <div className="menu-pop" style={{ right: 0, top: "120%" }}>
+          <button
+            onClick={() => {
+              void window.piAPI?.revealInFolder(file);
+              setMenuOpen(false);
+            }}
+          >
+            <Icon name="folder-open" size={14} />
+            {t("files.openInFolder")}
+          </button>
+          <button
+            onClick={() => {
+              void window.piAPI?.openInTerminal(dir);
+              setMenuOpen(false);
+            }}
+          >
+            <Icon name="terminal" size={14} />
+            {t("files.openInTerminal")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -265,65 +333,81 @@ function FileToolbar({ root, file, t }: { root: string; file: string; t: TFunc }
 // ── explorer tree ──
 
 function joinRoot(root: string, rel: string): string {
-  return `${root.replace(/[\\/]+$/, '')}/${rel}`;
+  return `${root.replace(/[\\/]+$/, "")}/${rel}`;
 }
 
 function FileTree({
   root,
   activeTab,
   onOpen,
-  width,
 }: {
   root: string;
   activeTab?: string;
   onOpen: (p: string) => void;
-  width: number;
 }) {
   const t = useT();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState("");
   const [files, setFiles] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     setFiles(null);
-    setQuery('');
+    setQuery("");
+    setLoading(false);
+    setError(false);
   }, [root]);
 
   const searching = query.trim().length > 0;
   // Loading entries when filters change
   useEffect(() => {
-    if (!searching || files !== null || loading) return;
+    if (!searching || files !== null) return;
     let alive = true;
     setLoading(true);
+    setError(false);
     void searchFiles(root)
       .then((list) => alive && setFiles(list))
-      .catch(() => alive && setFiles([]))
+      .catch(() => {
+        if (alive) {
+          setFiles([]);
+          setError(true);
+        }
+      })
       .finally(() => alive && setLoading(false));
-    return () => { alive = false; };
-  }, [searching, files, loading, root]);
+    return () => {
+      alive = false;
+    };
+  }, [searching, files, root]);
 
   const results = useMemo(() => {
     if (!searching || !files) return [];
-    return fuzzysort.go(query.trim(), files, { limit: 80 }).map((r) => r.target);
+    return fuzzysort
+      .go(query.trim(), files, { limit: 80 })
+      .map((r) => r.target);
   }, [query, files, searching]);
 
   return (
-    <div className="file-tree" style={{ width }}>
+    <div className="file-tree">
       <div className="file-tree-head">
         <Icon name="folder" size={13} />
-        <span>{t('files.explorer')}</span>
+        <span title={root}>{baseName(root)}</span>
       </div>
       <div className="file-search">
         <Icon name="search" size={13} />
         <input
           className="file-search-input"
-          placeholder={t('files.searchPlaceholder')}
+          placeholder={t("files.searchPlaceholder")}
+          aria-label={t("files.searchPlaceholder")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           spellCheck={false}
         />
         {query && (
-          <button className="file-search-clear" title={t('files.searchClear')} onClick={() => setQuery('')}>
+          <button
+            className="file-search-clear"
+            title={t("files.searchClear")}
+            onClick={() => setQuery("")}
+          >
             <Icon name="x" size={12} />
           </button>
         )}
@@ -334,18 +418,27 @@ function FileTree({
             <div className="tree-row tree-loading" style={{ paddingLeft: 10 }}>
               <Icon name="loader" size={13} spin />
             </div>
+          ) : error ? (
+            <div className="file-tree-error" role="status">
+              <p>无法搜索项目文件，请检查访问权限或服务连接。</p>
+              <button className="btn" onClick={() => setFiles(null)}>
+                重试
+              </button>
+            </div>
           ) : results.length === 0 ? (
-            <div className="empty file-search-empty">{t('files.searchNoResults')}</div>
+            <div className="empty file-search-empty">
+              {t("files.searchNoResults")}
+            </div>
           ) : (
             results.map((rel) => {
               const abs = joinRoot(root, rel);
-              const slash = rel.lastIndexOf('/');
+              const slash = rel.lastIndexOf("/");
               const fname = slash < 0 ? rel : rel.slice(slash + 1);
-              const dirPart = slash < 0 ? '' : rel.slice(0, slash);
+              const dirPart = slash < 0 ? "" : rel.slice(0, slash);
               return (
                 <button
                   key={rel}
-                  className={`tree-row search-row ${activeTab === abs ? 'active' : ''}`}
+                  className={`tree-row search-row ${activeTab === abs ? "active" : ""}`}
                   style={{ paddingLeft: 10 }}
                   onClick={() => onOpen(abs)}
                   title={rel}
@@ -358,7 +451,15 @@ function FileTree({
             })
           )
         ) : (
-          <TreeNode path={root} name={baseName(root)} isDir depth={0} activeTab={activeTab} onOpen={onOpen} defaultOpen />
+          <TreeNode
+            path={root}
+            name={baseName(root)}
+            isDir
+            depth={0}
+            activeTab={activeTab}
+            onOpen={onOpen}
+            defaultOpen
+          />
         )}
       </div>
     </div>
@@ -385,16 +486,25 @@ function TreeNode({
   const [open, setOpen] = useState(!!defaultOpen);
   const [children, setChildren] = useState<DirEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     if (!isDir || !open || children) return;
     let alive = true;
     setLoading(true);
+    setError(false);
     void listDir(path)
       .then((entries) => alive && setChildren(entries))
-      .catch(() => alive && setChildren([]))
+      .catch(() => {
+        if (alive) {
+          setChildren([]);
+          setError(true);
+        }
+      })
       .finally(() => alive && setLoading(false));
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [isDir, open, children, path]);
 
   const active = !isDir && activeTab === path;
@@ -403,9 +513,21 @@ function TreeNode({
   if (!isDir) {
     return (
       <button
-        className={`tree-row ${active ? 'active' : ''}`}
+        className={`tree-row ${active ? "active" : ""}`}
         style={{ paddingLeft: indent }}
         onClick={() => onOpen(path)}
+        draggable
+        onDragStart={(event) => {
+          const state = useStore.getState();
+          const workspace = state.activeSessionId
+            ? state.sessions[state.activeSessionId]?.meta.cwd
+            : "";
+          event.dataTransfer.effectAllowed = "copy";
+          event.dataTransfer.setData(
+            WORKSPACE_FILE_DRAG,
+            JSON.stringify({ path, workspace, profile: state.selectedProfile }),
+          );
+        }}
         title={path}
       >
         <FileIcon name={name} size={15} />
@@ -422,14 +544,24 @@ function TreeNode({
         onClick={() => setOpen((o) => !o)}
         title={path}
       >
-        <Icon name={open ? 'chevron-down' : 'chevron-right'} size={13} />
+        <Icon name={open ? "chevron-down" : "chevron-right"} size={13} />
         <FileIcon name={name} isDir open={open} size={15} />
         <span className="tree-name">{name}</span>
       </button>
       {open &&
         (loading && !children ? (
-          <div className="tree-row tree-loading" style={{ paddingLeft: indent + 19 }}>
+          <div
+            className="tree-row tree-loading"
+            style={{ paddingLeft: indent + 19 }}
+          >
             <Icon name="loader" size={13} spin />
+          </div>
+        ) : error ? (
+          <div className="file-tree-error" role="status">
+            <p>无法读取目录，请检查所选项目和访问权限。</p>
+            <button className="btn" onClick={() => setChildren(null)}>
+              重试
+            </button>
           </div>
         ) : (
           (children ?? []).map((c) => (
@@ -451,50 +583,118 @@ function TreeNode({
 // ── content viewer ──
 
 type Loaded =
-  | { kind: 'text'; text: string }
-  | { kind: 'image'; url: string }
-  | { kind: 'binary' }
-  | { kind: 'error' };
+  | { kind: "text"; text: string }
+  | { kind: "image"; url: string }
+  | { kind: "pdf"; url: string }
+  | { kind: "binary" }
+  | { kind: "error" };
 
-function FileContent({ path, t }: { path: string; t: TFunc }) {
+function FileContent({
+  root,
+  path,
+  t,
+}: {
+  root: string;
+  path: string;
+  t: TFunc;
+}) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const isMarkdown = MARKDOWN_EXT.test(path);
   const isImage = IMAGE_EXT.test(path);
-  const [preview, setPreview] = useState(true);
+  const isPdf = PDF_EXT.test(path);
+  const state = useStore.getState(),
+    host = state.selectedProfile,
+    workspace = state.activeSessionId
+      ? state.sessions[state.activeSessionId]?.meta.cwd || ""
+      : "";
+  const saved = useRef(readWorkspaceFiles(host, workspace).positions[path]);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [preview, setPreview] = useState(saved.current?.preview !== false);
+  useLayoutEffect(() => {
+    if (loaded && contentRef.current)
+      contentRef.current.scrollTop = saved.current?.top || 0;
+  }, [loaded]);
+  const contentProps = {
+    ref: contentRef,
+    onScroll: () => {
+      if (contentRef.current)
+        saveFilePosition(
+          host,
+          workspace,
+          path,
+          contentRef.current.scrollTop,
+          preview,
+        );
+    },
+  };
   const [editing, setEditing] = useState(false);
-  const [editContent, setEditContent] = useState('');
+  const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    void window.piAPI?.reportUpdateDirty?.(dirty);
+    return () => { void window.piAPI?.reportUpdateDirty?.(false); };
+  }, [dirty]);
 
   useEffect(() => {
     setLoaded(null);
-    setPreview(true);
+    setPreview(saved.current?.preview !== false);
     setEditing(false);
     setDirty(false);
     let alive = true;
-    if (isImage) {
-      void readFileBase64(path)
-        .then((b64) =>
-          alive && setLoaded(b64 ? { kind: 'image', url: `data:${b64.mimeType};base64,${b64.data}` } : { kind: 'binary' }),
-        )
-        .catch(() => alive && setLoaded({ kind: 'binary' }));
+    let objectUrl: string | undefined;
+    if (isImage || isPdf) {
+      void (
+        isPdf
+          ? apiRequest<{ data: string; mimeType: string }>(
+              "GET",
+              workspaceResource("file-data", path),
+            )
+          : readFileBase64(path)
+      )
+        .then((b64) => {
+          if (!alive) return;
+          if (isPdf && b64?.mimeType === "application/pdf") {
+            const data = Uint8Array.from(atob(b64.data), (c) =>
+              c.charCodeAt(0),
+            );
+            objectUrl = URL.createObjectURL(
+              new Blob([data], { type: "application/pdf" }),
+            );
+            setLoaded({ kind: "pdf", url: objectUrl });
+          } else
+            setLoaded(
+              b64 && !isPdf
+                ? {
+                    kind: "image",
+                    url: `data:${b64.mimeType};base64,${b64.data}`,
+                  }
+                : { kind: "binary" },
+            );
+        })
+        .catch(() => alive && setLoaded({ kind: "binary" }));
       return () => {
         alive = false;
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
       };
     }
     void readFileText(path)
       .then((text) => {
         if (!alive) return;
-        setLoaded(text.includes(String.fromCharCode(0)) ? { kind: 'binary' } : { kind: 'text', text });
+        setLoaded(
+          text.includes(String.fromCharCode(0))
+            ? { kind: "binary" }
+            : { kind: "text", text },
+        );
       })
-      .catch(() => alive && setLoaded({ kind: 'error' }));
+      .catch(() => alive && setLoaded({ kind: "error" }));
     return () => {
       alive = false;
     };
-  }, [path, isImage]);
+  }, [path, isImage, isPdf]);
 
   const handleStartEdit = () => {
-    if (loaded?.kind === 'text') {
+    if (loaded?.kind === "text") {
       setEditContent(loaded.text);
       setEditing(true);
       setDirty(false);
@@ -503,104 +703,133 @@ function FileContent({ path, t }: { path: string; t: TFunc }) {
 
   const handleCancelEdit = () => {
     setEditing(false);
-    setEditContent('');
+    setEditContent("");
     setDirty(false);
   };
 
   const handleSave = async () => {
-    if (!loaded || loaded.kind !== 'text') return;
+    if (!loaded || loaded.kind !== "text") return;
     setSaving(true);
-    const ok = await writeFileText(path, editContent);
-    setSaving(false);
+    let ok = false;
+    try {
+      ok = await writeFileText(path, editContent);
+    } catch (error) {
+      window.alert((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
     if (ok) {
       // Update loaded content to reflect saved state
-      setLoaded({ kind: 'text', text: editContent });
+      setLoaded({ kind: "text", text: editContent });
       setEditing(false);
       setDirty(false);
     }
   };
 
-  if (!loaded) {
-    return (
-      <div className="file-content">
-        <div className="empty">
-          <Icon name="loader" size={18} spin />
-        </div>
-      </div>
-    );
-  }
-  if (loaded.kind === 'error') {
-    return (
-      <div className="file-content">
-        <div className="empty">{t('files.loadFailed')}</div>
-      </div>
-    );
-  }
-  if (loaded.kind === 'binary') {
-    return (
-      <div className="file-content">
-        <div className="empty">{t('files.binary')}</div>
-      </div>
-    );
-  }
-  if (loaded.kind === 'image') {
-    return (
-      <div className="file-content">
-        <div className="file-image-wrap">
-          <img className="file-image" src={loaded.url} alt={baseName(path)} />
-        </div>
-      </div>
-    );
-  }
-
-  // text
-  const canEdit = loaded.kind === 'text';
+  const isText = loaded?.kind === "text";
+  const canEdit = isText;
 
   return (
-    <div className="file-content">
+    <div className="file-content" {...contentProps}>
       <div className="file-content-toolbar">
-        {isMarkdown && !editing && (
+        <FileBreadcrumb root={root} file={path} />
+        <span className="grow" />
+        {isText && isMarkdown && !editing && (
           <div className="views-menu">
-            <button className={preview ? 'active' : ''} onClick={() => setPreview(true)}>
-              {t('files.preview')}
+            <button
+              className={preview ? "active" : ""}
+              onClick={() => {
+                setPreview(true);
+                saveFilePosition(
+                  host,
+                  workspace,
+                  path,
+                  contentRef.current?.scrollTop || 0,
+                  true,
+                );
+              }}
+            >
+              {t("files.preview")}
             </button>
-            <button className={!preview ? 'active' : ''} onClick={() => setPreview(false)}>
-              {t('files.source')}
+            <button
+              className={!preview ? "active" : ""}
+              onClick={() => {
+                setPreview(false);
+                saveFilePosition(
+                  host,
+                  workspace,
+                  path,
+                  contentRef.current?.scrollTop || 0,
+                  false,
+                );
+              }}
+            >
+              {t("files.source")}
             </button>
           </div>
         )}
-        {(isMarkdown && !editing) && <span className="grow" />}
-        {!editing && canEdit && (
-          <button className="file-edit-btn" onClick={handleStartEdit} title={t('files.edit')}>
+        {isText && !editing && canEdit && (
+          <button
+            className="file-edit-btn"
+            onClick={handleStartEdit}
+            title={t("files.edit")}
+          >
             <Icon name="edit" size={13} />
-            <span>{t('files.edit')}</span>
+            <span>{t("files.edit")}</span>
           </button>
         )}
-        {editing && (
+        {isText && editing && (
           <>
-            <span className={`file-dirty-indicator ${dirty ? 'visible' : ''}`}>
+            <span className={`file-dirty-indicator ${dirty ? "visible" : ""}`}>
               <span className="file-dirty-dot" />
-              {t('files.unsaved')}
+              {t("files.unsaved")}
             </span>
-            <span className="grow" />
-            <button className="file-edit-btn cancel" onClick={handleCancelEdit} disabled={saving}>
+            <button
+              className="file-edit-btn cancel"
+              onClick={handleCancelEdit}
+              disabled={saving}
+            >
               <Icon name="x" size={13} />
-              <span>{t('files.cancel')}</span>
+              <span>{t("files.cancel")}</span>
             </button>
-            <button className="file-edit-btn save" onClick={handleSave} disabled={saving || !dirty}>
-              <Icon name={saving ? 'loader' : 'check'} size={13} spin={saving} />
-              <span>{t('files.save')}</span>
+            <button
+              className="file-edit-btn save"
+              onClick={handleSave}
+              disabled={saving || !dirty}
+            >
+              <Icon
+                name={saving ? "loader" : "check"}
+                size={13}
+                spin={saving}
+              />
+              <span>{t("files.save")}</span>
             </button>
           </>
         )}
       </div>
-      {editing ? (
+      {!loaded ? (
+        <div className="empty">
+          <Icon name="loader" size={18} spin />
+        </div>
+      ) : loaded.kind === "error" ? (
+        <div className="empty">{t("files.loadFailed")}</div>
+      ) : loaded.kind === "binary" ? (
+        <div className="empty">{t("files.binary")}</div>
+      ) : loaded.kind === "pdf" ? (
+        <iframe className="file-pdf" title={baseName(path)} src={loaded.url} />
+      ) : loaded.kind === "image" ? (
+        <div className="file-image-wrap">
+          <img className="file-image" src={loaded.url} alt={baseName(path)} />
+        </div>
+      ) : editing ? (
         <textarea
           className="file-edit-area"
           value={editContent}
           onChange={(e) => {
             setEditContent(e.target.value);
-            setDirty(e.target.value !== (loaded.kind === 'text' ? loaded.text : ''));
+            setDirty(
+              e.target.value !== (loaded.kind === "text" ? loaded.text : ""),
+            );
           }}
           spellCheck={false}
           autoFocus
@@ -616,20 +845,36 @@ function FileContent({ path, t }: { path: string; t: TFunc }) {
   );
 }
 
-function HighlightedCode({ text, fileName }: { text: string; fileName: string }) {
-  const body = useMemo(() => (text.endsWith('\n') ? text.slice(0, -1) : text), [text]);
-  const html = useMemo(() => highlightCode(body, fileName).html, [body, fileName]);
-  const lineCount = useMemo(() => body.split('\n').length, [body]);
+function HighlightedCode({
+  text,
+  fileName,
+}: {
+  text: string;
+  fileName: string;
+}) {
+  const body = useMemo(
+    () => (text.endsWith("\n") ? text.slice(0, -1) : text),
+    [text],
+  );
+  const html = useMemo(
+    () => highlightCode(body, fileName).html,
+    [body, fileName],
+  );
+  const lineCount = useMemo(() => body.split("\n").length, [body]);
   const codeRef = useRef<HTMLElement>(null);
 
-  const [menu, setMenu] = useState<{ x: number; y: number; selection: string } | null>(null);
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    selection: string;
+  } | null>(null);
 
   return (
     <div
       className="file-code-scroll"
       onContextMenu={(e: ReactMouseEvent<HTMLDivElement>) => {
         e.preventDefault();
-        const sel = window.getSelection()?.toString() ?? '';
+        const sel = window.getSelection()?.toString() ?? "";
         setMenu({ x: e.clientX, y: e.clientY, selection: sel });
       }}
     >
@@ -669,19 +914,19 @@ function CodeContextMenu({
   const t = useT();
   useEffect(() => {
     const onDown = () => onClose();
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
     };
   }, [onClose]);
 
   return (
     <div
       className="menu-pop code-context-menu"
-      style={{ left: x, top: y, position: 'fixed' }}
+      style={{ left: x, top: y, position: "fixed" }}
     >
       {selection && (
         <>
@@ -694,36 +939,38 @@ function CodeContextMenu({
             }}
           >
             <Icon name="search" size={14} />
-            {t('codeMenu.searchGoogle')}
+            {t("codeMenu.searchGoogle")}
           </button>
           <button
             onClick={() => {
-              void navigator.clipboard.writeText(selection);
+              void copyText(selection);
               onClose();
             }}
           >
             <Icon name="copy" size={14} />
-            {t('codeMenu.copy')}
+            {t("codeMenu.copy")}
           </button>
           <div className="menu-sep" />
         </>
       )}
       <button
         onClick={() => {
-          const code = document.querySelector('.file-code code') as HTMLElement | null;
+          const code = document.querySelector(
+            ".file-code code",
+          ) as HTMLElement | null;
           if (code) {
             const sel = window.getSelection();
             const range = document.createRange();
             range.selectNodeContents(code);
             sel?.removeAllRanges();
             sel?.addRange(range);
-            void navigator.clipboard.writeText(sel?.toString() ?? '');
+            void copyText(sel?.toString() ?? "");
           }
           onClose();
         }}
       >
         <Icon name="check" size={14} />
-        {t('codeMenu.selectAll')}
+        {t("codeMenu.selectAll")}
       </button>
     </div>
   );

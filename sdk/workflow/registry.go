@@ -131,6 +131,11 @@ func (r *Registry) resolveGate(runID, stepID string, approve bool) error {
 
 // WaitApproval 实现 GateHandler：注册审批通道并阻塞等待。
 func (r *Registry) WaitApproval(ctx context.Context, runID, stepID string) (bool, error) {
+	return r.WaitApprovalReady(ctx, runID, stepID, nil)
+}
+
+// WaitApprovalReady 先注册审批通道，再发布等待状态，防止可见但无法审批。
+func (r *Registry) WaitApprovalReady(ctx context.Context, runID, stepID string, ready func()) (bool, error) {
 	ch := make(chan bool, 1)
 	r.mu.Lock()
 	live := r.runs[runID]
@@ -140,6 +145,9 @@ func (r *Registry) WaitApproval(ctx context.Context, runID, stepID string) (bool
 	}
 	live.gates[stepID] = ch
 	r.mu.Unlock()
+	if ready != nil {
+		ready()
+	}
 
 	select {
 	case v := <-ch:
@@ -286,4 +294,20 @@ func newRunID() string {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
 	return fmt.Sprintf("wf-%d-%s", time.Now().Unix(), hex.EncodeToString(b[:]))
+}
+
+// ActiveCount includes runs waiting for human approval.
+func (r *Registry) ActiveCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.runs)
+}
+
+// CancelAll requests cancellation; callers can wait for ActiveCount to reach zero.
+func (r *Registry) CancelAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, run := range r.runs {
+		run.cancel()
+	}
 }

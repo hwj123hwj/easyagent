@@ -13,20 +13,25 @@ Thumbs.db
 
 # Build
 /tmp/
-/pi-agent
-/pi-feishu-bridge
-/pi-music
+/dist/
 
 # Easy Code
 .easycode/
 
 # Reviews (local only)
 docs/reviews/
+.impeccable/
 
 # Runtime data
 data/
 *.log
 bin/
+.easyagent/mcp.json
+.easyagent/mcp-auth.json
+.easyagent/mcp.json.trust.json
 
 # Promo video workspace (large media + local .env)
 .video-promo-v011/
+
+# Python validation caches
+__pycache__/

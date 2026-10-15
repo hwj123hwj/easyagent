@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -24,7 +25,9 @@ func TestSynopsisAfterHook_LargeOutput(t *testing.T) {
 	large := strings.Repeat("line of text\n", 500) // ~6500 chars
 	result := ToolResult{Content: large}
 
-	got, err := SynopsisAfterHook(context.Background(), ToolCallContext{}, result)
+	// 默认阈值已与 read/grep 的 30000 截断对齐，这里用小阈值直接测概览化行为。
+	hook := NewSynopsisAfterHook(SynopsisSettings{Threshold: 4000}, nil)
+	got, err := hook(context.Background(), ToolCallContext{ToolName: "web_fetch"}, result)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,12 +49,80 @@ func TestSynopsisAfterHook_LargeOutput(t *testing.T) {
 	}
 }
 
+func TestSynopsisAfterHook_DefaultThresholdMatchesToolTruncation(t *testing.T) {
+	// 30000 字符以内（read/bash 自身截断上限）不应被默认设置概览化。
+	large := strings.Repeat("x", DefaultSynopsisThreshold)
+	got, err := SynopsisAfterHook(context.Background(), ToolCallContext{ToolName: "web_fetch"}, ToolResult{Content: large})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content != large {
+		t.Error("output at the tool truncation limit should not be synopsized by default")
+	}
+}
+
+func TestSynopsisAfterHook_ExemptTool(t *testing.T) {
+	large := strings.Repeat("line of text\n", 500)
+	hook := NewSynopsisAfterHook(SynopsisSettings{Threshold: 4000}, nil)
+
+	// read/grep 等豁免工具的输出本身就是给模型看的，超阈值也保持原文。
+	for _, name := range []string{"read", "grep", "read_many_files"} {
+		got, err := hook(context.Background(), ToolCallContext{ToolName: name}, ToolResult{Content: large})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Content != large {
+			t.Errorf("exempt tool %s output should pass through unchanged", name)
+		}
+	}
+
+	// 同一输出在未豁免的工具上仍会概览化。
+	got, err := hook(context.Background(), ToolCallContext{ToolName: "web_fetch"}, ToolResult{Content: large})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content == large {
+		t.Error("non-exempt tool output should be synopsized")
+	}
+}
+
+func TestSynopsisAfterHook_FullOutputRef(t *testing.T) {
+	large := strings.Repeat("data line\n", 800) // ~8000 chars
+	store := NewToolOutputStore(0)
+	hook := NewSynopsisAfterHook(SynopsisSettings{Threshold: 4000}, store)
+
+	got, err := hook(context.Background(), ToolCallContext{ToolName: "web_fetch"}, ToolResult{Content: large})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 概览结尾给出 full_output 取回指引。
+	if !strings.Contains(got.Content, "full_output") || !strings.Contains(got.Content, `ref="out_1"`) {
+		t.Errorf("synopsis should point to full_output with a ref, got tail: %s", got.Content[max(0, len(got.Content)-120):])
+	}
+
+	// 模型经 full_output 按引用取回全文。
+	tool := NewFullOutputTool(store)
+	raw, err := json.Marshal(map[string]string{"ref": "out_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := tool.Execute(context.Background(), raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != large {
+		t.Error("full_output should return the exact stored output")
+	}
+}
+
 func TestSynopsisAfterHook_NoDoubleSynopsis(t *testing.T) {
 	// Simulate a tool that already produced a synopsis (e.g. kb_read overview=true)
-	large := "[输出概览] " + strings.Repeat("line\n", 1000) // >4000 chars
+	large := "[输出概览] " + strings.Repeat("line\n", 1000)
 	result := ToolResult{Content: large, UserFacing: "full content here"}
 
-	got, err := SynopsisAfterHook(context.Background(), ToolCallContext{}, result)
+	hook := NewSynopsisAfterHook(SynopsisSettings{Threshold: 4000}, nil)
+	got, err := hook(context.Background(), ToolCallContext{ToolName: "web_fetch"}, result)
 	if err != nil {
 		t.Fatal(err)
 	}

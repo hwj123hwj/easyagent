@@ -50,6 +50,9 @@ type ModelInfo struct {
 // SessionInfo holds session metadata for listing.
 type SessionInfo struct {
 	ID           string
+	Title        string
+	Workspace    string
+	Application  string
 	MessageCount int
 	LastActive   int64
 }

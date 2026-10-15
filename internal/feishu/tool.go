@@ -60,7 +60,7 @@ func RegisterTool(piAgentURL, callbackURL string) error {
 		return fmt.Errorf("register tool: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	setAgentAuth(req, config.Env("EA_API_KEY"))
+	setAgentAuth(req, config.ServerAPIKey())
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("register tool: %w", err)

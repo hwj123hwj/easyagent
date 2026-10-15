@@ -18,6 +18,35 @@ export interface ModelInfo {
   name: string;
 }
 
+export interface ModelCatalog {
+  models: Array<{ id: string; name: string; provider: string }>;
+  current?: { id: string };
+  source?: "gateway" | "configured" | "unconfigured";
+  discovery_error?: string;
+}
+
+export interface ProviderConfig {
+  mode: "inherit" | "override";
+  provider?: "openai" | "anthropic";
+  baseUrl?: string;
+  model?: string;
+  hasKey: boolean;
+}
+
+export interface ProviderConfigInput {
+  mode: ProviderConfig["mode"];
+  provider?: ProviderConfig["provider"];
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+}
+
+export interface ProviderCheckResult {
+  ok: boolean;
+  models: Array<{ id: string; name: string }>;
+  message: string;
+}
+
 export interface SessionMeta {
   id: string;
   title: string;
@@ -25,6 +54,9 @@ export interface SessionMeta {
   status: SessionRunStatus;
   model?: string;
   application?: string; // e.g. "coding", "music"
+  pinned?: boolean;
+  archived?: boolean;
+  forked_from?: string;
   availableModels: ModelInfo[];
   createdAt: number;
   updatedAt: number;
@@ -48,6 +80,7 @@ export type ToolCallStatus =
   | 'pending'
   | 'in_progress'
   | 'completed'
+  | 'declined'
   | 'failed';
 
 export interface ToolLocation {
@@ -101,7 +134,18 @@ export type UpdatePhase =
   | 'idle'
   | 'checking'
   | 'available'
+  | 'downloading'
+  | 'verifying'
+  | 'signing'
+  | 'ready'
+  | 'installing'
   | 'error';
+
+export interface DesktopAutoUpdateState {
+  supported: boolean; enabled: boolean; manualDownload?: boolean;
+  phase: 'idle' | 'downloading' | 'verifying' | 'signing' | 'ready' | 'installing' | 'error';
+  version?: string; error?: string; message?: string;
+}
 
 export interface UpdateState {
   supported: boolean;

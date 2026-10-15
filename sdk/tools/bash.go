@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -11,10 +12,13 @@ import (
 	"github.com/hwj123hwj/easyagent/sdk/operations"
 )
 
+const DefaultBashTimeoutSeconds = 120
+
 type BashTool struct {
-	workspace    string // 工作目录限制，空字符串表示不限制
-	maxOutputLen int    // 最大输出长度，0 表示使用 DefaultMaxOutputLen
-	ops          operations.BashOperations
+	workspace        string // 工作目录限制，空字符串表示不限制
+	maxOutputLen     int    // 最大输出长度，0 表示使用 DefaultMaxOutputLen
+	progressInterval time.Duration
+	ops              operations.BashOperations
 }
 
 type BashParams struct {
@@ -43,7 +47,7 @@ func WithBashOperations(ops operations.BashOperations) BashToolOption {
 // NewBashTool creates BashTool with optional configuration.
 // If no BashOperations is provided via WithBashOperations, defaults to LocalBashOperations.
 func NewBashTool(opts ...BashToolOption) *BashTool {
-	t := &BashTool{}
+	t := &BashTool{progressInterval: 5 * time.Second}
 	for _, opt := range opts {
 		opt(t)
 	}
@@ -62,7 +66,7 @@ func (t *BashTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"command": map[string]any{"type": "string", "description": "The shell command to execute."},
-			"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (default 30)."},
+			"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (default 120). Set a longer timeout for builds or tests."},
 		},
 		"required": []string{"command"},
 	}
@@ -76,7 +80,7 @@ func (t *BashTool) Validate(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, fmt.Errorf("command is required")
 	}
 	if params.Timeout <= 0 {
-		params.Timeout = 30
+		params.Timeout = DefaultBashTimeoutSeconds
 	}
 	return json.Marshal(params)
 }
@@ -100,36 +104,51 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, onUpdate fu
 		return agent.ToolResult{IsError: true}, err
 	}
 
+	if params.Timeout <= 0 {
+		params.Timeout = DefaultBashTimeoutSeconds
+	}
+
 	req := operations.RunRequest{
 		Command: params.Command,
 		Timeout: time.Duration(params.Timeout) * time.Second,
 		WorkDir: t.workspace,
 	}
 
-	result, err := t.ops.Run(ctx, req)
-	if err != nil {
-		return agent.ToolResult{IsError: true}, err
-	}
+	stopProgress := t.reportProgress(ctx, params.Timeout, onUpdate)
+	defer stopProgress()
+	result, runErr := t.ops.Run(ctx, req)
 
 	output := string(result.Output)
 
-	// Detect binary output
+	// Keep output and failure together so the model sees both the cause and progress.
 	if isBinaryOutput(output) {
-		return agent.ToolResult{
-			Content: fmt.Sprintf("Command produced binary output (%d bytes). Use file redirection to save output.", len(result.Output)),
-			IsError: false,
-		}, nil
+		output = fmt.Sprintf("Command produced binary output (%d bytes). Use file redirection to save output.", len(result.Output))
+	} else {
+		output = TruncateOutput(stripANSI(output), t.maxOutputLen)
+	}
+	var failure error
+	switch {
+	case errors.Is(runErr, context.DeadlineExceeded):
+		if ctx.Err() != nil {
+			failure = fmt.Errorf("command interrupted: request deadline exceeded: %w", runErr)
+		} else {
+			failure = fmt.Errorf("command timed out after %s: %w", req.Timeout, runErr)
+		}
+	case errors.Is(runErr, context.Canceled):
+		failure = fmt.Errorf("command canceled: %w", runErr)
+	case runErr != nil:
+		failure = runErr
+	case result.ExitCode != 0:
+		failure = fmt.Errorf("command exited with code %d", result.ExitCode)
+	}
+	if failure != nil {
+		if output != "" {
+			output += "\n\n"
+		}
+		output += failure.Error()
+		return agent.ToolResult{Content: output, IsError: true}, failure
 	}
 
-	// Clean ANSI escape sequences
-	output = stripANSI(output)
-
-	// Truncate output
-	output = TruncateOutput(output, t.maxOutputLen)
-
-	if result.ExitCode != 0 {
-		return agent.ToolResult{Content: output, IsError: true}, fmt.Errorf("command exited with code %d", result.ExitCode)
-	}
 	return agent.ToolResult{Content: output}, nil
 }
 
@@ -154,4 +173,39 @@ func isBinaryOutput(s string) bool {
 		}
 	}
 	return false
+}
+
+// Even silent commands report that they are still waiting; this is elapsed time,
+// not invented output or a completion estimate. Stop and join before tool_end.
+func (t *BashTool) reportProgress(ctx context.Context, timeout int, update func(agent.PartialResult)) func() {
+	if update == nil {
+		return func() {}
+	}
+	interval := t.progressInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				message := fmt.Sprintf("命令仍在执行 · 已等待 %ds", int(time.Since(start).Seconds()))
+				if timeout > 0 {
+					message += fmt.Sprintf(" · 本次超时 %ds", timeout)
+				}
+				update(agent.PartialResult{Content: message})
+			}
+		}
+	}()
+	return func() { close(stop); <-done }
 }

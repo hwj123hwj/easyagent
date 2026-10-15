@@ -1,3 +1,11 @@
 dist/
 release/
+release.noindex/
 node_modules/
+
+.test-output/
+
+.bundle/
+
+# Preview harness outputs
+preview/shots/

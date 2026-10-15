@@ -1,6 +1,13 @@
-import { Fragment, useState, useCallback, type ReactNode } from 'react';
-import { Icon } from './Icon';
-import { Mermaid } from './Mermaid';
+import {
+  Fragment,
+  useState,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from "react";
+import { Icon } from "./Icon";
+import { Mermaid } from "./Mermaid";
+import { copyText } from "../client/clipboard";
 
 /**
  * A compact, dependency-free Markdown renderer. Handles the subset that shows up
@@ -12,28 +19,39 @@ import { Mermaid } from './Mermaid';
  * resolved against this directory and dispatched as `open-file` events so they
  * open in the file viewer instead of a new browser window.
  */
-export function Markdown({ text, basePath }: { text: string; basePath?: string }) {
-  return <div className="md">{renderBlocks(text, basePath)}</div>;
+export function Markdown({
+  text,
+  basePath,
+}: {
+  text: string;
+  basePath?: string;
+}) {
+  const blocks = useMemo(() => renderBlocks(text, basePath), [text, basePath]);
+  return <div className="md">{blocks}</div>;
 }
 
 /** Resolve a possibly-relative href to an absolute path. */
 function resolveHref(href: string, basePath?: string): string {
   // Already absolute path or an external URL — return as-is.
-  if (href.startsWith('/') || /^https?:\/\//i.test(href) || href.startsWith('#')) {
+  if (
+    href.startsWith("/") ||
+    /^https?:\/\//i.test(href) ||
+    href.startsWith("#")
+  ) {
     return href;
   }
   if (!basePath) return href;
   // Resolve relative to the markdown file's directory.
-  const dir = basePath.replace(/\/[^/]*$/, '');
+  const dir = basePath.replace(/\/[^/]*$/, "");
   // Strip any leading ./
-  const clean = href.replace(/^\.\//, '');
+  const clean = href.replace(/^\.\//, "");
   // Handle ../
-  const parts = dir.split('/');
-  for (const seg of clean.split('/')) {
-    if (seg === '..') parts.pop();
-    else if (seg !== '.') parts.push(seg);
+  const parts = dir.split("/");
+  for (const seg of clean.split("/")) {
+    if (seg === "..") parts.pop();
+    else if (seg !== ".") parts.push(seg);
   }
-  return parts.join('/');
+  return parts.join("/");
 }
 
 /**
@@ -45,37 +63,53 @@ const COLLAPSE_THRESHOLD = 12; // lines before we offer expand/collapse on mobil
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState("");
   const [expanded, setExpanded] = useState(false);
-  const lineCount = code.split('\n').length;
+  const lineCount = code.split("\n").length;
   const shouldCollapse = lineCount > COLLAPSE_THRESHOLD;
 
-  const onCopy = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    void navigator.clipboard?.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-    }).catch(() => {
-      /* clipboard API may fail on insecure origin — silently ignore */
-    });
-  }, [code]);
+  const onCopy = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      void copyText(code)
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1400);
+        })
+        .catch(() => {
+          setCopyError("复制失败，请选中代码手动复制");
+        });
+    },
+    [code],
+  );
 
   return (
-    <div className={`md-code-block ${shouldCollapse && !expanded ? 'collapsed' : ''}`}>
+    <div
+      className={`md-code-block ${shouldCollapse && !expanded ? "collapsed" : ""}`}
+    >
       <button
         className="md-code-copy"
         onClick={onCopy}
         aria-label="Copy code"
         title="Copy"
       >
-        <Icon name={copied ? 'check' : 'copy'} size={13} />
+        <Icon name={copied ? "check" : "copy"} size={13} />
       </button>
+      {copyError && (
+        <span className="inline-error" role="alert">
+          {copyError}
+        </span>
+      )}
       <pre>
         <code data-lang={lang}>{code}</code>
       </pre>
       {shouldCollapse && !expanded && (
         <button
           className="md-code-expand"
-          onClick={(e) => { e.stopPropagation(); setExpanded(true); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded(true);
+          }}
         >
           +{lineCount - COLLAPSE_THRESHOLD} more lines
         </button>
@@ -86,7 +120,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 function renderBlocks(src: string, basePath?: string): ReactNode[] {
   const out: ReactNode[] = [];
-  const lines = src.split('\n');
+  const lines = src.split("\n");
   let i = 0;
   let key = 0;
 
@@ -94,9 +128,9 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
     const line = lines[i];
 
     // fenced code block
-    const fence = line.match(/^```(\w*)\s*$/);
+    const fence = line.match(/^```([^`]*)$/);
     if (fence) {
-      const lang = fence[1];
+      const lang = fence[1].trim().split(/\s+/)[0];
       const buf: string[] = [];
       i++;
       while (i < lines.length && !/^```\s*$/.test(lines[i])) {
@@ -104,12 +138,10 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
         i++;
       }
       i++; // skip closing fence
-      if (lang.toLowerCase() === 'mermaid') {
-        out.push(<Mermaid key={key++} code={buf.join('\n')} />);
+      if (lang.toLowerCase() === "mermaid") {
+        out.push(<Mermaid key={key++} code={buf.join("\n")} />);
       } else {
-        out.push(
-          <CodeBlock key={key++} lang={lang} code={buf.join('\n')} />,
-        );
+        out.push(<CodeBlock key={key++} lang={lang} code={buf.join("\n")} />);
       }
       continue;
     }
@@ -118,7 +150,7 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
     const heading = line.match(/^(#{1,4})\s+(.*)$/);
     if (heading) {
       const level = heading[1].length;
-      const Tag = (`h${Math.min(level, 3)}` as 'h1' | 'h2' | 'h3');
+      const Tag = `h${Math.min(level, 3)}` as "h1" | "h2" | "h3";
       out.push(<Tag key={key++}>{renderInline(heading[2], basePath)}</Tag>);
       i++;
       continue;
@@ -128,7 +160,7 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
     if (/^\s*[-*]\s+/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*[-*]\s+/, ''));
+        items.push(lines[i].replace(/^\s*[-*]\s+/, ""));
         i++;
       }
       out.push(
@@ -145,7 +177,7 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
     if (/^\s*\d+\.\s+/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*\d+\.\s+/, ''));
+        items.push(lines[i].replace(/^\s*\d+\.\s+/, ""));
         i++;
       }
       out.push(
@@ -164,7 +196,11 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
       const aligns = splitTableRow(lines[i + 1]).map(parseAlign);
       i += 2;
       const rows: string[][] = [];
-      while (i < lines.length && lines[i].trim() !== '' && lines[i].includes('|')) {
+      while (
+        i < lines.length &&
+        lines[i].trim() !== "" &&
+        lines[i].includes("|")
+      ) {
         rows.push(splitTableRow(lines[i]));
         i++;
       }
@@ -186,7 +222,7 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
                 <tr key={ridx}>
                   {header.map((_, idx) => (
                     <td key={idx} style={{ textAlign: align(idx) }}>
-                      {renderInline(row[idx] ?? '', basePath)}
+                      {renderInline(row[idx] ?? "", basePath)}
                     </td>
                   ))}
                 </tr>
@@ -199,7 +235,7 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
     }
 
     // blank line
-    if (line.trim() === '') {
+    if (line.trim() === "") {
       i++;
       continue;
     }
@@ -208,7 +244,7 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
     const para: string[] = [];
     while (
       i < lines.length &&
-      lines[i].trim() !== '' &&
+      lines[i].trim() !== "" &&
       !/^```/.test(lines[i]) &&
       !/^(#{1,4})\s+/.test(lines[i]) &&
       !/^\s*[-*]\s+/.test(lines[i]) &&
@@ -218,7 +254,8 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
       para.push(lines[i]);
       i++;
     }
-    out.push(<p key={key++}>{renderInline(para.join('\n'), basePath)}</p>);
+    if (!para.length) para.push(lines[i++]); // Incomplete streaming syntax must always advance.
+    out.push(<p key={key++}>{renderInline(para.join("\n"), basePath)}</p>);
   }
 
   return out;
@@ -230,19 +267,19 @@ function renderBlocks(src: string, basePath?: string): ReactNode[] {
  */
 function splitTableRow(line: string): string[] {
   let s = line.trim();
-  if (s.startsWith('|')) s = s.slice(1);
-  if (s.endsWith('|')) s = s.slice(0, -1);
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
   const cells: string[] = [];
-  let cur = '';
+  let cur = "";
   for (let k = 0; k < s.length; k++) {
-    if (s[k] === '\\' && s[k + 1] === '|') {
-      cur += '|';
+    if (s[k] === "\\" && s[k + 1] === "|") {
+      cur += "|";
       k++;
       continue;
     }
-    if (s[k] === '|') {
+    if (s[k] === "|") {
       cells.push(cur);
-      cur = '';
+      cur = "";
       continue;
     }
     cur += s[k];
@@ -253,18 +290,18 @@ function splitTableRow(line: string): string[] {
 
 /** A GFM delimiter row, e.g. `|---|:--:|` — every cell is `:?-+:?`. */
 function isDelimiterRow(line: string): boolean {
-  if (!line.includes('-') || !line.includes('|')) return false;
+  if (!line.includes("-") || !line.includes("|")) return false;
   const cells = splitTableRow(line);
   return cells.length > 0 && cells.every((c) => /^:?-{1,}:?$/.test(c));
 }
 
 /** Column alignment from a delimiter cell. */
-function parseAlign(cell: string): 'left' | 'center' | 'right' | undefined {
-  const left = cell.startsWith(':');
-  const right = cell.endsWith(':');
-  if (left && right) return 'center';
-  if (right) return 'right';
-  if (left) return 'left';
+function parseAlign(cell: string): "left" | "center" | "right" | undefined {
+  const left = cell.startsWith(":");
+  const right = cell.endsWith(":");
+  if (left && right) return "center";
+  if (right) return "right";
+  if (left) return "left";
   return undefined;
 }
 
@@ -272,8 +309,8 @@ function parseAlign(cell: string): 'left' | 'center' | 'right' | undefined {
 function isTableStart(lines: string[], i: number): boolean {
   return (
     i + 1 < lines.length &&
-    lines[i].includes('|') &&
-    lines[i].trim() !== '' &&
+    lines[i].includes("|") &&
+    lines[i].trim() !== "" &&
     isDelimiterRow(lines[i + 1])
   );
 }
@@ -285,7 +322,7 @@ function renderInline(text: string, basePath?: string): ReactNode[] {
   const parts = text.split(/(`[^`]+`)/g);
   let key = 0;
   for (const part of parts) {
-    if (part.startsWith('`') && part.endsWith('`') && part.length > 1) {
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 1) {
       const codeContent = part.slice(1, -1);
       // Check if the code content is a file path
       if (isFilePath(codeContent)) {
@@ -296,9 +333,11 @@ function renderInline(text: string, basePath?: string): ReactNode[] {
             onClick={(e) => {
               e.preventDefault();
               const resolved = resolveHref(codeContent, basePath);
-              window.dispatchEvent(new CustomEvent('open-file', { detail: { path: resolved } }));
+              window.dispatchEvent(
+                new CustomEvent("open-file", { detail: { path: resolved } }),
+              );
             }}
-            style={{ cursor: 'pointer', textDecoration: 'underline' }}
+            style={{ cursor: "pointer", textDecoration: "underline" }}
           >
             {codeContent}
           </code>,
@@ -307,7 +346,9 @@ function renderInline(text: string, basePath?: string): ReactNode[] {
         nodes.push(<code key={key++}>{codeContent}</code>);
       }
     } else {
-      nodes.push(<Fragment key={key++}>{renderEmphasis(part, basePath)}</Fragment>);
+      nodes.push(
+        <Fragment key={key++}>{renderEmphasis(part, basePath)}</Fragment>,
+      );
     }
   }
   return nodes;
@@ -318,19 +359,25 @@ function renderInline(text: string, basePath?: string): ReactNode[] {
 // and paths with ≥2 segments but no extension (e.g. /Users/.../work/something).
 function isFilePath(text: string): boolean {
   // Strip trailing slash for analysis
-  const stripped = text.replace(/\/+$/, '');
+  const stripped = text.replace(/\/+$/, "");
   // Must start with / or ~/
   if (!/^~?\//.test(stripped)) return false;
   // Exclude URLs
   if (/^https?:\/\//i.test(text)) return false;
   // Known extensions (covers most source/config/doc files)
-  const extRe = /^~?\/[^\s]+\.(md|txt|json|js|ts|go|py|yaml|yml|toml|xml|html|css|sh|bash|rs|java|c|cpp|h|rb|php|sql|graphql|proto|tf|vue|svelte|jsx|tsx|mdx|csv|log|cfg|conf|ini|env|lock|sum|mod)$/i;
+  const extRe =
+    /^~?\/[^\s]+\.(md|txt|json|js|ts|go|py|yaml|yml|toml|xml|html|css|sh|bash|rs|java|c|cpp|h|rb|php|sql|graphql|proto|tf|vue|svelte|jsx|tsx|mdx|csv|log|cfg|conf|ini|env|lock|sum|mod)$/i;
   if (extRe.test(text)) return true;
   // Directory path (ends with / and has >=2 segments)
-  if (/\/$/.test(text) && stripped.split('/').filter(Boolean).length >= 2) return true;
+  if (/\/$/.test(text) && stripped.split("/").filter(Boolean).length >= 2)
+    return true;
   // File/dir with >=2 segments, no extension in last segment
-  const lastSegment = stripped.split('/').pop() || '';
-  if (stripped.split('/').filter(Boolean).length >= 2 && !lastSegment.includes('.')) return true;
+  const lastSegment = stripped.split("/").pop() || "";
+  if (
+    stripped.split("/").filter(Boolean).length >= 2 &&
+    !lastSegment.includes(".")
+  )
+    return true;
   return false;
 }
 
@@ -338,15 +385,19 @@ function renderEmphasis(text: string, basePath?: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   // Image `![alt](src)` must come before the link alternative so the leading
   // `!` is consumed as part of the image rather than left as literal text.
-  const re = /(!\[[^\]]*\]\([^)]+\)|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
+  const re =
+    /(!\[[^\]]*\]\([^)]+\)|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let key = 0;
   while ((m = re.exec(text)) !== null) {
-    if (m.index > last) nodes.push(...renderTextWithFilePaths(text.slice(last, m.index), key, basePath));
+    if (m.index > last)
+      nodes.push(
+        ...renderTextWithFilePaths(text.slice(last, m.index), key, basePath),
+      );
     key += 100; // reserve keyspace for path nodes
     const token = m[0];
-    if (token.startsWith('![')) {
+    if (token.startsWith("![")) {
       const im = token.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
       if (im) {
         // The URL part may carry an optional CommonMark title: `(src "title")`.
@@ -355,21 +406,27 @@ function renderEmphasis(text: string, basePath?: string): ReactNode[] {
         const src = titleMatch ? titleMatch[1] : inner;
         const title = titleMatch ? titleMatch[2] : undefined;
         nodes.push(
-          <img key={key++} className="md-img" src={src} alt={im[1]} title={title} />,
+          <img
+            key={key++}
+            className="md-img"
+            src={src}
+            alt={im[1]}
+            title={title}
+          />,
         );
       } else {
         nodes.push(<Fragment key={key++}>{token}</Fragment>);
       }
-    } else if (token.startsWith('**')) {
+    } else if (token.startsWith("**")) {
       nodes.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
-    } else if (token.startsWith('*')) {
+    } else if (token.startsWith("*")) {
       nodes.push(<em key={key++}>{token.slice(1, -1)}</em>);
     } else {
       const lm = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       if (lm) {
         const href = lm[2];
         const isExternal = /^https?:\/\//i.test(href);
-        const isAnchor = href.startsWith('#');
+        const isAnchor = href.startsWith("#");
 
         if (isExternal) {
           // External link: open in system browser
@@ -379,7 +436,8 @@ function renderEmphasis(text: string, basePath?: string): ReactNode[] {
               href={href}
               onClick={(e) => {
                 e.preventDefault();
-                void window.piAPI?.openExternal(href);
+                if (window.piAPI) void window.piAPI.openExternal(href);
+                else window.open(href, "_blank", "noopener,noreferrer");
               }}
             >
               {lm[1]}
@@ -403,7 +461,9 @@ function renderEmphasis(text: string, basePath?: string): ReactNode[] {
               title={resolved}
               onClick={(e) => {
                 e.preventDefault();
-                window.dispatchEvent(new CustomEvent('open-file', { detail: { path: resolved } }));
+                window.dispatchEvent(
+                  new CustomEvent("open-file", { detail: { path: resolved } }),
+                );
               }}
             >
               {lm[1]}
@@ -416,14 +476,19 @@ function renderEmphasis(text: string, basePath?: string): ReactNode[] {
     }
     last = m.index + token.length;
   }
-  if (last < text.length) nodes.push(...renderTextWithFilePaths(text.slice(last), key, basePath));
+  if (last < text.length)
+    nodes.push(...renderTextWithFilePaths(text.slice(last), key, basePath));
   return nodes;
 }
 
 // Scan plain text for file paths and make them clickable.
 const PATH_RE = /(\/(?:[^\s\n]*\/)+[^\s\n/.]+)/g;
 
-function renderTextWithFilePaths(text: string, baseKey: number, basePath?: string): ReactNode[] {
+function renderTextWithFilePaths(
+  text: string,
+  baseKey: number,
+  basePath?: string,
+): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
@@ -440,9 +505,11 @@ function renderTextWithFilePaths(text: string, baseKey: number, basePath?: strin
         onClick={(e) => {
           e.preventDefault();
           const resolved = resolveHref(path, basePath);
-          window.dispatchEvent(new CustomEvent('open-file', { detail: { path: resolved } }));
+          window.dispatchEvent(
+            new CustomEvent("open-file", { detail: { path: resolved } }),
+          );
         }}
-        style={{ cursor: 'pointer', textDecoration: 'underline' }}
+        style={{ cursor: "pointer", textDecoration: "underline" }}
       >
         {path}
       </code>,

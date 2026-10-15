@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/hwj123hwj/easyagent/sdk/compaction"
@@ -49,20 +51,16 @@ func RunLoop(ctx context.Context, a *Agent) (ai.AssistantMessage, error) {
 	// RunLoop 的 stream consumer：只关注 EventDone 和 EventError
 	consume := func(stream *ai.EventStream) (ai.StreamAssistantMessage, error) {
 		var streamMsg ai.StreamAssistantMessage
+		var streamErr error
 		for event := range stream.Events() {
-			select {
-			case <-ctx.Done():
-				return streamMsg, ctx.Err()
-			default:
-			}
 			switch e := event.(type) {
 			case ai.EventDone:
 				streamMsg = e.Message
 			case ai.EventError:
-				return streamMsg, fmt.Errorf("llm error: %s", e.Error)
+				streamErr = fmt.Errorf("llm error: %s", e.Error)
 			}
 		}
-		return streamMsg, nil
+		return streamConsumptionResult(ctx, stream, streamMsg, streamErr)
 	}
 
 	return runAgentLoop(ctx, a, provider, consume)
@@ -93,12 +91,22 @@ func runAgentLoop(ctx context.Context, a *Agent, provider interface {
 	// 如果有 session storage，从 session 恢复历史
 	if a.session != nil {
 		sessionHistory, err := a.session.BuildContext(ctx)
-		if err == nil && len(sessionHistory) > 0 {
-			history = sessionHistory
+		if err != nil {
+			return lastAssistant, fmt.Errorf("build session context: %w", err)
 		}
+		history = sessionHistory
+	}
+
+	var recoveryErr error
+	history, recoveryErr = recoverPendingToolResults(ctx, a, history)
+	if recoveryErr != nil {
+		return lastAssistant, recoveryErr
 	}
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return lastAssistant, err
+		}
 		if effectiveMaxTurns > 0 && turns >= effectiveMaxTurns {
 			return lastAssistant, nil
 		}
@@ -107,6 +115,9 @@ func runAgentLoop(ctx context.Context, a *Agent, provider interface {
 
 		result, updatedHistory, err := processTurn(ctx, a, provider, consume, history, pending)
 		if err != nil {
+			if result.assistant.StopReason != "" {
+				return result.assistant, err
+			}
 			return lastAssistant, err
 		}
 
@@ -141,6 +152,35 @@ func runAgentLoop(ctx context.Context, a *Agent, provider interface {
 	}
 }
 
+// recoverPendingToolResults closes an interrupted last turn before accepting a new
+// prompt. It records uncertainty, never retries commands or assumes they failed.
+func recoverPendingToolResults(ctx context.Context, a *Agent, history []ai.Message) ([]ai.Message, error) {
+	completed := make(map[string]bool)
+	for i := len(history) - 1; i >= 0; i-- {
+		switch msg := history[i].(type) {
+		case ai.ToolResultMessage:
+			completed[msg.ToolCallID] = true
+		case ai.AssistantMessage:
+			for _, call := range msg.ToolCalls {
+				if completed[call.ID] {
+					continue
+				}
+				result := ai.ToolResultMessage{ToolCallID: call.ID, IsError: true, Content: "Execution interrupted; no result was saved. The command may have produced side effects. Check its state before retrying."}
+				if a.session != nil {
+					if err := a.session.AppendMessage(ctx, result); err != nil {
+						return history, fmt.Errorf("recover interrupted tool: %w", err)
+					}
+				}
+				history = append(history, result)
+			}
+			return history, nil
+		default:
+			return history, nil
+		}
+	}
+	return history, nil
+}
+
 // processTurn 处理一个 Agent 轮次。
 // 返回轮次结果、更新后的历史和可能的错误。
 func processTurn(ctx context.Context, a *Agent, provider interface {
@@ -156,7 +196,9 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 	// 只保存本轮新增的 pending 消息到 session（避免 O(n²)）
 	if a.session != nil {
 		for _, msg := range pending {
-			_ = a.session.AppendMessage(ctx, msg)
+			if err := a.session.AppendMessage(ctx, msg); err != nil {
+				return turnResult{}, history, fmt.Errorf("persist pending message: %w", err)
+			}
 		}
 	}
 
@@ -164,28 +206,50 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 	history = a.maybeCompact(ctx, history)
 
 	// 用完整历史调用 LLM
-	stream, err := provider.Stream(ctx, a.llmRequest(history))
+	request := a.llmRequest(history)
+	a.emit(ctx, EventContextUsage{Usage: estimateContext(request, latestRequestUsage(history))})
+	stream, err := provider.Stream(ctx, request)
 	if err != nil {
 		return turnResult{}, history, err
 	}
 
 	// 消费事件流
-	streamMsg, err := consume(stream)
-	if err != nil {
-		return turnResult{}, history, err
-	}
+	streamMsg, streamErr := consume(stream)
 
 	message, err := a.handleAssistantMessage(streamMsg)
 	if err != nil {
 		return turnResult{}, history, err
 	}
+	if streamErr != nil {
+		message.StopReason = ai.StopReasonError
+		if errors.Is(streamErr, context.Canceled) || errors.Is(streamErr, context.DeadlineExceeded) {
+			message.StopReason = ai.StopReasonAborted
+		}
+		message.ErrorMsg = streamErr.Error()
+		// 断流中的工具声明尚未被接受，也未执行，不能作为正式 tool-call
+		// 进入下次请求；保留已收到的文本、思考与用量供展示和核算。
+		message.ToolCalls = nil
+		if a.session != nil && (message.Text != "" || message.Thinking != "" || message.Usage != (ai.Usage{})) {
+			saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if err := a.session.AppendMessage(saveCtx, message); err != nil {
+				streamErr = errors.Join(streamErr, fmt.Errorf("persist partial assistant: %w", err))
+			}
+		}
+		return turnResult{assistant: message}, history, streamErr
+	}
+
+	a.emit(ctx, EventContextUsage{Usage: estimateContext(a.llmRequest(append(append([]ai.Message{}, history...), message)), message.Usage)})
 
 	// 将 assistant message 追加到历史
 	history = append(history, message)
 
 	// 保存到 session
 	if a.session != nil {
-		_ = a.session.AppendMessage(ctx, message)
+		// 有副作用的工具必须等 assistant 调用记录成功落盘后才能执行。
+		if err := a.session.AppendMessage(ctx, message); err != nil {
+			return turnResult{assistant: message}, history, fmt.Errorf("persist assistant message: %w", err)
+		}
 	}
 
 	// 如果 LLM 返回 error/aborted，终止循环
@@ -219,11 +283,18 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 
 		// 保存 tool results 到 session
 		if a.session != nil {
+			// A canceled request must still close its persisted tool-call records.
+			saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
 			for _, tr := range toolResults {
-				_ = a.session.AppendMessage(ctx, tr)
+				if err := a.session.AppendMessage(saveCtx, tr); err != nil {
+					return turnResult{assistant: message}, history, fmt.Errorf("persist tool result: %w", err)
+				}
 			}
 		}
-
+		if err := ctx.Err(); err != nil {
+			return turnResult{assistant: message}, history, err
+		}
 		return turnResult{assistant: message, action: actionContinue}, history, nil
 	}
 
@@ -254,35 +325,50 @@ func processTurn(ctx context.Context, a *Agent, provider interface {
 }
 
 // maybeCompact 检查是否需要压缩上下文，如果需要则执行压缩并返回新的历史。
-// 两级压缩：先 MicroCompact（低阈值，清旧 tool result，不调 LLM），
-// 再全量 AutoCompact（高阈值，调 LLM 摘要）。
+// 完整请求达到深度压缩阈值时直接摘要；低水位才批量清理旧工具输出。
 func (a *Agent) maybeCompact(ctx context.Context, history []ai.Message) []ai.Message {
 	if !a.compactionSettings.Enabled {
 		return history
 	}
 
-	// 估算当前 token 数
-	contextTokens := compaction.EstimateTokens(history)
+	// 与桌面上下文用量使用同一估算，包含系统提示词和工具定义。
+	requestUsage := estimateContext(a.llmRequest(history), ai.Usage{})
+	contextTokens := requestUsage.EstimatedTokens
+	messageTokens := requestUsage.Messages
 	contextWindow := a.model.ContextWindow
 	if contextWindow <= 0 {
 		contextWindow = 128000
 	}
 
-	// 第一级：MicroCompact（清旧 tool result，不依赖 summarizeFunc）
-	if compaction.ShouldMicroCompact(contextTokens, contextWindow, a.compactionSettings) {
-		newHistory, cleared := compaction.MicroCompact(history, a.compactionSettings.MicroKeepRecent)
+	// 一旦到达高水位，微压缩不得用少量节省延后深度压缩。
+	fullCompact := a.summarizeFunc != nil && compaction.ShouldCompact(contextTokens, contextWindow, a.compactionSettings)
+	if !fullCompact && compaction.ShouldMicroCompact(contextTokens, contextWindow, a.compactionSettings) {
+		newHistory, cleared := compaction.MicroCompact(append([]ai.Message(nil), history...), a.compactionSettings.MicroKeepRecent)
 		if cleared > 0 {
-			a.emit(ctx, EventMicroCompacted{ClearedResults: cleared, TokensBefore: contextTokens})
-			history = newHistory
-			contextTokens = compaction.EstimateTokens(history) // 重算：Micro 后可能降到全量阈值以下
+			tokensAfter := contextTokens - messageTokens + compaction.EstimateTokens(newHistory)
+			savings := contextTokens - tokensAfter
+			minSavings := a.compactionSettings.MinSavingsTokens
+			if minSavings <= 0 {
+				minSavings = compaction.DefaultSettings().MinSavingsTokens
+			}
+			// 只有节省达到阈值才进行持久化和通知；极小的几十 token 局部清理不值得反复落盘和刷屏，
+			// 避免每次工具调用都产生挤牙膏式的微压缩干扰。
+			if savings >= minSavings {
+				if a.session != nil {
+					if err := a.session.AppendMicroCompaction(ctx, newHistory); err != nil {
+						a.emit(ctx, EventCompactionFailed{Error: "persist micro-compaction: " + err.Error()})
+						return history
+					}
+				}
+				a.emit(ctx, EventMicroCompacted{ClearedResults: cleared, TokensBefore: contextTokens, TokensAfter: tokensAfter})
+				history = newHistory
+				contextTokens = tokensAfter // 重算：Micro 后可能降到全量阈值以下
+			}
 		}
 	}
 
 	// 第二级：全量 AutoCompact（需 summarizeFunc 才能做 LLM 摘要）
-	if a.summarizeFunc == nil {
-		return history
-	}
-	if !compaction.ShouldCompact(contextTokens, contextWindow, a.compactionSettings) {
+	if !fullCompact {
 		return history
 	}
 
@@ -306,16 +392,19 @@ func (a *Agent) maybeCompact(ctx context.Context, history []ai.Message) []ai.Mes
 		return history
 	}
 
+	info := compactionInfo("automatic", "", history, summary, recentPart)
 	// Persist compaction entry to session storage so it survives across prompts.
 	if a.session != nil {
-		if pErr := a.session.AppendCompaction(ctx, summary); pErr != nil {
-			slog.Warn("failed to persist compaction entry", "error", pErr)
+		if pErr := a.session.AppendCompactionKeeping(ctx, summary, recentPart, info); pErr != nil {
+			a.emit(ctx, EventCompactionFailed{Error: "persist compaction: " + pErr.Error()})
+			return history
 		}
 	}
 
 	a.emit(ctx, EventCompacted{
+		Info:        info,
 		Summary:     summary,
-		TrimmedFrom: len(historyPart),
+		TrimmedFrom: len(history),
 		TrimmedTo:   len(recentPart) + 1,
 	})
 
@@ -466,7 +555,18 @@ func executeToolCallsSequential(ctx context.Context, a *Agent, calls []ai.ToolCa
 	return results, nil
 }
 
-func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) ai.Message {
+func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) (result ai.Message) {
+	started := time.Now()
+	defer func() {
+		if message, ok := result.(ai.ToolResultMessage); ok {
+			message.DurationMS = time.Since(started).Milliseconds()
+			result = message
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return ai.ToolResultMessage{ToolCallID: call.ID, Content: "tool not started: " + err.Error(), IsError: true}
+	}
+
 	// 1. Find tool
 	tool, ok := a.tools[call.Name]
 	if !ok {
@@ -520,6 +620,7 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) ai.Message 
 	}
 	args = callCtx.Args
 
+	var confirmationDecision ConfirmDecision
 	// 5.5 Confirmation gate: 危险工具执行前向用户确认（若工具声明需要且注入了 ConfirmFunc）
 	if confirmer, ok := tool.(ToolWithConfirmation); ok {
 		if desc, needConfirm := confirmer.RequiresConfirmation(args); needConfirm {
@@ -532,13 +633,25 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) ai.Message 
 			// 未注入 ConfirmFunc（serve/feishu 单向流）→ 默认放行。
 			approved := true
 			reason := ""
+			gate, gated := tool.(ToolRequiringConfirmation)
+			requiresApproval := gated && gate.RequiresConfirmationAvailable()
+			mandatory, hasMandatory := tool.(ToolWithMandatoryConfirmation)
+			forceConfirmation := hasMandatory && mandatory.RequiresInteractiveConfirmation()
+			requiresApproval = requiresApproval || forceConfirmation
+			if requiresApproval && a.confirmFunc == nil {
+				approved = false
+				reason = "this tool requires an interactive approval or explicit server trust"
+			}
 			if a.confirmFunc != nil {
 				decision := a.confirmFunc(ctx, ConfirmationRequest{
-					ToolCallID:  call.ID,
-					ToolName:    call.Name,
-					Args:        args,
-					Description: desc,
+					RequiresApproval:  requiresApproval,
+					ForceConfirmation: forceConfirmation,
+					ToolCallID:        call.ID,
+					ToolName:          call.Name,
+					Args:              args,
+					Description:       desc,
 				})
+				confirmationDecision = decision
 				approved = decision.Approved
 				reason = decision.Reason
 			}
@@ -555,8 +668,9 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) ai.Message 
 				if reason != "" {
 					msg = fmt.Sprintf("user declined this action: %s", reason)
 				}
-				a.emit(ctx, EventToolExecutionEnd{ToolCallID: call.ID, ToolName: call.Name, Result: msg, IsError: false})
-				return ai.ToolResultMessage{ToolCallID: call.ID, Content: msg, IsError: false}
+				details := map[string]any{"approval": "declined"}
+				a.emit(ctx, EventToolExecutionEnd{ToolCallID: call.ID, ToolName: call.Name, Result: msg, Details: details, IsError: false})
+				return ai.ToolResultMessage{ToolCallID: call.ID, Content: msg, Details: details, IsError: false}
 			}
 		}
 	}
@@ -572,7 +686,12 @@ func executeOneTool(ctx context.Context, a *Agent, call ai.ToolCall) ai.Message 
 	}
 
 	// 7. Execute tool
-	rawResult, err := tool.Execute(ctx, args, onUpdate)
+	var rawResult ToolResult
+	if interactive, ok := tool.(ToolWithConfirmedExecution); ok {
+		rawResult, err = interactive.ExecuteConfirmed(ctx, args, confirmationDecision, onUpdate)
+	} else {
+		rawResult, err = tool.Execute(ctx, args, onUpdate)
+	}
 	if err != nil {
 		// Some tools (e.g. bash) return both a result with output and an error.
 		// Prefer the result content (actual command output/error) over err.Error()

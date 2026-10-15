@@ -3,15 +3,25 @@ export const commands = [
   {name:'help', label:'使用帮助', description:'查看命令和输入快捷键'},
   {name:'new', label:'新对话', description:'开始新对话，保留当前历史'},
   {name:'model', label:'切换模型', description:'打开可搜索的模型列表'},
+  {name:'workflow', label:'动态工作流', description:'追加任务，由 Agent 设计并执行；留空查看运行记录', args:true},
   {name:'sessions', label:'历史会话', description:'浏览和管理全部会话'},
   {name:'context', label:'会话信息', description:'查看当前模型和工作区', session:true},
   {name:'tools', label:'可用工具', description:'查看服务提供的工具'},
   {name:'compact', label:'压缩上下文', description:'总结较早消息，可追加保留要求', session:true, args:true},
   {name:'stop', label:'停止生成', description:'停止当前会话的任务'},
-  {name:'settings', label:'设置', description:'飞书连接、配对与服务状态'},
+  {name:'settings', label:'设置', description:'MCP、飞书连接与服务状态'},
+  {name:'mcp', label:'MCP 服务', description:'管理服务、工具和项目授权；留空打开设置', args:true},
 ];
+// Fetch the host catalog so new server commands appear without a frontend release.
+export function mergeCommands(catalog) {
+  for (const command of catalog || []) {
+    const existing=commands.find(c=>c.name===command.name);
+    if (existing) { existing.subcommands=command.subcommands; continue; }
+    commands.push({...command,label:command.name,args:true,session:true,server:true});
+  }
+}
 export function parseCommand(text) {
-  const match = text.trim().match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
+  const match = text.trim().match(/^\/([a-z][a-z0-9_-]*)(?:\s+([\s\S]*))?$/i);
   return match ? {name:match[1].toLowerCase(), args:(match[2] || '').trim()} : null;
 }
 export function filterCommands(text) {

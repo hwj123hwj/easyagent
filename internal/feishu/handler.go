@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,12 +62,12 @@ type Handler struct {
 func NewHandler(piAgentURL, appID string, client *Client, workspace string) *Handler {
 	h := &Handler{
 		piAgentURL:    piAgentURL,
-		piAgentAPIKey: config.Env("EA_API_KEY"),
+		piAgentAPIKey: config.ServerAPIKey(),
 		appID:         appID,
 		client:        client,
 		routes:        make(map[string]*ChatRoute),
 		routesFile:    defaultRoutesFile(),
-		httpClient:    &http.Client{Timeout: 10 * time.Minute},
+		httpClient:    &http.Client{Timeout: 31 * time.Minute}, // Core bounds a chat turn to 30 minutes.
 		workspace:     workspace,
 		senders:       make(map[string]string),
 	}
@@ -494,7 +496,7 @@ func (h *Handler) handleAgentMessage(ctx context.Context, chatKey, messageID, te
 func (h *Handler) handleWithCard(ctx context.Context, chatKey, messageID, sessionID, text string, card *StreamingCardHandle) {
 	startTime := time.Now()
 
-	fullText, err := h.streamChat(ctx, sessionID, text, card)
+	fullText, err := h.streamChat(ctx, sessionID, text, card, h.messageRequestID(messageID))
 	elapsed := time.Since(startTime)
 	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -503,7 +505,7 @@ func (h *Handler) handleWithCard(ctx context.Context, chatKey, messageID, sessio
 	if err != nil {
 		slog.Error("stream chat failed", "error", err)
 		metrics.Status = "Error"
-		fullText = strings.TrimSpace(fullText + "\n\n❌ 处理出错，请重试")
+		fullText = strings.TrimSpace(fullText + "\n\n❌ 处理出错，请重试：`" + errorDetail(err) + "`")
 	}
 	if finalizeErr := card.Finalize(finalCtx, fullText, metrics); finalizeErr != nil {
 		slog.Warn("card finalize failed", "error", finalizeErr)
@@ -524,10 +526,10 @@ func (h *Handler) handleWithTextFallback(ctx context.Context, chatKey, messageID
 		slog.Warn("send processing message failed", "error", err)
 	}
 
-	fullText, err := h.streamChat(ctx, sessionID, text, nil)
+	fullText, err := h.streamChat(ctx, sessionID, text, nil, h.messageRequestID(messageID))
 	if err != nil {
 		slog.Error("stream chat failed", "error", err)
-		errMsg := "❌ 处理出错，请重试"
+		errMsg := "❌ 处理出错，请重试：`" + errorDetail(err) + "`"
 		if botMsgID != "" {
 			_ = h.client.UpdateMessage(ctx, botMsgID, errMsg)
 		} else {
@@ -544,12 +546,26 @@ func (h *Handler) handleWithTextFallback(ctx context.Context, chatKey, messageID
 
 // streamChat calls POST /chat/stream and collects the full response text.
 // Card updates are coalesced asynchronously so Feishu latency cannot block SSE reads.
-func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card *StreamingCardHandle) (string, error) {
+func (h *Handler) messageRequestID(messageID string) string {
+	if messageID == "" {
+		return "" // 系统生成的后续任务没有入站消息身份，须创建独立请求。
+	}
+	// 飞书重投会跨越桥接重启，进程内去重不足以阻止重复副作用。
+	// 按应用与消息生成稳定身份，复用核心的持久化接受凭据。
+	sum := sha256.Sum256([]byte(h.appID + "\x00" + messageID))
+	return "feishu_" + hex.EncodeToString(sum[:])
+}
+
+func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card *StreamingCardHandle, requestIDs ...string) (string, error) {
 	startTime := time.Now()
-	body, _ := json.Marshal(map[string]string{
+	values := map[string]string{
 		"prompt":     prompt,
 		"session_id": sessionID,
-	})
+	}
+	if len(requestIDs) > 0 && requestIDs[0] != "" {
+		values["request_id"] = requestIDs[0]
+	}
+	body, _ := json.Marshal(values)
 
 	url := fmt.Sprintf("%s/chat/stream", h.piAgentURL)
 	slog.Debug("SSE request", "url", url, "sessionID", sessionID)
@@ -569,6 +585,16 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 
 	slog.Debug("SSE response", "status", resp.StatusCode, "contentType", resp.Header.Get("Content-Type"))
 	if resp.StatusCode != http.StatusOK {
+		var failure struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&failure)
+		if resp.StatusCode == http.StatusConflict && failure.Code == "request_conflict" && sessionID != "" && values["request_id"] != "" {
+			// /new 后旧消息重投仍应回放原任务，不能拿新会话再执行。
+			// 只去掉会话约束；原身份与内容仍由核心校验，最多查询一次。
+			resp.Body.Close()
+			return h.streamChat(ctx, "", prompt, card, values["request_id"])
+		}
 		return "", fmt.Errorf("agent stream HTTP %d", resp.StatusCode)
 	}
 	if strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0]) != "text/event-stream" {
@@ -629,9 +655,32 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 					}
 				}
 
+			case "tool_update":
+				var ev struct {
+					ToolName string                   `json:"tool_name"`
+					Partial  struct{ Content string } `json:"partial_result"`
+				}
+				if json.Unmarshal([]byte(data), &ev) == nil && updates != nil {
+					status := fmt.Sprintf("正在执行 %s", ev.ToolName)
+					if ev.ToolName == "bash" && strings.HasPrefix(ev.Partial.Content, "命令仍在执行") {
+						status = ev.Partial.Content
+					}
+					updates.update(buf.String(), FooterMetrics{Status: status, ElapsedMs: time.Since(startTime).Milliseconds()})
+				}
 			case "tool_end":
 				if updates != nil {
 					updates.update(buf.String(), FooterMetrics{Status: "正在思考", ElapsedMs: time.Since(startTime).Milliseconds()})
+				}
+			case "confirmation":
+				var ev struct {
+					ToolName string `json:"tool_name"`
+				}
+				if json.Unmarshal([]byte(data), &ev) == nil && updates != nil {
+					status := "等待工具审批，请在网页或桌面批准"
+					if len(ev.ToolName) <= 128 && confirmationToolNamePattern.MatchString(ev.ToolName) {
+						status += fmt.Sprintf(" · `%s`", ev.ToolName)
+					}
+					updates.update(buf.String(), FooterMetrics{Status: status, ElapsedMs: time.Since(startTime).Milliseconds()})
 				}
 			case "done":
 				var ev struct {
@@ -665,6 +714,8 @@ func (h *Handler) streamChat(ctx context.Context, sessionID, prompt string, card
 
 	return buf.String(), fmt.Errorf("agent stream ended before completion: %w", io.ErrUnexpectedEOF)
 }
+
+var confirmationToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 // filePathRegex matches file paths in LLM replies.
 var filePathRegex = regexp.MustCompile(`(?:^|[\s"'` + "`" + `])((?:/[\w\-./]+)|(?:\./[\w\-./]+))\.(png|jpg|jpeg|gif|webp|svg|bmp|pdf|txt|csv|json|zip|py|js|ts|md|go|rs)`)
@@ -982,3 +1033,17 @@ func (h *Handler) forwardCommand(ctx context.Context, chatKey, text string) stri
 
 // SetOwnerAccess must be configured before handling inbound events.
 func (h *Handler) SetOwnerAccess(access *OwnerAccess) { h.access = access }
+
+// errorDetail 把核心返回的错误压成单行摘要（截断到 200 字符），让飞书侧
+// 的失败卡片能透出真实原因（如 unknown model / 上游超时），而不是只有
+// 一句「处理出错」。
+func errorDetail(err error) string {
+	msg := strings.Join(strings.Fields(err.Error()), " ")
+	if runes := []rune(msg); len(runes) > 200 {
+		msg = string(runes[:200]) + "…"
+	}
+	if msg == "" {
+		return "未知错误"
+	}
+	return msg
+}

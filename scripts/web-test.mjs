@@ -55,7 +55,7 @@ test('clipboard works on HTTP and falls back when modern access is denied', asyn
   assert.ok(removed);
 });
 
-import { commands, parseCommand, filterCommands } from '../internal/web/static/js/commands.js';
+import { commands, parseCommand, filterCommands, mergeCommands } from '../internal/web/static/js/commands.js';
 import { Drafts } from '../internal/web/static/js/drafts.js';
 test('slash completion searches names and Chinese labels, not arguments or paths', () => {
   assert.equal(filterCommands('/').length, commands.length);
@@ -140,4 +140,108 @@ test('a delayed /new does not navigate away after the user switches or edits', a
     panel.input.value='保留新草稿';resolve('new');await pending;
     assert.equal(selected,false);assert.equal(panel.input.value,'保留新草稿');
   }
+});
+
+test('workflow task sends through the agent and empty workflow opens the run directory', async () => {
+  assert.equal(filterCommands('/work')[0].name,'workflow');
+  const panel=Object.create(ChatPanel.prototype);let sent='',page='';
+  Object.assign(panel,{state:{currentSessionId:'a',navigate:p=>{page=p;}},input:{value:'/workflow 研究方案',style:{},scrollHeight:20},drafts:new Drafts(),busy:new Set(),ws:{connected:true,sendPrompt:(_id,text)=>{sent=text;return false;}},_updateButtons(){},_notice(){},commandMenu:{close(){}},_inputChanged(){}});
+  await panel._send();assert.equal(sent,'/workflow 研究方案');assert.equal(panel.input.value,'/workflow 研究方案');
+  panel.input.value='/workflow';await panel._send();assert.equal(page,'page-dynamic-workflows');assert.equal(panel.input.value,'');
+});
+
+test('history never marks a tool with no result as successful', async () => {
+  const oldFetch=globalThis.fetch, oldStorage=globalThis.localStorage;
+  globalThis.localStorage={getItem:()=>''};
+  globalThis.fetch=async()=>({ok:true,json:async()=>[
+    {role:'assistant',tool_calls:[{id:'ok',name:'bash'},{id:'failed',name:'bash'},{id:'missing',name:'bash'}]},
+    {role:'toolResult',tool_call_id:'ok',content:'output'},
+    {role:'toolResult',tool_call_id:'failed',content:'timed out',is_error:true},
+  ]});
+  const states=new Map(),panel=Object.create(ChatPanel.prototype);
+  Object.assign(panel,{state:{currentSessionId:'test',baseUrl:''},messageList:{children:[{}]},
+    _updateButtons(){},clear(){},_startAssistantStream(){},_finishTools(){},_scrollToBottom(){},
+    _addToolCall(id,name,status){states.set(id,status);},_updateToolCall(id,status){states.set(id,status);},
+    _notice(message){throw Error(message);},
+  });
+  try {await panel.loadHistory('test');assert.equal(states.get('ok'),'done');assert.equal(states.get('failed'),'error');assert.equal(states.get('missing'),'unknown');}
+  finally {globalThis.fetch=oldFetch;globalThis.localStorage=oldStorage;}
+});
+
+test('tool progress stays running and cannot overwrite a final result', () => {
+  const nodes = {'.tool-status': {textContent: ''}, '.tool-result': {textContent: ''}};
+  let running = true;
+  const panel = Object.create(ChatPanel.prototype);
+  panel._currentToolCalls = {job: {classList:{contains: name => name === 'running' && running},querySelector: name => nodes[name]}};
+  panel._updateToolProgress('job', {Content: '命令仍在执行 · 已等待 5s'});
+  assert.match(nodes['.tool-status'].textContent, /5s/);
+  running = false; nodes['.tool-result'].textContent = 'command canceled';
+  panel._updateToolProgress('job', {Content: 'late update'});
+  assert.equal(nodes['.tool-result'].textContent, 'command canceled');
+});
+
+test('deployment rejection restores unsent draft without replacing newer input', () => {
+  const panel=Object.create(ChatPanel.prototype);
+  Object.assign(panel,{pendingSends:new Map([['a','//help']]),state:{currentSessionId:'a'},input:{value:''},drafts:new Drafts(),_resizeInput(){}});
+  panel._restoreRejectedPrompt('a');assert.equal(panel.input.value,'//help');assert.equal(panel.drafts.get('a'),'//help');
+  panel.pendingSends.set('a','previous');panel.input.value='newer';panel._restoreRejectedPrompt('a');assert.equal(panel.input.value,'newer');
+});
+
+import { PiWebSocket } from '../internal/web/static/js/websocket.js';
+test('stream recovery deduplicates replay and requests a snapshot on sequence gaps', () => {
+  const ws=new PiWebSocket('http://test'),events=[],requests=[];
+  ws.send=msg=>{requests.push(msg);return true;};
+  ws.on('event:text_delta',event=>events.push(event.text_delta));
+  ws._receive({type:'snapshot',session_id:'a',seq:4,run_id:'run_a'});
+  ws._receive({type:'event',session_id:'a',seq:5,event:{type:'text_delta',text_delta:'first'}});
+  ws._receive({type:'event',session_id:'a',seq:5,event:{type:'text_delta',text_delta:'duplicate'}});
+  ws._receive({type:'event',session_id:'a',seq:7,event:{type:'text_delta',text_delta:'gap'}});
+  assert.deepEqual(events,['first']);assert.equal(requests.at(-1).after_seq,5);
+  ws._receive({type:'replay',session_id:'a',seq:7,run:{run_id:'run_a'},events:[
+    {type:'event',session_id:'a',seq:6,event:{type:'text_delta',text_delta:'second'}},
+    {type:'event',session_id:'a',seq:7,event:{type:'text_delta',text_delta:'third'}},
+  ]});
+  assert.deepEqual(events,['first','second','third']);
+  ws.sendCancel('a');assert.equal(requests.at(-1).run_id,'run_a');
+  ws.stopped=true;ws._scheduleReconnect();assert.equal(ws.reconnectTimer,null);
+});
+test('a send keeps its draft until accepted and never erases a newer draft', async () => {
+  for(const edit of [false,true]){
+    const panel=Object.create(ChatPanel.prototype),drafts=new Drafts(),sent=[];
+    Object.assign(panel,{input:{value:'发送这条'},inputRevision:1,visibleSession:'a',drafts,pendingSends:new Map(),busy:new Set(),state:{currentSessionId:'a'},ws:{connected:true,sendPrompt:(...args)=>{sent.push(args);return true;}},commandMenu:{close(){}},_notice(){},_updateButtons(){},_resizeInput(){},show(){}});
+    drafts.set('a','发送这条');
+    await panel._send();assert.equal(panel.input.value,'发送这条');assert.equal(sent.length,1);
+    await panel._send();assert.equal(sent.length,1,'awaiting ACK must not submit again');
+    if(edit){panel.input.value='新草稿';drafts.set('a','新草稿');panel.inputRevision++;}
+    panel._accepted({session_id:'a',request_id:sent[0][2],state:'running'});
+    assert.equal(panel.input.value,edit?'新草稿':'');assert.equal(drafts.get('a'),edit?'新草稿':'');
+    assert.equal(panel.pendingSends.size,0);assert.ok(panel.busy.has('a'));
+  }
+});
+
+test('server commands submit a returned prompt once, after command completion, and respect newer input', async () => {
+  mergeCommands([{name:'qa_followup',description:'test command'}]);
+  const oldPost=api.post,oldDocument=globalThis.document;
+  globalThis.document={getElementById:()=>({})};
+  try {
+    for(const edit of [false,true]){
+      const sent=[],panel=Object.create(ChatPanel.prototype);
+      Object.assign(panel,{state:{currentSessionId:'a'},input:{value:'/qa_followup'},inputRevision:1,
+        commandMenu:{close(){}},_notice(){},_updateButtons(){},_inputChanged(){this.inputRevision++;},
+        async _send(){assert.equal(this.commandRunning,false);sent.push(this.input.value);}});
+      api.post=async()=>{if(edit){panel.input.value='新的草稿';panel.inputRevision++;}return{output:'准备执行',should_query:true,query_prompt:'执行目标'};};
+      await panel._command('/qa_followup');
+      assert.deepEqual(sent,edit?[]:['执行目标']);
+      assert.equal(panel.input.value,edit?'新的草稿':'执行目标');
+    }
+  } finally {api.post=oldPost;globalThis.document=oldDocument;}
+});
+
+test('a restored interrupted run shows history without duplicating the prompt or auto retrying', () => {
+  const panel=Object.create(ChatPanel.prototype),users=[],notices=[];
+  Object.assign(panel,{state:{currentSessionId:'a'},views:new Map(),busy:new Set(),messageList:{scrollTop:10},jump:{},follow:true,
+    clear(){},show(){},_updateButtons(){},_confirmations(){},_finalizeStream(){},_notice:text=>notices.push(text),
+    _addUserMessage:text=>users.push(text),_finishTools(){},streamHandlers:{}});
+  panel._snapshot({session_id:'a',reset:true,run:{state:'interrupted',prompt:''},messages:[{role:'user',content:'原任务'}],events:[]});
+  assert.deepEqual(users,['原任务']);assert.equal(panel.state.streaming,false);assert.match(notices[0],/未自动重新执行/);
 });

@@ -1,0 +1,7 @@
+Use case: logo-brand.
+Asset type: production macOS / Windows / Linux application icon for EasyAgent, a personal AI agent desktop app.
+Create one polished square 1024 x 1024 app icon, front-facing, not a mockup, ready to use as the actual Dock icon.
+Design: a dark deep-teal rounded-square tile with an original bold mint-aqua lowercase "ea" monogram and a small mint circular dot to its right, reading exactly "ea·". Closely relate to EasyAgent's existing wordmark: friendly geometric rounded sans serif, thick smooth strokes, tight but readable spacing, no uppercase letters. Center the mark optically inside the tile, make it recognizable at 32 pixels. The mark should occupy about 66% of the tile width.
+Palette: midnight deep teal #132827 / #101b1c tile; luminous soft mint #82d5cc mark. Restrained subtle depth and a soft inner highlight, mostly flat and crisp, professional native desktop finish. Generous negative space.
+Composition: square canvas, tile occupies about 88% of the canvas, consistent transparent padding on all four sides, corners gently rounded like a macOS application icon. Transparent background outside the tile. Keep all artwork inside the tile.
+Avoid Electron atom symbol, purple, generic robot faces, stars, circuit patterns, neon glow, tiny details, decorative text, product names outside the monogram, perspective, surrounding objects, screenshots, watermarks. Return only the standalone icon.

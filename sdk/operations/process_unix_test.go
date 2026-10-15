@@ -4,6 +4,7 @@ package operations
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"strconv"
@@ -42,8 +43,8 @@ func TestCancelTerminatesPipelineWithoutWaitingForChild(t *testing.T) {
 	defer cancel()
 	start := time.Now()
 	result, err := (LocalBashOperations{}).Run(ctx, RunRequest{Command: "sleep 10 | cat; wait"})
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation, got %v", err)
 	}
 	if result.ExitCode == 0 || time.Since(start) > 2*time.Second {
 		t.Fatalf("pipeline survived cancellation: %+v elapsed=%s", result, time.Since(start))

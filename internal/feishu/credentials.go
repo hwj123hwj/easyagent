@@ -38,8 +38,24 @@ func SaveCredentials(creds Credentials) error {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
 
-	if err := os.WriteFile(credentialsPath(), data, 0o600); err != nil {
+	f, err := os.CreateTemp(dir, ".feishu-credentials-*")
+	if err != nil {
+		return fmt.Errorf("create credentials: %w", err)
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(data); err != nil {
+		f.Close()
 		return fmt.Errorf("write credentials: %w", err)
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("sync credentials: %w", err)
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(f.Name(), credentialsPath()); err != nil {
+		return fmt.Errorf("replace credentials: %w", err)
 	}
 
 	return nil

@@ -1,3 +1,5 @@
+> 历史参考：本文仅反映记录时的外部项目或接口版本，不代表 EasyAgent 当前实现。旧路径与建议仅供追溯；当前使用方式见 [文档索引](../README.md)。
+
 # Archived
 
 原文件已归档，历史路径：`docs/competitive-research.md`。

@@ -3,6 +3,7 @@ package compaction
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/hwj123hwj/easyagent/sdk/ai"
 )
@@ -10,30 +11,39 @@ import (
 // Settings 控制上下文压缩行为。
 type Settings struct {
 	Enabled          bool
-	ReserveTokens    int // 默认 16384，给总结 prompt 和输出留的 token
-	KeepRecentTokens int // 默认 20000，保留的最近上下文 token 数
+	AutoCompactRatio float64 // 默认 0.8，完整请求达到窗口 80% 时调用 LLM 摘要
+	ReserveTokens    int     // 默认 16384，给总结 prompt 和输出留的 token
+	KeepRecentTokens int     // 默认 20000，保留的最近上下文 token 数
 
 	// MicroCompact（清旧 tool result，不调 LLM）
 	MicroCompactRatio float64 // 默认 0.6，token 占比超此值触发 MicroCompact
 	MicroKeepRecent   int     // 默认 5，保留最近 N 个 tool result 完整
+	MinSavingsTokens  int     // 默认 2048，小额输出积累后批量清理
 }
 
 func DefaultSettings() Settings {
 	return Settings{
 		Enabled:           true,
+		AutoCompactRatio:  0.8,
 		ReserveTokens:     16384,
 		KeepRecentTokens:  20000,
 		MicroCompactRatio: 0.6,
 		MicroKeepRecent:   5,
+		MinSavingsTokens:  2048,
 	}
 }
 
 // ShouldCompact 判断是否需要全量压缩（调 LLM 摘要）。
 func ShouldCompact(contextTokens int, contextWindow int, settings Settings) bool {
-	if !settings.Enabled {
+	if !settings.Enabled || contextWindow <= 0 {
 		return false
 	}
-	return contextTokens > contextWindow-settings.ReserveTokens
+	ratio := settings.AutoCompactRatio
+	if ratio <= 0 || ratio > 1 {
+		ratio = DefaultSettings().AutoCompactRatio
+	}
+	threshold := min(int(float64(contextWindow)*ratio), contextWindow-settings.ReserveTokens)
+	return contextTokens > threshold
 }
 
 // ShouldMicroCompact 判断是否需要 MicroCompact（清旧 tool result，不调 LLM）。
@@ -65,6 +75,9 @@ func Compact(ctx context.Context, history []ai.Message, recent []ai.Message, cus
 	summary, err := summarize(ctx, history, recent, customInstructions)
 	if err != nil {
 		return "", fmt.Errorf("compaction summarize failed: %w", err)
+	}
+	if strings.TrimSpace(summary) == "" {
+		return "", fmt.Errorf("compaction summarizer returned an empty summary")
 	}
 	return summary, nil
 }

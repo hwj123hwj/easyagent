@@ -62,3 +62,25 @@ func TestMergeGateway(t *testing.T) {
 		t.Fatalf("gateway model not registered: %+v", fresh)
 	}
 }
+
+func TestMergeGatewayModelsWithTokens(t *testing.T) {
+	r := NewDefaultRegistry("")
+	inTokens := 160000
+	outTokens := 32000
+	models := []GatewayModel{
+		{ID: "deepseek-v4.1-flash", MaxInputTokens: &inTokens, MaxOutputTokens: &outTokens},
+		{ID: "gemini-3.8-flash-high"},
+	}
+	added := r.MergeGatewayModels("openai", models)
+	if added != 2 {
+		t.Fatalf("added = %d, want 2", added)
+	}
+	ds, ok := r.Get("deepseek-v4.1-flash")
+	if !ok || ds.ContextWindow != 160000 || ds.MaxTokens != 32000 {
+		t.Fatalf("deepseek context window wrong: %+v", ds)
+	}
+	gemini, ok := r.Get("gemini-3.8-flash-high")
+	if !ok || gemini.ContextWindow != 1000000 {
+		t.Fatalf("gemini default window wrong: %+v", gemini)
+	}
+}

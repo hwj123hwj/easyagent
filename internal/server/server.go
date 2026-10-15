@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -38,12 +39,25 @@ func (s *Server) SetVersion(v string) {
 // Server provides HTTP REST + SSE endpoints for the agent.
 // It routes requests to AgentSessions via the App's SessionRegistry.
 type Server struct {
-	app           *app.App
-	slashCmds     *slashcmd.Registry
-	externalTools []agent.ExternalToolDef
-	toolMu        sync.Mutex
-	extraRoutes   *http.ServeMux // optional extra routes (e.g. music audio proxy)
-	apiKey        string         // if non-empty, requires Bearer token auth on all endpoints
+	activity          activityGate
+	runs              *runRegistry
+	workspaceSnapshot func(string) (map[string]fileState, []string) // nil uses the default scanner
+	marketJobs        *marketJobRegistry
+	queueMu           sync.Mutex
+	queues            map[string]*messageQueue
+	ctx               context.Context
+	cancel            context.CancelFunc
+	app               *app.App
+	slashCmds         *slashcmd.Registry
+	externalTools     []agent.ExternalToolDef
+	toolMu            sync.Mutex
+	extraRoutes       *http.ServeMux // optional extra routes (e.g. music audio proxy)
+	apiKey            string         // if non-empty, requires Bearer token auth on all endpoints
+	terminalEnabled   bool
+	terminalSlots     chan struct{}
+	baseURL           string                                          // 本机自呼地址（ListenAndServe 时归一化），进程内飞书桥接回调核心 API 用
+	localBridge       feishuBridge                                    // 非 systemd 托管主机上随 serve 运行的进程内飞书桥接
+	localBridgeRunner func(ctx context.Context, baseURL string) error // 测试注入；nil 用真实实现
 
 	wfMu      sync.Mutex
 	wfReg     *workflow.Registry
@@ -99,8 +113,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 // ChatRequest is the request body for chat endpoints.
 type ChatRequest struct {
-	Prompt    string `json:"prompt"`
-	SessionID string `json:"session_id,omitempty"`
+	Inputs    promptInputs `json:"inputs,omitempty"`
+	Prompt    string       `json:"prompt"`
+	SessionID string       `json:"session_id,omitempty"`
+	RequestID string       `json:"request_id,omitempty"`
 }
 
 // ChatResponse is the response for non-streaming chat.
@@ -125,7 +141,16 @@ type ErrorResponse struct {
 // New creates a new Server backed by the given App and slash command registry.
 // It also wires the LoopManager's trigger resolver so /loop can inject prompts.
 func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
-	srv := &Server{app: application, slashCmds: slashCmds}
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &Server{app: application, slashCmds: slashCmds, ctx: ctx, cancel: cancel, runs: newRunRegistry(),
+		terminalEnabled: os.Getenv("EA_ENABLE_TERMINAL") == "1", terminalSlots: make(chan struct{}, 8),
+		allowedOrigins: envAllowedOrigins(), allowNoAuth: envAllowNoAuth()}
+	// Install jobs must live for the whole server lifetime; Handler() is
+	// rebuilt per request in tests, so create the registry exactly once here.
+	if application.SkillMarket() != nil {
+		srv.marketJobs = newMarketJobRegistry(srv.ctx, application)
+	}
+	srv.restoreRunReceipts()
 
 	// Wire loop trigger: when a /loop fires, inject the prompt into the target session
 	if application.LoopManager() != nil {
@@ -142,13 +167,11 @@ func New(application *app.App, slashCmds *slashcmd.Registry) *Server {
 // injectLoopPrompt injects a prompt into a session as a background agent turn.
 // Used by the /loop scheduler to fire recurring prompts.
 func (s *Server) injectLoopPrompt(ctx context.Context, sessionID, prompt string) error {
-	sess, err := s.app.LoadSession(ctx, sessionID)
+	run, _, err := s.startRun(sessionID, prompt, "")
 	if err != nil {
-		return fmt.Errorf("load session for loop: %w", err)
+		return err
 	}
-
-	// Fire a non-blocking prompt; we don't need the result, just want it to run.
-	_, err = sess.Prompt(ctx, prompt)
+	_, err = s.waitRun(ctx, run)
 	return err
 }
 
@@ -157,21 +180,44 @@ func (s *Server) Handler() http.Handler {
 	// REST API routes with middleware
 	restMux := http.NewServeMux()
 	restMux.HandleFunc("GET /health", s.health)
+	restMux.HandleFunc("/admin/deploy", s.deploymentControl)
 	restMux.HandleFunc("POST /chat", s.chat)
 	restMux.HandleFunc("POST /chat/stream", s.chatStream)
 	restMux.HandleFunc("GET /sessions", s.listSessions)
 	restMux.HandleFunc("POST /sessions", s.createSession)
+	restMux.HandleFunc("POST /sessions/{id}/fork", s.forkSession)
+	restMux.HandleFunc("GET /sessions/{id}/attachments/{attID}/raw", s.getAttachmentRaw)
+	restMux.HandleFunc("GET /usage/summary", s.usageSummary)
+	restMux.HandleFunc("GET /computer/settings", s.getComputerSettings)
+	restMux.HandleFunc("POST /computer/settings", s.updateComputerSettings)
+	restMux.HandleFunc("POST /computer/permissions", s.requestComputerPermissions)
 	restMux.HandleFunc("GET /sessions/{id}/messages", s.getSessionMessages)
 	restMux.HandleFunc("GET /sessions/{id}/info", s.getSessionInfo)
+	restMux.HandleFunc("POST /sessions/{id}/permissions", s.setSessionPermissions)
+	restMux.HandleFunc("GET /sessions/{id}/run", s.getRun)
+	restMux.HandleFunc("POST /sessions/{id}/run/cancel", s.cancelRunHTTP)
+	restMux.HandleFunc("POST /sessions/{id}/run/confirm", s.confirmRunHTTP)
 	restMux.HandleFunc("DELETE /sessions/{id}", s.deleteSession)
+	restMux.HandleFunc("PATCH /sessions/{id}", s.patchSession)
+	restMux.HandleFunc("GET /sessions/{id}/queue", s.messageQueueHTTP)
+	restMux.HandleFunc("POST /sessions/{id}/queue", s.messageQueueHTTP)
+	restMux.HandleFunc("POST /sessions/{id}/attachments", s.uploadAttachment)
 	restMux.HandleFunc("POST /sessions/{id}/model", s.switchModel)
 	restMux.HandleFunc("GET /models", s.listModels)
 	restMux.HandleFunc("GET /tools", s.listTools)
+	restMux.HandleFunc("GET /commands", s.listCommands)
 	restMux.HandleFunc("GET /applications", s.listApplications)
 	restMux.HandleFunc("POST /sessions/{id}/compact", s.compactSession)
+	restMux.HandleFunc("GET /sessions/{id}/context", s.getContextSnapshot)
 	restMux.HandleFunc("POST /sessions/{id}/command", s.executeCommand)
 	restMux.HandleFunc("POST /tools/register", s.registerTool)
 	restMux.HandleFunc("GET /sessions/{id}/diff", s.getSessionDiff)
+	restMux.HandleFunc("GET /sessions/{id}/runs/{run}/files", s.getRunFiles)
+	restMux.HandleFunc("POST /sessions/{id}/runs/{run}/undo", s.undoRunFile)
+	restMux.HandleFunc("GET /workspace/download", s.downloadWorkspaceFile)
+	restMux.HandleFunc("GET /workspace/file-data", s.workspaceFileData)
+	restMux.HandleFunc("GET /sessions/{id}/run-files", s.listRunFiles)
+	restMux.HandleFunc("GET /sessions/{id}/capabilities", s.getCapabilities)
 	restMux.HandleFunc("GET /sessions/{id}/file", s.getSessionFile)
 	restMux.HandleFunc("PUT /sessions/{id}/file", s.writeFile)
 	restMux.HandleFunc("GET /workspace/list-dir", s.listDir)
@@ -185,8 +231,13 @@ func (s *Server) Handler() http.Handler {
 
 	// Workflow orchestration endpoints
 	s.registerWorkflowRoutes(restMux)
+	s.registerDynamicWorkflowRoutes(restMux)
 
 	s.registerFeishuSettings(restMux)
+	s.registerMCPRoutes(restMux)
+
+	// Skill marketplace endpoints (no-op when disabled)
+	s.registerSkillMarketRoutes(restMux)
 
 	// User profile endpoints
 	s.registerProfileRoutes(restMux)
@@ -194,9 +245,9 @@ func (s *Server) Handler() http.Handler {
 	// ASR (speech-to-text) endpoint
 	NewASRHandler(s.app.Config()).Register(restMux)
 
-	var restHandler http.Handler = restMux
+	var restHandler http.Handler = s.admissionMiddleware(restMux)
+	restHandler = s.authMiddleware(restHandler)
 	restHandler = corsMiddleware(s)(restHandler)
-	restHandler = s.authMiddleware(restHandler) // auth check after CORS, before recovery
 	restHandler = recoveryMiddleware(restHandler)
 	restHandler = loggingMiddleware(restHandler)
 
@@ -207,18 +258,29 @@ func (s *Server) Handler() http.Handler {
 	// Top-level mux: combines REST API + Web UI + WebSocket
 	topMux := http.NewServeMux()
 	topMux.Handle("GET /ws", wsHandler)
+	topMux.Handle("GET /terminal", http.HandlerFunc(s.handleTerminal))
 
 	// Register REST API routes (these take precedence over "/" catch-all)
 	topMux.Handle("/health", restHandler)
+	topMux.Handle("/admin/deploy", restHandler)
 	topMux.Handle("/chat", restHandler)
 	topMux.Handle("/chat/", restHandler)
 	topMux.Handle("/sessions", restHandler)
 	topMux.Handle("/sessions/", restHandler)
+	topMux.Handle("/computer/", restHandler)
+	topMux.Handle("/usage/", restHandler)
 	topMux.Handle("/models", restHandler)
 	topMux.Handle("/tools", restHandler)
+	topMux.Handle("/commands", restHandler)
+	topMux.Handle("/mcp", restHandler)
+	topMux.Handle("/mcp/", restHandler)
 	topMux.Handle("/applications", restHandler)
 	topMux.Handle("/workspace/", restHandler)
 	topMux.Handle("/kb/", restHandler)
+	topMux.Handle("/skills/market", restHandler)
+	topMux.Handle("/skills/market/", restHandler)
+	topMux.Handle("/dynamic-workflows", restHandler)
+	topMux.Handle("/dynamic-workflows/", restHandler)
 	topMux.Handle("/workflows", restHandler)
 	topMux.Handle("/workflows/", restHandler)
 	topMux.Handle("/profile", restHandler)
@@ -238,8 +300,22 @@ func (s *Server) Handler() http.Handler {
 
 // ListenAndServe starts the HTTP server on the given address.
 func (s *Server) ListenAndServe(addr string) error {
+	s.baseURL = normalizeLocalBaseURL(addr)
 	slog.Info("starting easyagent server", "listen", addr)
-	return http.ListenAndServe(addr, s.Handler())
+	return s.serveUntilSignal(addr)
+}
+
+// normalizeLocalBaseURL 把监听地址转成进程内桥接可自呼的 loopback URL。
+// 通配地址（0.0.0.0/::/空 host）按 127.0.0.1 处理。
+func normalizeLocalBaseURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://" + addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // ─── GET /health ──────────────────────────────────────────────────────────────
@@ -256,91 +332,96 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	var req ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024*1024)).Decode(&req); err != nil {
+		writeError(w, 400, err.Error())
 		return
 	}
-	if req.Prompt == "" {
-		writeError(w, http.StatusBadRequest, "prompt is required")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-	defer cancel()
-
-	sess, err := s.resolveSession(ctx, req.SessionID)
+	run, _, err := s.startRun(req.SessionID, req.Prompt, req.RequestID, req.Inputs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		runHTTPError(w, err)
 		return
 	}
-
-	assistant, err := sess.Prompt(ctx, req.Prompt)
+	assistant, err := s.waitRun(r.Context(), run)
 	if err != nil {
-		if errors.Is(err, agent.ErrAgentBusy) {
-			writeError(w, http.StatusConflict, "agent is busy processing another request")
-			return
-		}
-		slog.Error("chat failed", "error", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
+		runHTTPError(w, err)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(ChatResponse{
-		Text:      assistant.Text,
-		ToolCalls: assistant.ToolCalls,
-		SessionID: sess.SessionID(),
-	})
+	_ = json.NewEncoder(w).Encode(ChatResponse{Text: assistant.Text, ToolCalls: assistant.ToolCalls, SessionID: run.SessionID})
 }
 
-// ─── POST /chat/stream ────────────────────────────────────────────────────────
-
+// SSE observes the same session-owned run as WS; losing the HTTP connection only unsubscribes.
 func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) {
 	var req ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024*1024)).Decode(&req); err != nil {
+		writeError(w, 400, err.Error())
 		return
 	}
-	if req.Prompt == "" {
-		writeError(w, http.StatusBadRequest, "prompt is required")
+	run, duplicate, err := s.startRun(req.SessionID, req.Prompt, req.RequestID, req.Inputs)
+	if err != nil {
+		runHTTPError(w, err)
 		return
 	}
-
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-	defer cancel()
-
-	sess, err := s.resolveSession(ctx, req.SessionID)
+	writeSSE(w, "session_id", run.SessionID)
+	writeRunSSE(w, "accepted", map[string]any{"session_id": run.SessionID, "run_id": run.ID, "request_id": run.RequestID, "duplicate": duplicate})
+	observer := &wsConn{outgoing: make(chan []byte, 512), done: make(chan struct{})}
+	defer observer.close()
+	defer s.unsubscribeRun(observer, run.SessionID)
+	snapshot, err := s.runSnapshot(run.SessionID, 0, "", observer)
 	if err != nil {
 		writeSSE(w, "error", err.Error())
 		return
 	}
-
-	writeSSE(w, "session_id", sess.SessionID())
-
-	stream, err := sess.PromptStream(ctx, req.Prompt)
-	if err != nil {
-		if errors.Is(err, agent.ErrAgentBusy) {
-			writeSSE(w, "error", "agent is busy processing another request")
+	if run.restored || snapshot.Run == nil || snapshot.Run.ID != run.ID {
+		// A later command/run may have replaced the session projection. Repeating
+		// the old request still returns its own result rather than following a new run.
+		assistant, err := s.waitRun(r.Context(), run)
+		if err != nil {
+			writeSSE(w, "error", err.Error())
 			return
 		}
-		writeSSE(w, "error", err.Error())
+		writeRunSSE(w, "done", agent.AgentStreamEvent{Type: agent.StreamEventDone, FinalMessage: assistant})
+		return
+	}
+	if events, ok := snapshot.Events.([]agent.AgentStreamEvent); ok {
+		for _, event := range events {
+			writeRunSSE(w, string(event.Type), event)
+		}
+	}
+	// A completed duplicate is replayed above; no new execution or subscription wait.
+	if snapshot.Run != nil && !runActive(snapshot.Run) {
 		return
 	}
 
-	flusher, canFlush := w.(http.Flusher)
-	for event := range stream {
-		data, err := json.Marshal(event)
-		if err != nil {
-			continue
-		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
-		if canFlush {
-			flusher.Flush()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-observer.done:
+			return
+		case data := <-observer.outgoing:
+			var event struct {
+				Type         string                 `json:"type"`
+				Event        agent.AgentStreamEvent `json:"event"`
+				State        string                 `json:"state"`
+				Confirmation *pendingConfirmation   `json:"confirmation"`
+			}
+			if json.Unmarshal(data, &event) != nil {
+				continue
+			}
+			if event.Type == "event" {
+				writeRunSSE(w, string(event.Event.Type), event.Event)
+			}
+			if event.Type == "confirmation" {
+				writeRunSSE(w, "confirmation", event.Confirmation)
+			}
+			if event.Type == "status" && event.State != "running" && event.State != "waiting_confirmation" {
+				return
+			}
 		}
 	}
 }
@@ -400,8 +481,12 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist workspace and application metadata for session listing
-	_ = s.app.SessionManager().SaveMeta(sess.SessionID(), req.Cwd, req.Application)
+	// Persist the resolved workspace, including sessions using the server default.
+	if err := s.app.SessionManager().SaveMeta(sess.SessionID(), sess.Workspace(), req.Application); err != nil {
+		_ = s.app.SessionStore().Delete(sess.SessionID())
+		writeError(w, http.StatusInternalServerError, "cannot save session metadata")
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(SessionResponse{
@@ -427,71 +512,33 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages, err := sess.Session().BuildContext(r.Context())
+	messages, err := sess.Session().BuildDisplayContext(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	type toolCallEntry struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Args string `json:"args"`
-	}
-
-	type messageEntry struct {
-		Role        string          `json:"role"`
-		Content     string          `json:"content"`
-		Thinking    string          `json:"thinking,omitempty"`
-		ToolCalls   []toolCallEntry `json:"tool_calls,omitempty"`
-		ToolCallID  string          `json:"tool_call_id,omitempty"`
-		ToolDetails any             `json:"tool_details,omitempty"`
-		IsError     bool            `json:"is_error,omitempty"`
-	}
-
-	var result []messageEntry
-	for _, msg := range messages {
-		entry := messageEntry{Role: string(msg.Role())}
-		switch m := msg.(type) {
-		case ai.UserMessage:
-			var texts []string
-			for _, block := range m.Content {
-				if block.Type == "text" {
-					texts = append(texts, block.Text)
-				}
-			}
-			entry.Content = joinTexts(texts)
-		case ai.AssistantMessage:
-			entry.Content = m.Text
-			entry.Thinking = m.Thinking
-			if len(m.ToolCalls) > 0 {
-				for _, tc := range m.ToolCalls {
-					entry.ToolCalls = append(entry.ToolCalls, toolCallEntry{
-						ID: tc.ID, Name: tc.Name, Args: tc.Args,
-					})
-				}
-			}
-		case ai.ToolResultMessage:
-			entry.Content = m.Content
-			entry.ToolCallID = m.ToolCallID
-			entry.IsError = m.IsError
-			entry.ToolDetails = m.Details
-		}
-		result = append(result, entry)
-	}
-
-	if result == nil {
-		result = []messageEntry{}
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(serializeSessionContext(sess, messages))
 }
 
 // ─── DELETE /sessions/{id} ────────────────────────────────────────────────────
 
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
+	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
+		return
+	}
 	sessionID := r.PathValue("id")
+	s.runs.mu.Lock()
+	defer s.runs.mu.Unlock()
+	if state := s.runs.sessions[sessionID]; sessionBusy(state) {
+		writeError(w, http.StatusConflict, "会话仍在执行任务，请先取消或等待完成")
+		return
+	}
+	if sess, ok := s.app.SessionStore().Get(sessionID); ok && sess.IsBusy() {
+		writeError(w, http.StatusConflict, "会话仍在执行另一入口的任务，请先取消或等待完成")
+		return
+	}
 	mgr := s.app.SessionManager()
 	if err := mgr.Delete(sessionID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -499,6 +546,12 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = s.app.SessionStore().Delete(sessionID)
+	delete(s.runs.sessions, sessionID)
+	for requestID, run := range s.runs.requests {
+		if run.SessionID == sessionID {
+			delete(s.runs.requests, requestID)
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
@@ -535,8 +588,10 @@ type ModelInfo struct {
 
 // ModelsResponse is the response for the models list endpoint.
 type ModelsResponse struct {
-	Models  []ModelInfo `json:"models"`
-	Current *ModelInfo  `json:"current,omitempty"`
+	Models         []ModelInfo `json:"models"`
+	Current        *ModelInfo  `json:"current,omitempty"`
+	Source         string      `json:"source"`
+	DiscoveryError string      `json:"discovery_error,omitempty"`
 }
 
 // gatewayModel represents a single model entry from the gateway /v1/models API.
@@ -567,62 +622,65 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		current = &ModelInfo{ID: modelID, Provider: provider, Name: modelID}
 	}
 
-	// Try to fetch models dynamically from the gateway (OpenAI-compatible /v1/models)
-	var models []ModelInfo
-	if cfg.OpenAIBaseURL != "" && cfg.OpenAIAPIKey != "" {
-		models = s.fetchGatewayModels(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey)
-	}
-
-	// Fallback to hardcoded list if gateway is unreachable
-	if len(models) == 0 {
-		models = []ModelInfo{
-			{ID: "deepseek-v4-flash", Provider: "openai", Name: "DeepSeek V4 Flash"},
-			{ID: "glm-5", Provider: "openai", Name: "GLM-5"},
-			{ID: "claude-sonnet-4-6", Provider: "openai", Name: "Claude Sonnet 4.6"},
+	result := ModelsResponse{Models: []ModelInfo{}, Current: current, Source: "unconfigured"}
+	if provider == "openai" && cfg.OpenAIBaseURL != "" {
+		models, err := s.fetchGatewayModels(r.Context(), cfg.OpenAIBaseURL, cfg.OpenAIAPIKey)
+		if err != nil {
+			result.DiscoveryError = err.Error()
+		} else if len(models) > 0 {
+			result.Models, result.Source = models, "gateway"
 		}
+	}
+	// A configured model can still be used when discovery is unsupported. Do
+	// not invent selectable models or treat this fallback as a connection test.
+	if len(result.Models) == 0 && current != nil {
+		result.Models, result.Source = []ModelInfo{*current}, "configured"
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(ModelsResponse{Models: models, Current: current})
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // fetchGatewayModels queries an OpenAI-compatible /v1/models endpoint and returns
-// the list of available models. Returns nil on any error.
-func (s *Server) fetchGatewayModels(baseURL, apiKey string) []ModelInfo {
-	// Normalize base URL: ensure it ends with /
-	if !strings.HasSuffix(baseURL, "/") {
-		baseURL += "/"
-	}
-
-	url := baseURL + "v1/models"
-	req, err := http.NewRequest("GET", url, nil)
+// the list advertised by the gateway; it does not perform inference.
+func (s *Server) fetchGatewayModels(ctx context.Context, baseURL, apiKey string) ([]ModelInfo, error) {
+	baseURL = strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
+	url := baseURL + "/v1/models"
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		slog.Debug("failed to create gateway models request", "error", err)
-		return nil
+		return nil, fmt.Errorf("model discovery URL is invalid")
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
 	resp, err := client.Do(req)
 	if err != nil {
 		slog.Debug("failed to fetch gateway models", "url", url, "error", err)
-		return nil
+		return nil, fmt.Errorf("model discovery could not connect")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Debug("gateway models returned non-200", "status", resp.StatusCode)
-		return nil
+		return nil, fmt.Errorf("model discovery returned HTTP %d", resp.StatusCode)
 	}
 
 	var gwResp gatewayModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&gwResp); err != nil {
 		slog.Debug("failed to decode gateway models response", "error", err)
-		return nil
+		return nil, fmt.Errorf("model discovery returned invalid JSON")
 	}
 
 	models := make([]ModelInfo, 0, len(gwResp.Data))
 	for _, m := range gwResp.Data {
+		if strings.TrimSpace(m.ID) == "" {
+			continue
+		}
 		name := m.DisplayName
 		if name == "" {
 			name = m.ID
@@ -633,7 +691,7 @@ func (s *Server) fetchGatewayModels(baseURL, apiKey string) []ModelInfo {
 			Name:     name,
 		})
 	}
-	return models
+	return models, nil
 }
 
 // ─── GET /sessions/{id}/info ──────────────────────────────────────────────────
@@ -654,11 +712,19 @@ func (s *Server) getSessionInfo(w http.ResponseWriter, r *http.Request) {
 
 	provider, modelID := sess.ModelInfo()
 
+	usage, err := sess.ContextUsage(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	// Get workspace from config
 	workspace := sess.Config().Workspace
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
+		"access_mode":             sess.AccessMode(),
+		"context_usage":           usage,
 		"id":                      sess.SessionID(),
 		"provider":                provider,
 		"model":                   modelID,
@@ -676,6 +742,9 @@ type SwitchModelRequest struct {
 }
 
 func (s *Server) switchModel(w http.ResponseWriter, r *http.Request) {
+	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
+		return
+	}
 	sessionID := r.PathValue("id")
 
 	var req SwitchModelRequest
@@ -722,12 +791,18 @@ type CompactResponse struct {
 }
 
 func (s *Server) compactSession(w http.ResponseWriter, r *http.Request) {
+	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
+		return
+	}
 	sessionID := r.PathValue("id")
+	if s.rejectActiveRun(w, sessionID) {
+		return
+	}
 
 	var req CompactRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Allow empty body
-		req = CompactRequest{}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid compaction request")
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
@@ -741,9 +816,14 @@ func (s *Server) compactSession(w http.ResponseWriter, r *http.Request) {
 
 	summary, trimmedFrom, trimmedTo, err := sess.Compact(ctx, req.CustomInstructions)
 	if err != nil {
+		if errors.Is(err, agent.ErrAgentBusy) {
+			writeError(w, http.StatusConflict, "会话仍在执行任务，请先取消或等待完成")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "compact failed: "+err.Error())
 		return
 	}
+	s.invalidateRunSnapshot(sessionID)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(CompactResponse{
@@ -765,10 +845,17 @@ type CommandResponse struct {
 	Output      string `json:"output"`
 	ShouldQuery bool   `json:"should_query"`
 	QueryPrompt string `json:"query_prompt,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
 }
 
 func (s *Server) executeCommand(w http.ResponseWriter, r *http.Request) {
+	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
+		return
+	}
 	sessionID := r.PathValue("id")
+	if s.rejectActiveRun(w, sessionID) {
+		return
+	}
 
 	var req CommandRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -809,9 +896,16 @@ func (s *Server) executeCommand(w http.ResponseWriter, r *http.Request) {
 	resp := CommandResponse{
 		Output: result.Output,
 	}
+	s.invalidateRunSnapshot(sessionID)
+	if result.SessionSwitchTo != nil {
+		resp.SessionID = result.SessionSwitchTo.SessionID()
+	}
 	if result.ShouldQuery {
 		resp.ShouldQuery = true
-		resp.QueryPrompt = "Start working..."
+		resp.QueryPrompt = result.QueryPrompt
+		if resp.QueryPrompt == "" {
+			resp.QueryPrompt = "Start working..."
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1106,6 +1200,31 @@ func gitDiff(cwd string) ([]fileDiff, error) {
 
 // ─── GET /workspace/list-dir?path=... ───────────────────────────────────────
 
+// workspaceRoot uses the selected session's project when explicitly supplied.
+// An explicitly selected missing or invalid session never falls back to the global workspace.
+func (s *Server) workspaceRoot(w http.ResponseWriter, r *http.Request) (string, bool) {
+	query := r.URL.Query()
+	if !query.Has("session_id") {
+		return s.app.Config().Workspace, true
+	}
+	id := query.Get("session_id")
+	if id == "" || id == "." || id == ".." || filepath.Base(id) != id || strings.ContainsAny(id, "/\\") {
+		writeError(w, http.StatusNotFound, "session not found")
+		return "", false
+	}
+	manager := s.app.SessionManager()
+	if _, err := securePath(manager.SessionsDir(), id); err != nil || !manager.Exists(id) {
+		writeError(w, http.StatusNotFound, "session not found")
+		return "", false
+	}
+	sess, err := s.app.LoadSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return "", false
+	}
+	return sess.Workspace(), true
+}
+
 // DirEntry represents a single entry in a directory listing.
 type DirEntry struct {
 	Name  string `json:"name"`
@@ -1114,11 +1233,15 @@ type DirEntry struct {
 }
 
 func (s *Server) listDir(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	dirPath := r.URL.Query().Get("path")
 	if dirPath == "" {
-		dirPath = s.app.Config().Workspace
+		dirPath = root
 	}
-	safePath, err := securePath(s.app.Config().Workspace, dirPath)
+	safePath, err := securePath(root, dirPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1176,11 +1299,15 @@ func (s *Server) listDir(w http.ResponseWriter, r *http.Request) {
 // ─── GET /workspace/search-files?path=... ────────────────────────────────────
 
 func (s *Server) searchFiles(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	rootPath := r.URL.Query().Get("path")
 	if rootPath == "" {
-		rootPath = s.app.Config().Workspace
+		rootPath = root
 	}
-	safeRoot, err := securePath(s.app.Config().Workspace, rootPath)
+	safeRoot, err := securePath(root, rootPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1248,13 +1375,17 @@ func (s *Server) searchFiles(w http.ResponseWriter, r *http.Request) {
 // ─── GET /workspace/read-file?path=... ───────────────────────────────────────
 
 func (s *Server) workspaceReadFile(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
 
-	safePath, err := securePath(s.app.Config().Workspace, path)
+	safePath, err := securePath(root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1272,13 +1403,17 @@ func (s *Server) workspaceReadFile(w http.ResponseWriter, r *http.Request) {
 // ─── GET /workspace/read-file-base64?path=... ────────────────────────────────
 
 func (s *Server) workspaceReadFileBase64(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
 
-	safePath, err := securePath(s.app.Config().Workspace, path)
+	safePath, err := securePath(root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1317,6 +1452,10 @@ func (s *Server) workspaceReadFileBase64(w http.ResponseWriter, r *http.Request)
 // ─── PUT /workspace/write-file?path=... ──────────────────────────────────────
 
 func (s *Server) workspaceWriteFile(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.workspaceRoot(w, r)
+	if !ok {
+		return
+	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
@@ -1329,7 +1468,7 @@ func (s *Server) workspaceWriteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	safePath, err := securePath(s.app.Config().Workspace, path)
+	safePath, err := securePath(root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1362,7 +1501,7 @@ func corsMiddleware(s *Server) func(next http.Handler) http.Handler {
 					if allowed == origin {
 						w.Header().Set("Access-Control-Allow-Origin", origin)
 						w.Header().Set("Vary", "Origin")
-						w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+						w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 						w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 						break
 					}
@@ -1387,8 +1526,49 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// Flush preserves SSE delivery through logging middleware. Without this method,
+// short progress events stay in net/http's buffer until the whole turn finishes.
+func (rw *responseWriter) Flush() {
+	_ = http.NewResponseController(rw.ResponseWriter).Flush()
+}
+
+// Unwrap lets ResponseController reach the underlying writer's capabilities.
+func (rw *responseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
+
 // Hijack implements the http.Hijacker interface so WebSocket upgrades work
 // through the logging middleware wrapper.
 func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return rw.ResponseWriter.(http.Hijacker).Hijack()
+}
+
+// setSessionPermissions does not resolve an already pending approval or change a busy run.
+func (s *Server) setSessionPermissions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.rejectActiveWorkflowActor(w, id) {
+		return
+	}
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if json.NewDecoder(r.Body).Decode(&req) != nil || (req.Mode != "ask" && req.Mode != "full") {
+		writeError(w, http.StatusBadRequest, "mode must be ask or full")
+		return
+	}
+	s.runs.mu.Lock()
+	defer s.runs.mu.Unlock()
+	if state := s.runs.sessions[id]; sessionBusy(state) {
+		writeError(w, http.StatusConflict, "请等待当前任务完成后切换权限")
+		return
+	}
+	sess, err := s.app.LoadSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if err := sess.TrySetAccessMode(s.confirmRunTool, req.Mode == "ask"); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"access_mode": sess.AccessMode()})
 }

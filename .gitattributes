@@ -1,2 +1,7 @@
 # Agent skills are development tooling, not product source.
 .agents/skills/** linguist-vendored
+# Preserve pinned upstream sources and license notices byte-for-byte.
+workflow-runtime/vendor/** -whitespace
+# Upstream notices contain a literal seven-character separator.
+workflow-runtime/vendor/ZCODE-THIRD-PARTY-NOTICES.md conflict-marker-size=32
+workflow-runtime/vendor/** linguist-vendored

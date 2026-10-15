@@ -110,3 +110,49 @@ func (t *concurrentDangerTool) Execute(ctx context.Context, raw json.RawMessage,
 	t.mu.Unlock()
 	return ToolResult{Content: "done"}, nil
 }
+
+// Structured input is scoped to one invocation and only executes after reply.
+type answeredTool struct {
+	concurrentDangerTool
+	response json.RawMessage
+}
+
+func (*answeredTool) RequiresInteractiveConfirmation() bool { return true }
+func (t *answeredTool) ExecuteConfirmed(_ context.Context, _ json.RawMessage, decision ConfirmDecision, _ func(PartialResult)) (ToolResult, error) {
+	t.response = decision.Response
+	return ToolResult{Content: string(decision.Response)}, nil
+}
+func TestStructuredConfirmationWaitsAndPassesResponse(t *testing.T) {
+	tool := &answeredTool{}
+	started, reply := make(chan ConfirmationRequest, 1), make(chan ConfirmDecision, 1)
+	ag := New(Options{Tools: []Tool{tool}, ConfirmFunc: func(ctx context.Context, req ConfirmationRequest) ConfirmDecision {
+		started <- req
+		select {
+		case d := <-reply:
+			return d
+		case <-ctx.Done():
+			return ConfirmDecision{Reason: "cancelled"}
+		}
+	}})
+	result := make(chan ai.Message, 1)
+	go func() {
+		result <- executeOneTool(context.Background(), ag, ai.ToolCall{ID: "question", Name: "danger", Args: `{}`})
+	}()
+	request := <-started
+	require.True(t, request.ForceConfirmation)
+	select {
+	case <-result:
+		t.Fatal("question finished before user answered")
+	default:
+	}
+	response := json.RawMessage(`[{"selected":["A"]}]`)
+	reply <- ConfirmDecision{Approved: true, Response: response}
+	message := (<-result).(ai.ToolResultMessage)
+	require.False(t, message.IsError)
+	require.JSONEq(t, string(response), message.Content)
+	require.JSONEq(t, string(response), string(tool.response))
+	require.Zero(t, tool.executed.Load(), "must not execute the ordinary placeholder")
+	missing := New(Options{Tools: []Tool{&answeredTool{}}})
+	declined := executeOneTool(context.Background(), missing, ai.ToolCall{ID: "missing", Name: "danger", Args: `{}`}).(ai.ToolResultMessage)
+	require.Contains(t, declined.Content, "interactive")
+}

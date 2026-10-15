@@ -130,13 +130,28 @@ func (v *MessageViewport) NewLinesCount() int {
 // View renders the visible portion of the viewport.
 func (v *MessageViewport) View() string {
 	if len(v.lines) == 0 {
-		// Empty state — show a subtle hint
-		hint := v.theme.HelpText.Render("  Type a message and press Enter to start chatting...")
-		padLines := v.height - 1
-		if padLines < 0 {
-			padLines = 0
+		lines := []string{
+			v.theme.StatusAccent.Render("  ea·  EasyAgent"),
+			"",
+			v.theme.UserContent.Render("  What would you like to work on?"),
+			v.theme.StatusDim.Render("  Chat, inspect files, or work through a task."),
+			"",
+			v.theme.StatusDim.Render("  / commands     @ files     Ctrl+P models"),
+			v.theme.StatusDim.Render("  Ctrl+T browse tools     Drag to copy"),
 		}
-		return hint + strings.Repeat("\n", padLines)
+		if v.width < 50 {
+			lines = []string{lines[0], "", v.theme.StatusDim.Render("  / commands · Ctrl+P models")}
+		}
+		top := min(3, max(0, (v.height-len(lines))/3))
+		lines = append(make([]string, top), lines...)
+		lines = lines[:min(len(lines), v.height)]
+		for len(lines) < v.height {
+			lines = append(lines, "")
+		}
+		for i := range lines {
+			lines[i] = ansi.Truncate(lines[i], v.width, "")
+		}
+		return strings.Join(lines, "\n")
 	}
 
 	start := v.scrollOffset

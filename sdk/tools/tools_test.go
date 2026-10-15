@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -120,4 +121,24 @@ func TestWriteTool_CreatesParentDir(t *testing.T) {
 	data, err := os.ReadFile(testFile)
 	require.NoError(t, err)
 	assert.Equal(t, "nested", string(data))
+}
+
+func TestBashTool_TimeoutPreservesOutput(t *testing.T) {
+	tool := NewBashTool()
+	result, err := tool.Execute(context.Background(), []byte(`{"command":"echo partial; sleep 10", "timeout":1}`), nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.Content, "partial")
+	assert.Contains(t, result.Content, "timed out after 1s")
+}
+func TestBashTool_ParentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := time.AfterFunc(100*time.Millisecond, cancel)
+	defer timer.Stop()
+	result, err := NewBashTool().Execute(ctx, []byte(`{"command":"echo partial; sleep 10", "timeout":30}`), nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.Content, "canceled")
+	assert.Contains(t, result.Content, "partial")
 }
