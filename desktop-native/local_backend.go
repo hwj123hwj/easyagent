@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"gopkg.in/yaml.v3"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -215,8 +214,12 @@ func (m *localBackend) start(ctx context.Context, dir string, model modelConfig,
 	cmd := exec.Command(binary, "serve", "--listen", address)
 	cmd.Dir = home
 	cmd.Env = filterEnvironment(env)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	// Capture the core's early-output (up to 64KiB) so that when it exits
+	// before becoming ready we can surface the real reason instead of the
+	// generic "本地核心已退出" with no clue. Ring buffer via ringBuffer.
+	stderrTail := newRingBuffer(64 * 1024)
+	cmd.Stdout = stderrTail
+	cmd.Stderr = stderrTail
 	if err = cmd.Start(); err != nil {
 		return nil, errors.New("无法启动本地 EasyAgent 核心")
 	}
@@ -250,7 +253,17 @@ func (m *localBackend) start(ctx context.Context, dir string, model modelConfig,
 			return nil, ctx.Err()
 		case <-done:
 			m.cmd = nil
-			return nil, errors.New("本地核心已退出，请检查模型配置后重试")
+			msg := "本地核心已退出"
+			if tail := strings.TrimSpace(stderrTail.String()); tail != "" {
+				lines := strings.Split(tail, "\n")
+				if len(lines) > 5 {
+					lines = lines[len(lines)-5:]
+				}
+				msg += "：\n" + strings.Join(lines, "\n")
+			} else {
+				msg += "，请检查模型配置后重试"
+			}
+			return nil, errors.New(msg)
 		case <-deadline.C:
 			_ = cmd.Process.Signal(os.Interrupt)
 			return nil, errors.New("本地核心 15 秒内未就绪")
