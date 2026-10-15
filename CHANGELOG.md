@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [v0.15.10] - 2026-10-15
+
+- 修复 Linux 原生客户端安装后一直「未连接」：核心查找顺序错误——只查 macOS bundle 布局（`../Resources/easyagent`），Linux 包内与 UI 同目录自带的核心被跳过，退而搜 `$PATH` 又命中旧版 CLI（无 `serve` 子命令，启动即退）。现查找顺序为：环境变量 → 与 UI 同目录（deb/tar.gz/AppImage）→ macOS bundle → `$PATH`，且 PATH 命中的二进制先做 serve 能力探测，旧 CLI 给出明确错误提示而非静默失联。
+- 原生客户端顶栏/侧栏硬编码「此 Mac」改为按平台显示：macOS 为「此 Mac」，Windows/Linux 为「此电脑」。
+
 ## [v0.15.9] - 2026-10-15
 
 - Linux 客户端首发：Go 原生试用版（desktop-native 0.2.5）现提供 `linux/amd64` 的 `.deb` 一键安装包与 `tar.gz` 归档，内含 Go 核心.easyagent、工作流运行时 Node 与原生界面，无 WebView 依赖，`dpkg -i` 安装后从应用菜单启动。作为 v0.15.9 的附加发布资产提供，暂不进入正式 manifest 校验。
