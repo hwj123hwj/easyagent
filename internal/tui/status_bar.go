@@ -49,6 +49,10 @@ func (sb *StatusBar) Render(
 	case "thinking":
 		spinner := spinnerChars[spinnerIdx%len(spinnerChars)]
 		statusPart = sb.theme.StatusBusy.Render(spinner + " thinking")
+	case "compact":
+		spinner := spinnerChars[spinnerIdx%len(spinnerChars)]
+		statusPart = sb.theme.StatusBusy.Render(spinner + " compacting")
+		return statusPart
 	default:
 		if strings.HasPrefix(status, "tools ") {
 			statusPart = sb.theme.StatusBusy.Render(spinnerChars[spinnerIdx%len(spinnerChars)] + " " + status)

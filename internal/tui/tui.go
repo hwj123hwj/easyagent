@@ -45,6 +45,15 @@ type TuiModel struct {
 	streamBuf string // accumulating text from LLM
 	quitting  bool
 
+	// slashCmdBusy marks a slow slash command (e.g. /compact) running in a
+	// background goroutine. Unlike agentBusy it is not driven by agent
+	// stream events, so it keeps its own flag to hold the spinner open,
+	// block conflicting input, and route Ctrl+C to the command's context.
+	slashCmdBusy     bool
+	slashCmdName     string
+	slashCmdCancel   context.CancelFunc
+	slashCmdCancelMu sync.Mutex
+
 	// Session
 	session   *runtime.AgentSession
 	slashCmds *slashcmd.Registry
@@ -109,6 +118,35 @@ func (m *TuiModel) cancelStream() bool {
 		cancel()
 	}
 	return cancel != nil
+}
+
+// registerSlashCmdCancel 记录正在后台执行的 slash 命令的取消函数。
+func (m *TuiModel) registerSlashCmdCancel(cancel context.CancelFunc) {
+	m.slashCmdCancelMu.Lock()
+	m.slashCmdCancel = cancel
+	m.slashCmdCancelMu.Unlock()
+}
+
+// cancelSlashCmd 取消正在后台执行的 slash 命令（若有）。
+func (m *TuiModel) cancelSlashCmd() bool {
+	m.slashCmdCancelMu.Lock()
+	cancel := m.slashCmdCancel
+	m.slashCmdCancel = nil
+	m.slashCmdCancelMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return cancel != nil
+}
+
+// clearSlashCmd 清理后台 slash 命令的忙碌态。结果消息到达时调用；
+// 取消路径不调用它（由 SlashCmdDoneMsg 统一清理，保持 streamID 门卫一致）。
+func (m *TuiModel) clearSlashCmd() {
+	m.slashCmdCancelMu.Lock()
+	m.slashCmdCancel = nil
+	m.slashCmdCancelMu.Unlock()
+	m.slashCmdBusy = false
+	m.slashCmdName = ""
 }
 
 // SetProgram stores a reference to the tea.Program so we can send msgs from callbacks.
@@ -406,7 +444,7 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TickMsg:
 		m.tickPending = false
-		if m.agentBusy {
+		if m.agentBusy || m.slashCmdBusy {
 			m.spinnerIdx++
 			// 节流应用流式文本：100ms 一次，替代每个 delta 全量重渲
 			if len(m.streamBuf) != m.appliedStreamLen {
@@ -415,6 +453,31 @@ func (m *TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.spinnerTick()
 		}
+		return m, nil
+
+	case SlashCmdDoneMsg:
+		// Ignore stale results from a cancelled/superseded command.
+		if msg.StreamID != m.streamID {
+			return m, nil
+		}
+		m.clearSlashCmd()
+		if msg.Err != nil {
+			m.messages = append(m.messages, ChatMessage{
+				Role:      "system",
+				Content:   fmt.Sprintf("❌ Command error: %v", msg.Err),
+				Timestamp: time.Now(),
+			})
+		} else {
+			if msg.Output != "" {
+				m.messages = append(m.messages, ChatMessage{
+					Role:      "system",
+					Content:   msg.Output,
+					Timestamp: time.Now(),
+				})
+			}
+		}
+		m.viewport.SetMessages(m.messages)
+		m.viewport.GotoBottom()
 		return m, nil
 	}
 
@@ -540,7 +603,10 @@ func (m *TuiModel) renderView() string {
 	if m.session != nil && !m.session.ConfirmEnabled() {
 		mode = "auto"
 	}
-	if m.agentBusy && !m.runStarted.IsZero() {
+	if m.slashCmdBusy {
+		status = "compact"
+		mode = m.slashCmdName + " · Ctrl+C cancel"
+	} else if m.agentBusy && !m.runStarted.IsZero() {
 		mode = formatDuration(time.Since(m.runStarted)) + " · " + mode
 	}
 	buf.WriteString(m.statusBar.Render(

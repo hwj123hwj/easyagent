@@ -94,6 +94,10 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch action {
 
 	case ActionCancel: // Ctrl+C
+		if m.slashCmdBusy {
+			m.cancelSlashCmd()
+			return m, nil
+		}
 		if m.agentBusy {
 			m.streamID++ // discard late events from the cancelled run
 			m.streaming = false
@@ -144,6 +148,10 @@ func (m *TuiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ActionSubmit: // Enter
 		if m.agentBusy {
 			m.copyNotice = "Working | Ctrl+C: cancel; draft kept"
+			return m, nil
+		}
+		if m.slashCmdBusy {
+			m.copyNotice = fmt.Sprintf("/%s running | Ctrl+C: cancel; draft kept", m.slashCmdName)
 			return m, nil
 		}
 		input := m.input.Text()
@@ -250,6 +258,10 @@ func (m *TuiModel) handleCompletionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *TuiModel) openModelSelector() (tea.Model, tea.Cmd) {
 	if m.agentBusy {
 		m.copyNotice = "Working | Ctrl+C: cancel before switching model"
+		return m, nil
+	}
+	if m.slashCmdBusy {
+		m.copyNotice = fmt.Sprintf("/%s running | Ctrl+C: cancel before switching model", m.slashCmdName)
 		return m, nil
 	}
 	if !m.completion.TriggerModel(m.getAvailableModels()) {
@@ -544,7 +556,24 @@ func (m *TuiModel) startAgentStream(input string) tea.Cmd {
 	}
 }
 
+// syncSlashCommands 快速、纯本地的斜杠命令：直接在 Update 循环里同步执行，
+// 无需后台 goroutine。
+var syncSlashCommands = map[string]bool{
+	"models":   true,
+	"sessions": true,
+	"switch":   true,
+	"confirm":  true,
+	"clear":    true,
+	"new":      true,
+}
+
 // handleSlashCommand processes /commands locally.
+//
+// 慢命令（如 /compact 要调 LLM 总结，可能耗时几十秒）在后台 goroutine
+// 执行：同步执行会阻塞 Bubble Tea 的事件循环，导致整个终端无响应
+// （按键不响应、不重绘、Ctrl+C 也杀不掉——它不在可取消的流上）。
+// 后台执行后复用 agentBusy 同款忙碌态 UI：spinner 转动、输入被挡、
+// Ctrl+C 走命令自己的 context 真正取消。
 func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	m.input.Reset()
 	if strings.TrimSpace(input) == "/models" {
@@ -552,6 +581,16 @@ func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	}
 	if strings.TrimSpace(input) == "/sessions" || strings.TrimSpace(input) == "/switch" {
 		return m.openSessionPicker()
+	}
+
+	if m.slashCmdBusy {
+		m.copyNotice = fmt.Sprintf("/%s still running · Ctrl+C to cancel", m.slashCmdName)
+		return m, nil
+	}
+
+	name, _ := slashcmd.ParseSlashCommand(input)
+	if !syncSlashCommands[name] {
+		return m.runSlashCommandAsync(input)
 	}
 
 	cmdCtx := slashcmd.Context{
@@ -598,6 +637,51 @@ func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	m.viewport.SetMessages(m.messages)
 	m.viewport.GotoBottom()
 	return m, nil
+}
+
+// runSlashCommandAsync executes a slash command in a background goroutine so
+// the Update loop stays responsive while slow commands (e.g. /compact's LLM
+// summarization) run. Progress shows via the spinner; Ctrl+C cancels via the
+// command's own context. The result comes back as SlashCmdDoneMsg.
+func (m *TuiModel) runSlashCommandAsync(input string) (tea.Model, tea.Cmd) {
+	m.streamID++
+	id := m.streamID
+	ctx, cancel := context.WithCancel(context.Background())
+	m.registerSlashCmdCancel(cancel)
+
+	name, _ := slashcmd.ParseSlashCommand(input)
+	m.slashCmdBusy = true
+	m.slashCmdName = name
+	m.messages = append(m.messages, ChatMessage{
+		Role:      "user",
+		Content:   input,
+		Timestamp: time.Now(),
+	})
+	m.viewport.SetMessages(m.messages)
+	m.viewport.GotoBottom()
+
+	program, cmds, session, app := m.program, m.slashCmds, m.session, m.app
+	return m, tea.Batch(m.spinnerTick(), func() tea.Msg {
+		defer cancel()
+		cmdCtx := slashcmd.Context{
+			Ctx:     ctx,
+			Session: session,
+			App:     app,
+		}
+		result, err := cmds.Execute(cmdCtx, input)
+		if ctx.Err() != nil {
+			// Cancelled (Ctrl+C): surface as an error note. Keep streamID so
+			// the SlashCmdDoneMsg is accepted and busy state gets cleaned up.
+			err = fmt.Errorf("cancelled")
+			result = slashcmd.CommandResult{}
+		}
+		done := SlashCmdDoneMsg{Input: input, Output: result.Output, Err: err, StreamID: id}
+		if program != nil {
+			program.Send(done)
+			return nil
+		}
+		return done
+	})
 }
 
 // getAvailableModels returns the list of models the user can switch to.

@@ -48,6 +48,10 @@ func (m *TuiModel) openSessionPicker() (tea.Model, tea.Cmd) {
 		m.copyNotice = "Working | Ctrl+C: cancel before switching session"
 		return m, nil
 	}
+	if m.slashCmdBusy {
+		m.copyNotice = fmt.Sprintf("/%s running | Ctrl+C: cancel before switching session", m.slashCmdName)
+		return m, nil
+	}
 	if m.app == nil {
 		m.copyNotice = "Session catalog unavailable"
 		return m, nil
