@@ -23,14 +23,15 @@ def unregister(app, commands):
     )
     development = app == ROOT / "desktop/node_modules/electron/dist/Electron.app"
     native_helper = app == ROOT / "desktop/.bundle/cua-helper/EasyAgent Computer Use.app"
-    if not (any(app.is_relative_to(p) for p in outputs) or mounted_test or development or native_helper):
+    native_preview = app == ROOT / "desktop-native/build.noindex/darwin-arm64/EasyAgent Native Preview.app"
+    if not (any(app.is_relative_to(p) for p in outputs) or mounted_test or development or native_helper or native_preview):
         raise ValueError(f"Refusing to unregister an installed or unrelated app: {app}")
     if any(line.startswith(str(app) + "/Contents/") for line in commands.splitlines()):
         raise ValueError(f"Quit the test app before unregistering it: {app}")
     if not app.is_dir():
         return
     identifier = plistlib.loads((app / "Contents/Info.plist").read_bytes()).get("CFBundleIdentifier", "")
-    if not (identifier.startswith("com.easyagent.") or (development and identifier == "com.github.Electron")):
+    if not (identifier.startswith("com.easyagent.") or (development and identifier == "com.github.Electron") or (native_preview and identifier == "com.hwj.easyagent.native-preview")):
         raise ValueError(f"Unrelated bundle identifier: {identifier}")
     # Unregister helpers explicitly; -R can trigger Spotlight scans of packages.
     for bundle in [*app.rglob("*.app"), app]:
