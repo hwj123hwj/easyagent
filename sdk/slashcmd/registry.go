@@ -31,6 +31,8 @@ type Command struct {
 	Name        string
 	Description string
 	Subcommands []Subcommand
+	// Interactive identifies arguments that need exclusive terminal I/O.
+	Interactive func(args string) bool
 	Handler     func(ctx Context, args string) (CommandResult, error)
 }
 

@@ -13,7 +13,9 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/larksuite/oapi-sdk-go/v3 v3.9.2
 	github.com/modelcontextprotocol/go-sdk v1.4.0
+	github.com/muesli/cancelreader v0.2.2
 	github.com/rivo/uniseg v0.4.7
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/oauth2 v0.34.0
 	golang.org/x/sys v0.40.0
@@ -45,7 +47,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
-	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/reflow v0.3.0 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

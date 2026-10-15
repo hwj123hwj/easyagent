@@ -312,6 +312,28 @@ func OpenBrowser(url string) {
 	openBrowser(url)
 }
 
+// OpenBrowserContext is used only after an explicit terminal choice. Wait for
+// the launcher with a deadline so a headless or stalled opener cannot hang setup.
+func OpenBrowserContext(ctx context.Context, url string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var command string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		command, args = "open", []string{url}
+	case "windows":
+		command, args = "rundll32", []string{"url.dll,FileProtocolHandler", url}
+	case "linux":
+		command, args = "xdg-open", []string{url}
+	default:
+		return fmt.Errorf("browser launcher unavailable on %s", runtime.GOOS)
+	}
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.WaitDelay = time.Second
+	return cmd.Run()
+}
+
 // openBrowser tries to open the default browser with the given URL.
 func openBrowser(url string) {
 	var err error
