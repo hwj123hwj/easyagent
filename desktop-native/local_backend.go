@@ -75,22 +75,54 @@ type localBackend struct {
 	closed bool
 }
 
+// coreBinary locates the EasyAgent core binary to serve the local backend.
+//
+// Search order matters: the packaged layout puts the core next to the UI
+// executable (deb: /opt/easyagent-native-preview/, tar.gz, AppImage;
+// macOS bundle: ../Resources/easyagent), so those always win. Only then do
+// we fall back to $PATH — and even there we verify the binary actually
+// supports `serve`, because an older CLI installed in ~/.easyagent/bin
+// otherwise gets picked up, exits on the unknown subcommand, and the UI
+// shows "未连接" despite a perfectly good bundled core.
 func coreBinary() (string, error) {
+	exe, _ := os.Executable()
+	return coreBinaryAt(exe)
+}
+
+// coreBinaryAt is coreBinary with the UI executable path injected (tests).
+// See coreBinary for the search order and why PATH comes last.
+func coreBinaryAt(exe string) (string, error) {
 	if raw := os.Getenv("EASYAGENT_NATIVE_CORE"); raw != "" {
 		if info, err := os.Stat(raw); err == nil && !info.IsDir() {
 			return raw, nil
 		}
 		return "", errors.New("EASYAGENT_NATIVE_CORE 指向的核心不存在")
 	}
-	exe, _ := os.Executable()
-	candidate := filepath.Clean(filepath.Join(filepath.Dir(exe), "../Resources/easyagent"))
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate, nil
+	dir := filepath.Dir(exe)
+	for _, candidate := range []string{
+		filepath.Join(dir, "easyagent"),                      // deb / tar.gz / AppImage 布局：核心与 UI 同目录
+		filepath.Clean(filepath.Join(dir, "../Resources/easyagent")), // macOS .app bundle 布局
+	} {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
 	}
 	if raw, err := exec.LookPath("easyagent"); err == nil {
-		return raw, nil
+		if coreSupportsServe(raw) {
+			return raw, nil
+		}
+		return "", fmt.Errorf("PATH 里的 easyagent（%s）不支持 serve 子命令，疑似旧版 CLI；请安装新版或设置 EASYAGENT_NATIVE_CORE", raw)
 	}
 	return "", errors.New("安装包缺少 EasyAgent 核心，请重新构建原生试用版")
+}
+
+// coreSupportsServe reports whether the binary at path understands the
+// `serve` subcommand (unknown flags make it print usage and exit non-zero).
+func coreSupportsServe(path string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "serve", "--help")
+	return cmd.Run() == nil
 }
 func filterEnvironment(overrides map[string]string) []string {
 	env := []string{}

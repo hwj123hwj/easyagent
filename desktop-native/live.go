@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -84,11 +85,25 @@ type nativeConfirmation struct {
 	Action             func()
 }
 
+// localHostName returns the display name for the local machine, phrased for
+// the platform instead of the hardcoded macOS wording ("此 Mac" on Linux
+// read as if the app were Mac-only).
+func localHostName() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "此 Mac"
+	case "windows":
+		return "此电脑"
+	default:
+		return "此电脑（Linux）"
+	}
+}
+
 func newConnectedPreview(dir string) *preview {
 	a := newPreview()
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &liveState{Dir: dir, Secrets: systemSecrets{}, Core: &localBackend{}, ctx: ctx, cancel: cancel, epoch: 1, results: make(chan liveResult, 1024), Models: []string{}, ResourceErrors: map[string]string{}, Data: map[string]any{}, Loading: map[string]bool{}, Versions: map[string]uint64{}, Drafts: map[string]string{}, DraftInputs: map[string]draftInputState{}, CollapsedProjects: map[string]bool{}, Workbench: newNativeWorkbench()}
-	l.Config = clientConfig{Hosts: []hostConfig{{ID: "local", Name: "此 Mac", Local: true}}, ActiveHost: "local", Model: modelConfig{Mode: "inherit"}}
+	l.Config = clientConfig{Hosts: []hostConfig{{ID: "local", Name: localHostName(), Local: true}}, ActiveHost: "local", Model: modelConfig{Mode: "inherit"}}
 	l.hostCtx = ctx
 	l.Store = &nativeStore{dir: dir}
 	l.Images = map[string]ui.ImageSource{}
@@ -98,7 +113,7 @@ func newConnectedPreview(dir string) *preview {
 		}
 	}
 	if len(l.Config.Hosts) == 0 {
-		l.Config.Hosts = []hostConfig{{ID: "local", Name: "此 Mac", Local: true}}
+		l.Config.Hosts = []hostConfig{{ID: "local", Name: localHostName(), Local: true}}
 	}
 	if l.Config.Model.Mode == "" {
 		l.Config.Model.Mode = "inherit"

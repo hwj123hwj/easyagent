@@ -166,7 +166,7 @@ func (a *preview) liveSidebar(c *ui.Context) {
 				}
 				group := s.Workspace
 				if group == "" {
-					group = "此 Mac"
+					group = localHostName()
 				}
 				if _, ok := byGroup[group]; !ok {
 					groups = append(groups, group)
@@ -188,7 +188,7 @@ func (a *preview) liveSidebar(c *ui.Context) {
 						ui.Text(c, title).FontSize(12).TextColor(c.Theme().TextMuted).Grow(1).MinWidth(0).MaxLines(1)
 						ui.Text(c, fmt.Sprint(len(byGroup[group]))).FontSize(11).Padding(1, 5).Radius(8).Background(c.Theme().SurfaceHover).TextColor(c.Theme().TextMuted)
 					})
-					if group != "此 Mac" {
+					if group != localHostName() {
 						iconButton(c, "plus", "在项目中新建对话："+filepath.Base(group)).Size(24, 28).Disabled(!l.Connected || l.Loading["create-session"]).OnClick(func() { a.createLiveSessionIn("", group, a.current().Application) })
 					}
 				})

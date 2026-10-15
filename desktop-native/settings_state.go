@@ -83,7 +83,7 @@ type settingsState struct {
 
 func newSettings() settingsState {
 	return settingsState{
-		Tab: "general", HostFeishu: map[string]feishuDemoState{}, ProjectTrustByWorkspace: map[string]bool{}, Preferences: localPreferences{Language: "中文", Theme: "dark"}, Hosts: []demoHost{{"local", "此 Mac", "", true}, {"mini", "迷你主机", "http://192.168.5.16:8080", false}}, EditHost: "迷你主机", HostName: "迷你主机", HostURL: "http://192.168.5.16:8080",
+		Tab: "general", HostFeishu: map[string]feishuDemoState{}, ProjectTrustByWorkspace: map[string]bool{}, Preferences: localPreferences{Language: "中文", Theme: "dark"}, Hosts: []demoHost{{"local", localHostName(), "", true}, {"mini", "迷你主机", "http://192.168.5.16:8080", false}}, EditHost: "迷你主机", HostName: "迷你主机", HostURL: "http://192.168.5.16:8080",
 		Mode: "沿用命令行配置", Provider: "OpenAI 兼容服务 / 网关", BaseURL: "http://localhost:4001", Model: "coding", Approval: "逐批询问", Workspace: "/demo/easyagent", Scope: "个人", Transport: "stdio", Timeout: "30000",
 		Audit: []string{}, Servers: []*demoServer{{Name: "filesystem-demo", Host: "local", Scope: "个人", Transport: "stdio", Enabled: true, Trusted: true, Tool: true}},
 		SkillFilter: "精选", SkillCategory: "全部", Skills: []*demoSkill{
