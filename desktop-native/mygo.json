@@ -1,7 +1,7 @@
 {
   "name": "EasyAgent Native Preview",
   "identifier": "com.hwj.easyagent.native-preview",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "out": "build.noindex",
   "macos": {
     "minimumSystemVersion": "13.0",
