@@ -3,6 +3,7 @@ package feishu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -57,11 +58,6 @@ type RegistrationError struct {
 
 func (e *RegistrationError) Error() string {
 	return fmt.Sprintf("registration error: %s — %s", e.ErrorCode, e.Message)
-}
-
-// postRegistration sends a POST to the registration endpoint.
-func postRegistration(baseURL string, body map[string]string) (map[string]interface{}, error) {
-	return postRegistrationContext(context.Background(), baseURL, body)
 }
 
 func postRegistrationContext(ctx context.Context, baseURL string, body map[string]string) (map[string]interface{}, error) {
@@ -199,75 +195,62 @@ func PollRegistration(
 	domain string,
 	onProgress func(dots string),
 ) (*PollResult, error) {
-	deadline := time.Now().Add(time.Duration(expireIn) * time.Second)
-	currentDomain := domain
-	domainSwitched := false
-	pollCount := 0
+	return PollRegistrationContext(context.Background(), deviceCode, interval, expireIn, domain, onProgress)
+}
 
-	baseURL := getAccountsURL(currentDomain)
+// PollRegistrationContext bounds the entire flow, including in-flight requests
+// and waits. A cancelled or expired registration must not save credentials.
+func PollRegistrationContext(ctx context.Context, deviceCode string, interval, expireIn int, domain string, onProgress func(string)) (*PollResult, error) {
+	return pollRegistration(ctx, deviceCode, interval, expireIn, domain, onProgress, PollRegistrationOnce)
+}
 
-	for time.Now().Before(deadline) {
-		res, err := postRegistration(baseURL, map[string]string{
-			"action":      "poll",
-			"device_code": deviceCode,
-		})
-		if err != nil {
-			// Network error — keep polling
-			slog.Debug("registration poll error, retrying", "error", err)
-			time.Sleep(time.Duration(interval) * time.Second)
-			continue
-		}
-
-		pollCount++
-		if onProgress != nil {
-			onProgress(strings.Repeat(".", pollCount))
-		}
-
-		// Auto-detect domain (lark vs feishu)
-		if userInfo, ok := res["user_info"].(map[string]interface{}); ok {
-			if tenantBrand, ok := userInfo["tenant_brand"].(string); ok {
-				if tenantBrand == "lark" && !domainSwitched {
-					currentDomain = "lark"
-					baseURL = getAccountsURL(currentDomain)
-					domainSwitched = true
-					slog.Info("registration domain switched to lark")
-				}
-			}
-		}
-
-		// Success — app created
-		clientID, _ := res["client_id"].(string)
-		clientSecret, _ := res["client_secret"].(string)
-		if clientID != "" && clientSecret != "" {
-			openID := ""
-			if userInfo, ok := res["user_info"].(map[string]interface{}); ok {
-				openID, _ = userInfo["open_id"].(string)
-			}
-			slog.Info("registration successful", "app_id", clientID, "domain", currentDomain)
-			return &PollResult{
-				AppID:     clientID,
-				AppSecret: clientSecret,
-				Domain:    currentDomain,
-				OpenID:    openID,
-			}, nil
-		}
-
-		// Check for denial / expiry
-		errCode, _ := res["error"].(string)
-		if errCode == "access_denied" || errCode == "expired_token" {
-			return nil, fmt.Errorf("registration %s", errCode)
-		}
-
-		// authorization_pending — keep polling
-		time.Sleep(time.Duration(interval) * time.Second)
+func pollRegistration(ctx context.Context, deviceCode string, interval, expireIn int, domain string, onProgress func(string), poll func(context.Context, string, string) (*PollResult, string, error)) (*PollResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(expireIn)*time.Second)
+	defer cancel()
+	if interval <= 0 {
+		interval = 5
 	}
-
-	return nil, fmt.Errorf("registration timed out after %d seconds", expireIn)
+	for count := 0; ; count++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		result, nextDomain, err := poll(ctx, deviceCode, domain)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err == nil && result != nil {
+			return result, nil
+		}
+		var registrationErr *RegistrationError
+		if errors.As(err, &registrationErr) {
+			return nil, err
+		}
+		if nextDomain != "" {
+			domain = nextDomain
+		}
+		if onProgress != nil {
+			onProgress(strings.Repeat(".", count%3+1))
+		}
+		timer := time.NewTimer(time.Duration(interval) * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // ProbeCredentials validates app credentials by fetching tenant_access_token and bot info.
 // Returns bot name + open_id, or nil if credentials are invalid.
 func ProbeCredentials(appID, appSecret, domain string) (botName, botOpenID string, err error) {
+	return ProbeCredentialsContext(context.Background(), appID, appSecret, domain)
+}
+
+func ProbeCredentialsContext(ctx context.Context, appID, appSecret, domain string) (botName, botOpenID string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	openBase := getOpenBase(domain)
 
 	// 1. Get tenant_access_token
@@ -280,11 +263,13 @@ func ProbeCredentials(appID, appSecret, domain string) (botName, botOpenID strin
 		return "", "", fmt.Errorf("marshal token request: %w", err)
 	}
 
-	resp, err := http.Post(
-		fmt.Sprintf("%s/open-apis/auth/v3/tenant_access_token/internal", openBase),
-		"application/json",
-		strings.NewReader(string(tokenBody)),
-	)
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/open-apis/auth/v3/tenant_access_token/internal", openBase), strings.NewReader(string(tokenBody)))
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("get tenant_access_token: %w", err)
 	}
@@ -304,11 +289,14 @@ func ProbeCredentials(appID, appSecret, domain string) (botName, botOpenID strin
 	}
 
 	// 2. Get bot info
-	botReq, _ := http.NewRequest("GET", fmt.Sprintf("%s/open-apis/bot/v3/info", openBase), nil)
+	botReq, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/open-apis/bot/v3/info", openBase), nil)
 	botReq.Header.Set("Authorization", "Bearer "+tokenResp.TenantAccessToken)
 	botClient := &http.Client{Timeout: 10 * time.Second}
 	botResp, err := botClient.Do(botReq)
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", "", ctx.Err()
+		}
 		// Token worked but bot info failed — still valid credentials
 		slog.Warn("bot info fetch failed, but credentials are valid", "error", err)
 		return "(unknown)", "", nil
@@ -381,7 +369,7 @@ func PollRegistrationOnce(ctx context.Context, deviceCode, domain string) (*Poll
 	}
 	code, _ := res["error"].(string)
 	if code != "" && code != "authorization_pending" && code != "slow_down" {
-		return nil, domain, fmt.Errorf("registration %s", code)
+		return nil, domain, &RegistrationError{ErrorCode: code, Message: "authorization failed"}
 	}
 	return nil, domain, nil
 }

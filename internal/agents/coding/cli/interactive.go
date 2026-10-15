@@ -88,6 +88,8 @@ func (m *InteractiveMode) Run(ctx context.Context) error {
 				Ctx:     ctx,
 				Session: m.session,
 				App:     m.app,
+				Stdin:   os.Stdin,
+				Stdout:  os.Stdout,
 			}
 			result, err := m.slashCmds.Execute(cmdCtx, input)
 			if err != nil {

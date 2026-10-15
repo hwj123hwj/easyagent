@@ -26,8 +26,12 @@ func registerFeishuCommand(registry *slashcmd.Registry, name string) {
 	registry.Register(slashcmd.Command{
 		Name:        name,
 		Description: "Configure and control the Feishu bot",
+		Interactive: func(args string) bool {
+			fields := strings.Fields(args)
+			return len(fields) == 0 || (fields[0] == "setup" && (len(fields) < 2 || fields[1] != "--manual"))
+		},
 		Subcommands: []slashcmd.Subcommand{
-			{Name: "setup", Description: "Scan QR to login (or --manual <AppId> <AppSecret>)"},
+			{Name: "setup", Description: "Choose QR, browser or link login (or --manual <AppId> <AppSecret>)"},
 			{Name: "start", Description: "Start the Feishu bot and send its startup guide"},
 			{Name: "stop", Description: "Stop the bot"},
 			{Name: "status", Description: "Show current status"},
@@ -73,7 +77,7 @@ func handleFeishuSetup(ctx slashcmd.Context, args []string) (slashcmd.CommandRes
 		appSecret := args[2]
 
 		// Probe to verify + get bot info
-		botName, botOpenID, probeErr := feishu.ProbeCredentials(appID, appSecret, "feishu")
+		botName, botOpenID, probeErr := feishu.ProbeCredentialsContext(ctx.Ctx, appID, appSecret, "feishu")
 		if probeErr != nil {
 			return slashcmd.CommandResult{Output: fmt.Sprintf("⚠️ Credentials validation failed: %v\nCredentials saved anyway.", probeErr)}, nil
 		}
@@ -94,82 +98,7 @@ func handleFeishuSetup(ctx slashcmd.Context, args []string) (slashcmd.CommandRes
 		}, nil
 	}
 
-	// ── Mode 1: Device-code registration (scan QR to auto-create app) ──
-	fmt.Println("\n📱 Mode 1: Scan QR to auto-create Feishu app")
-	fmt.Println("   Connecting to Feishu...")
-
-	// Step 1: Init
-	if err := feishu.InitRegistration("feishu"); err != nil {
-		return slashcmd.CommandResult{
-			Output: fmt.Sprintf("❌ Registration init failed: %v\n\nFallback: /feishu setup --manual <AppId> <AppSecret>", err),
-		}, nil
-	}
-
-	// Step 2: Begin — get device code + QR URL
-	begin, err := feishu.BeginRegistration("feishu")
-	if err != nil {
-		return slashcmd.CommandResult{
-			Output: fmt.Sprintf("❌ Registration begin failed: %v\n\nFallback: /feishu setup --manual <AppId> <AppSecret>", err),
-		}, nil
-	}
-
-	fmt.Println("  ✅ QR code generated")
-	fmt.Printf("  🔗 URL: %s\n\n", begin.QRURL)
-	fmt.Println("  📱 Scan the QR code above with your Feishu mobile app")
-	fmt.Println("     Or open the link in a browser to complete authorization")
-	fmt.Println("  ⏳ Waiting for QR scan...")
-	fmt.Println("     (Press Ctrl+C to cancel)")
-
-	// Open browser if possible
-	feishu.OpenBrowser(begin.QRURL)
-
-	// Step 3: Poll for scan result
-	poll, err := feishu.PollRegistration(
-		begin.DeviceCode,
-		begin.Interval,
-		begin.ExpireIn,
-		"feishu",
-		func(dots string) {
-			fmt.Printf("\r  Waiting%s", dots)
-		},
-	)
-	fmt.Println() // newline after dots
-
-	if err != nil || poll == nil {
-		return slashcmd.CommandResult{
-			Output: fmt.Sprintf("❌ Feishu QR scan timed out or failed: %v\n\nTry /feishu setup again,\nor use /feishu setup --manual <AppId> <AppSecret>", err),
-		}, nil
-	}
-
-	// Step 4: Probe to get bot name + open_id
-	botName, botOpenID, _ := feishu.ProbeCredentials(poll.AppID, poll.AppSecret, poll.Domain)
-
-	// Step 5: Save credentials
-	creds := feishu.Credentials{
-		AppID:      poll.AppID,
-		AppSecret:  poll.AppSecret,
-		UserOpenID: poll.OpenID,
-		BotName:    botName,
-		BotOpenID:  botOpenID,
-		Platform:   poll.Domain,
-	}
-	if err := feishu.SaveCredentials(creds); err != nil {
-		return slashcmd.CommandResult{}, fmt.Errorf("save credentials: %w", err)
-	}
-
-	if botName == "" {
-		botName = "(unknown)"
-	}
-
-	return slashcmd.CommandResult{
-		Output: fmt.Sprintf(`✅ Feishu app created successfully!
-
-  Bot Name:  %s
-  App ID:    %s
-  Saved to:  %s/feishu-credentials.json
-
-Next: run /feishu start to start the bot`, botName, poll.AppID, config.HomeDir()),
-	}, nil
+	return runFeishuSetup(ctx, args, defaultFeishuSetupServices())
 }
 
 func handleFeishuStart() (slashcmd.CommandResult, error) {
@@ -361,7 +290,10 @@ func feishuHelp() string {
 
 Usage:
   /feishu                        Interactive setup (QR scan login)
-  /feishu setup                  Scan QR code to login (recommended)
+  /feishu setup                  Choose QR, browser or link login
+  /feishu setup --qr             Show a QR code; never open a browser
+  /feishu setup --link           Show a link for another device
+  /feishu setup --browser        Explicitly open the local browser
   /feishu setup --manual <AppId> <AppSecret>  Manual credentials
   /feishu start                 Start the Feishu connection and send the startup guide
   /feishu stop                  Stop the bot

@@ -600,7 +600,10 @@ func (m *TuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	name, _ := slashcmd.ParseSlashCommand(input)
+	name, args := slashcmd.ParseSlashCommand(input)
+	if command := m.slashCmds.Command(name); command.Interactive != nil && command.Interactive(args) {
+		return m.runTerminalCommand(input)
+	}
 	if !syncSlashCommands[name] {
 		return m.runSlashCommandAsync(input)
 	}

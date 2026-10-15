@@ -1,6 +1,9 @@
 package slashcmd
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
 // Context provides the runtime context that slash command handlers need.
 // It uses interfaces to avoid import cycles with app/runtime packages.
@@ -13,6 +16,11 @@ type Context struct {
 
 	// App provides app-level operations.
 	App AppContext
+
+	// Stdin and Stdout are set only when the entrypoint has given this command
+	// exclusive terminal access. HTTP and background commands leave them nil.
+	Stdin  io.Reader
+	Stdout io.Writer
 }
 
 // SessionContext is the interface for session operations available to slash commands.

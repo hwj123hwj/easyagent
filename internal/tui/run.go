@@ -25,6 +25,7 @@ func Run(session *runtime.AgentSession, cmds *slashcmd.Registry, app slashcmd.Ap
 	// by the TUI, so copying never requires releasing terminal mouse capture.
 	p := newProgram(m)
 	defer m.cancelStream()
+	defer m.cancelSlashCmd()
 	defer tea.SetCursorColumn(0)
 
 	// Wire program reference so callbacks can send messages
