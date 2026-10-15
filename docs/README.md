@@ -115,6 +115,7 @@ docs/
 | [cc-haha-web-fetch-analysis.md](research/cc-haha-web-fetch-analysis.md) | cc-haha(=Claude Code 官方) WebFetch 源码级分析，EasyAgent web_fetch 实现参照 |
 | [codex-rust-cli-analysis.md](research/codex-rust-cli-analysis.md) | Codex Rust CLI 详细调研 |
 | [deepv-code-full-analysis.md](research/deepv-code-full-analysis.md) | DeepV Code 全面分析 |
+| [easyagent-feature-review-2026-10.md](research/easyagent-feature-review-2026-10.md) | 功能体验评审：Agent 本体第一人称报告（进程管理/子 agent/多模态 read） |
 | [pi-go-enhancement-status.md](research/pi-go-enhancement-status.md) | EasyAgent P0-P2 增强落地状态（确认机制/循环检测/Hook/web_fetch/MicroCompact 的 commit 与 PR 索引） |
 | ~~competitive-research.md~~ | *(已归档)* 阶段性竞品对比分析 |
 
