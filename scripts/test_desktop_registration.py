@@ -46,6 +46,19 @@ class RegistrationTests(unittest.TestCase):
                 registration.unregister(self.app, str(self.app) + "/Contents/" + executable + " --type=gpu-process")
         self.run.assert_not_called()
 
+    def test_native_preview_is_scoped_and_running_protected(self):
+        app = self.bundle(self.root / "desktop-native/build.noindex/darwin-arm64/EasyAgent Native Preview.app", "com.hwj.easyagent.native-preview")
+        registration.unregister(app, "")
+        with self.assertRaisesRegex(ValueError, "Quit"):
+            registration.unregister(app, str(app) + "/Contents/MacOS/EasyAgent Native Preview")
+        other = self.bundle(app.parent / "Other.app", "com.hwj.easyagent.native-preview")
+        with self.assertRaisesRegex(ValueError, "unrelated"):
+            registration.unregister(other, "")
+        (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.other.app"}))
+        with self.assertRaisesRegex(ValueError, "identifier"):
+            registration.unregister(app, "")
+        self.run.assert_called_once()
+
     def test_refuses_installed_app_and_symlink_escape(self):
         installed = self.bundle(self.root / "Applications/EasyAgent.app")
         link = self.app.parent / "outside.app"

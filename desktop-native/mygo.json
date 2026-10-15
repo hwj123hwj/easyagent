@@ -1,0 +1,15 @@
+{
+  "name": "EasyAgent Native Preview",
+  "identifier": "com.hwj.easyagent.native-preview",
+  "version": "0.2.5",
+  "out": "build.noindex",
+  "macos": {
+    "minimumSystemVersion": "13.0",
+    "infoPlist": {
+      "NSMicrophoneUsageDescription": "录制语音并发送到当前 EasyAgent 主机转写。",
+      "NSDesktopFolderUsageDescription": "访问你选择的桌面项目，读取、编辑和运行项目文件。",
+      "NSDocumentsFolderUsageDescription": "访问你选择的文稿项目，读取、编辑和运行项目文件。",
+      "NSDownloadsFolderUsageDescription": "访问你选择的下载目录中的项目和附件。"
+    }
+  }
+}
