@@ -146,7 +146,7 @@ func (a *preview) chrome(c *ui.Context) {
 		return
 	}
 	bar := c.TitleBar()
-	ui.Row(c).Height(48).Padding(1, 14, 0, max(bar.Left, 76)+6).Gap(10).AlignItems(ui.Center).DragWindow().BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
+	ui.Row(c).Height(48).Padding(1, max(bar.Right, 14)+6, 0, max(bar.Left, 76)+6).Gap(10).AlignItems(ui.Center).DragWindow().BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 		if !a.Settings.Open {
 			iconButton(c, "panel", a.tr("切换会话侧栏")).OnClick(func() {
 				width, _ := c.Size()
