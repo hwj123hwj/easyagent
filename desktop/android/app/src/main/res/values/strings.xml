@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">EasyAgent</string>
-    <string name="title_activity_main">EasyAgent</string>
-    <string name="package_name">com.ezycode.pigo</string>
-    <string name="custom_url_scheme">com.ezycode.pigo</string>
-</resources>

@@ -46,6 +46,14 @@ class RegistrationTests(unittest.TestCase):
                 registration.unregister(self.app, str(self.app) + "/Contents/" + executable + " --type=gpu-process")
         self.run.assert_not_called()
 
+    def test_promoted_native_bundle_and_helper(self):
+        app = self.bundle(self.root / "desktop-native/build.noindex/darwin-arm64/EasyAgent.app", "com.hwj.easyagent")
+        helper = self.bundle(app / "Contents/Resources/cua-helper/EasyAgent Computer Use.app", "com.hwj.easyagent.cua-helper")
+        registration.unregister(app, "")
+        self.assertEqual([call.args[0][2] for call in self.run.call_args_list], [str(helper), str(app)])
+        with self.assertRaisesRegex(ValueError, "Quit"):
+            registration.unregister(app, str(app) + "/Contents/MacOS/EasyAgent")
+
     def test_native_preview_is_scoped_and_running_protected(self):
         app = self.bundle(self.root / "desktop-native/build.noindex/darwin-arm64/EasyAgent Native Preview.app", "com.hwj.easyagent.native-preview")
         registration.unregister(app, "")
@@ -78,6 +86,14 @@ class RegistrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="easyagent-installer-check.", suffix=".noindex") as stage:
             app = self.bundle(Path(stage).resolve() / "mount/EasyAgent.app")
             registration.unregister(app, "")
+        self.run.assert_called_once()
+
+    def test_isolated_native_baseline(self):
+        with tempfile.TemporaryDirectory(prefix="easyagent-baseline.", suffix=".noindex") as stage:
+            app = self.bundle(Path(stage).resolve() / "EasyAgent.app", "com.hwj.easyagent")
+            registration.unregister(app, "")
+            with self.assertRaisesRegex(ValueError, "Quit"):
+                registration.unregister(app, str(app) + "/Contents/MacOS/EasyAgent")
         self.run.assert_called_once()
 
     def test_development_runtime_and_missing_output(self):

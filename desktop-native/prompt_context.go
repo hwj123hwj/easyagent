@@ -94,12 +94,16 @@ func (a *preview) promptFileMentions(c *ui.Context, anchor ui.Element, s *sessio
 		if len(matches) == 0 && !a.Live.Loading[key] && a.Live.ResourceErrors[key] == "" {
 			a.note(c, "没有匹配的文件")
 		}
-		ui.Scroll(c).MaxHeight(260).Children(func() {
+		ui.Scroll(c).Label("文件引用列表").MaxHeight(260).Children(func() {
 			for i, value := range matches {
-				menuOption(c.Key(value), "file", value, i == s.MentionIndex%len(matches)).OnClick(func() { s.MentionIndex = i; a.completeMention(s) })
+				row := menuOption(c.Key(value), "file", value, i == s.MentionIndex%len(matches)).OnClick(func() { s.MentionIndex = i; a.completeMention(s) })
+				if s.MentionJump && i == s.MentionIndex%len(matches) {
+					row.ScrollIntoView()
+				}
 			}
 		})
 	})
+	s.MentionJump = false
 	if popup.Valid() {
 		popup.AttachTo(anchor, ui.AnchorTopLeft, ui.AnchorBottomLeft).Width(max(260, anchor.Bounds().W)).Margin(0, 0, 8, 0)
 	}

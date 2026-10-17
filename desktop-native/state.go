@@ -24,6 +24,7 @@ type nativePlanEntry struct{ Content, Status string }
 type session struct {
 	FileReferences                               []fileReference
 	MentionIndex                                 int
+	MentionJump                                  bool
 	MentionDismissed                             string
 	Density                                      string
 	FindOpen, FindFocus, FindJump                bool
@@ -33,6 +34,7 @@ type session struct {
 	UpdatedAt                                    string
 	Plan                                         []nativePlanEntry
 	RemoteID, Workspace, Application, AccessMode string
+	ModelChosen                                  bool
 	Pinned, Sending                              bool
 	Run                                          *runInfo
 	InfoVersion                                  uint64
@@ -53,6 +55,7 @@ type session struct {
 	Position                                     int
 }
 type preview struct {
+	UpdaterReady                                                                   bool
 	Window                                                                         *mygo.Window
 	Live                                                                           *liveState
 	Settings                                                                       settingsState
@@ -78,7 +81,7 @@ func newPreview() *preview {
 		Sessions: []*session{
 			{ID: 1, Title: "青夜界面试验", Project: "easyagent", Model: "coding", Messages: []*message{
 				{User: true, Text: "先把主会话页做出来，看看纯 Go 的效果。"},
-				{Tool: "读取界面样式 · 3 个文件（演示）", Text: "desktop/src/styles/personal.css\ndesktop/src/components/PromptBar.tsx\ndesktop/src/components/Sidebar.tsx"},
+				{Tool: "读取界面样式 · 3 个文件（演示）", Text: "desktop-native/view.go\ndesktop-native/workbench.go\ndesktop-native/state.go"},
 				{Text: demoIntro},
 			}},
 			{ID: 2, Title: "原生 Markdown 与代码", Project: "easyagent", Model: "coding", Messages: []*message{
@@ -179,15 +182,16 @@ func (a *preview) start(s *session, reply string) {
 	s.Position = 0
 	follow(s)
 }
-func (a *preview) tick() {
+func (a *preview) tick() bool {
 	if a.Live != nil {
-		a.liveTick()
-		return
+		return a.liveTick()
 	}
+	changed := false
 	for _, s := range a.Sessions {
 		if !s.Running {
 			continue
 		}
+		changed = true
 		following := s.Scroll.Y >= s.Scroll.MaxY-12
 		s.Position = min(s.Position+3, len(s.Reply))
 		s.Messages[len(s.Messages)-1].Text = string(s.Reply[:s.Position])
@@ -199,6 +203,7 @@ func (a *preview) tick() {
 			s.Reply = nil
 		}
 	}
+	return changed
 }
 func (a *preview) stop() {
 	if a.Live != nil {

@@ -63,6 +63,7 @@ type settingsState struct {
 	Hosts                                                                              []demoHost
 	EditHost, HostName, HostURL, HostToken                                             string
 	Mode, Provider, BaseURL, Model, APIKey                                             string
+	ModelCatalogSearch                                                                 string
 	Checked, HasKey                                                                    bool
 	ComputerEnabled                                                                    bool
 	Approval                                                                           string

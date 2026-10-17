@@ -3,6 +3,8 @@ package main
 import (
 	"github.com/egoist/mygo"
 	_ "github.com/egoist/mygo/locales/zh-Hans"
+	"github.com/egoist/mygo/plugins/updater"
+	nativeupdater "github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 	"log"
 	"os"
@@ -10,6 +12,7 @@ import (
 )
 
 func main() {
+	mygo.Use(nativeupdater.Plugin)
 	app := mygo.App
 	app.SetLanguages("zh-Hans", "en")
 	app.SetName("EasyAgent")
@@ -25,14 +28,24 @@ func main() {
 		}
 		state := newConnectedPreview(dir)
 		win := mygo.NewWindow(mygo.WindowOptions{
-			Title: "EasyAgent · Go 原生预览", Content: ui.View(state.View), Width: 1240, Height: 820,
+			Title: "EasyAgent", Content: ui.View(state.View), Width: 1240, Height: 820,
 			MinWidth: 900, MinHeight: 640, TitleBarStyle: mygo.TitleBarHidden, TitleBarHeight: 48,
 			TrafficLightPosition: &mygo.Point{X: 18, Y: 17}, BackgroundColor: "#131718",
 		})
 		state.Window = win
+		state.UpdaterReady = true
+		offUpdates := updater.OnChange(win.Invalidate)
+		offQuit := app.OnBeforeQuit(func(e *mygo.QuitEvent) {
+			if reason := state.quitBlockReason(); reason != "" {
+				e.PreventDefault()
+				state.Live.Error = reason
+				win.Show()
+				win.Invalidate()
+			}
+		})
 		state.syncNativeLocale()
 		done := make(chan struct{})
-		win.OnClosed(func() { close(done); state.closeLive() })
+		win.OnClosed(func() { close(done); offUpdates(); offQuit(); state.closeLive() })
 		go func() {
 			ticker := time.NewTicker(60 * time.Millisecond)
 			defer ticker.Stop()
@@ -41,9 +54,12 @@ func main() {
 				case <-done:
 					return
 				case <-ticker.C:
-					win.Update(func() {
-						if !win.IsDestroyed() {
-							state.tick()
+					// Wait for the UI thread: at most one tick can be queued even
+					// while a document is expensive to lay out. Idle ticks do not
+					// invalidate the text/layout tree.
+					mygo.RunOnMain(func() {
+						if !win.IsDestroyed() && state.tick() {
+							win.Invalidate()
 						}
 					})
 				}

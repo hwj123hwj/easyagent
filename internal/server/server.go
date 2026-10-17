@@ -1237,6 +1237,13 @@ func (s *Server) listDir(w http.ResponseWriter, r *http.Request) {
 		"target": true, ".gradle": true, ".idea": true, ".vscode": true,
 	}
 
+	// Read the canonical directory for access control, but return paths in
+	// the caller's workspace spelling. Otherwise a symlinked workspace (e.g.
+	// /var on macOS) loses breadcrumbs and persisted editor tabs on the client.
+	displayPath := dirPath
+	if !filepath.IsAbs(displayPath) {
+		displayPath = filepath.Join(root, displayPath)
+	}
 	var result []DirEntry
 	for _, entry := range entries {
 		name := entry.Name()
@@ -1258,7 +1265,7 @@ func (s *Server) listDir(w http.ResponseWriter, r *http.Request) {
 		isDir := entry.IsDir()
 		result = append(result, DirEntry{
 			Name:  name,
-			Path:  filepath.Join(safePath, name),
+			Path:  filepath.Join(displayPath, name),
 			IsDir: isDir,
 		})
 	}

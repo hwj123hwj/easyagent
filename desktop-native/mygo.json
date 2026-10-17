@@ -11,5 +11,13 @@
       "NSDocumentsFolderUsageDescription": "访问你选择的文稿项目，读取、编辑和运行项目文件。",
       "NSDownloadsFolderUsageDescription": "访问你选择的下载目录中的项目和附件。"
     }
-  }
+  },
+  "updates": {
+    "publicKey": "pxQjBGbExbXH4XixmVwcNNdNPFPHtzz5SoawM85L9JA=",
+    "github": "hwj123hwj/easyagent",
+    "tagPrefix": "v",
+    "deltas": 0,
+    "changelog": "../CHANGELOG.md"
+  },
+  "icon": "resources/icon.png"
 }

@@ -89,7 +89,11 @@ func (a *preview) View(c *ui.Context) {
 		a.openSettings("general")
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyP) && !a.Settings.Open {
-		a.Workbench = !a.Workbench
+		if a.Live != nil && (!a.Workbench || a.Live.Workbench.Tab != "files") {
+			a.openResource("files")
+		} else {
+			a.Workbench = !a.Workbench
+		}
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyN) && !a.Settings.Open {
 		a.newSession()

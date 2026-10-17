@@ -118,76 +118,134 @@ func (a *preview) liveSettingsPage(c *ui.Context) {
 func (a *preview) liveModelSettings(c *ui.Context) {
 	s := &a.Settings
 	l := a.Live
+	busy := l.configBusy() || l.Loading["model-check"]
 	ui.Row(c).Children(func() {
-		a.heading(c, "当前模型")
+		a.heading(c, "全局模型配置")
 		ui.Spacer(c)
-		a.action(c, "刷新模型").OnClick(a.refreshModels)
+		a.action(c, "刷新模型").Disabled(busy || l.Loading["model-list"]).OnClick(a.refreshModels)
 	})
-	a.note(c, a.current().Model)
+	defaultModel := str(object(object(l.Data["models"])["current"])["id"])
+	if defaultModel == "" {
+		defaultModel = "尚未读取"
+	}
+	a.preferenceRow(c, "主机默认模型", defaultModel, func() {})
+	a.preferenceRow(c, "当前会话模型", a.current().Model, func() {})
+	a.note(c, "新建会话使用主机默认模型；会话中单独选择的模型只影响该会话，并在重启后保留。")
 	if !s.host().Local {
-		a.note(c, "远程模型配置由对应主机管理；此处可以刷新和切换会话模型。")
-		for _, name := range l.Models {
-			a.action(c, name).OnClick(func() { a.switchLiveModel(name) })
-		}
+		a.note(c, "模型配置属于服务主机。远程默认模型需在对应主机的 EasyAgent 配置中修改；会话模型可在对话输入框切换。")
+		a.action(c, "选择运行主机").OnClick(func() { a.openSettings("connections") })
 		return
 	}
 	a.heading(c, "本地模型来源")
-	ui.RadioGroup(c, func() {
-		ui.Row(c).Gap(20).Wrap().Children(func() {
-			for _, mode := range []string{"沿用命令行配置", "在桌面客户端配置"} {
-				ui.Radio(c, &s.Mode, mode, a.tr(mode))
-			}
-		})
-	})
-	if s.Mode == "在桌面客户端配置" {
-		placeholder := "首次配置请输入 API Key"
-		if l.Config.Model.HasKey {
-			placeholder = "留空保留已存入钥匙串的密钥"
-		}
-		ui.Row(c).Gap(16).Wrap().Children(func() {
-			for index := 0; index < 4; index++ {
-				ui.Column(c.Key(index)).Basis(160).Grow(1).MinWidth(160).Children(func() {
-					switch index {
-					case 0:
-						a.dropdown(c, "模型服务", &s.Provider, []string{"OpenAI 兼容服务 / 网关", "Anthropic"})
-					case 1:
-						a.input(c, "服务地址", &s.BaseURL, "http://localhost:4001", false)
-					case 2:
-						a.input(c, "默认模型", &s.Model, "填写模型 ID", false)
-					case 3:
-						a.input(c, "API Key", &s.APIKey, placeholder, true)
+	ui.Column(c).Gap(12).Disabled(busy).Children(func() {
+		ui.RadioGroup(c, func() {
+			ui.Row(c).Gap(20).Wrap().Children(func() {
+				for _, mode := range []string{"沿用命令行配置", "在桌面客户端配置"} {
+					if ui.Radio(c, &s.Mode, mode, a.tr(mode)).Changed() {
+						a.clearModelCheck()
 					}
-				})
-			}
+				}
+			})
 		})
-		a.note(c, "密钥保存到 macOS 钥匙串。检测连接只读取模型目录；应用配置会重启此原生应用管理的本地核心。")
-	} else {
-		a.note(c, "读取 ~/.easyagent/config.yaml、~/.easyagent/.env 和当前环境中的模型与工具配置。")
-	}
+		if s.Mode == "在桌面客户端配置" {
+			ui.Row(c).Gap(16).Wrap().Children(func() {
+				for index := 0; index < 4; index++ {
+					ui.Column(c.Key(index)).Basis(220).Grow(1).MinWidth(180).Children(func() {
+						switch index {
+						case 0:
+							if a.dropdown(c, "模型服务", &s.Provider, []string{"OpenAI 兼容服务 / 网关", "Anthropic"}).Changed() {
+								s.APIKey = ""
+								a.clearModelCheck()
+							}
+						case 1:
+							placeholder := "http://localhost:4001"
+							if s.Provider == "Anthropic" {
+								placeholder = "https://api.anthropic.com"
+							}
+							if a.input(c, "服务地址", &s.BaseURL, placeholder, false).Label("全局模型服务地址").Changed() {
+								a.clearModelCheck()
+							}
+						case 2:
+							a.input(c, "默认模型", &s.Model, "填写模型 ID，或检测连接后选择", false).Label("全局默认模型")
+						case 3:
+							placeholder := "首次配置请输入 API Key"
+							provider := "openai"
+							if s.Provider == "Anthropic" {
+								provider = "anthropic"
+							}
+							if l.Config.Model.HasKey && l.Config.Model.Provider == provider {
+								placeholder = "留空保留已存入钥匙串的密钥"
+							}
+							if a.input(c, "API Key", &s.APIKey, placeholder, true).Changed() {
+								a.clearModelCheck()
+							}
+						}
+					})
+				}
+			})
+			a.note(c, "配置适用于此 Mac 的本地 Agent。密钥保存在 macOS 钥匙串；远程 Agent 的访问令牌在运行主机中配置。")
+		} else {
+			a.note(c, "读取 ~/.easyagent/config.yaml、~/.easyagent/.env 和当前环境中的模型与工具配置。修改后点击应用即可重新读取。")
+			a.action(c, "配置全局模型").OnClick(func() {
+				s.Mode = "在桌面客户端配置"
+				if s.Model == "" {
+					s.Model = str(object(object(l.Data["models"])["current"])["id"])
+				}
+				a.clearModelCheck()
+			})
+		}
+	})
 	running := false
 	for _, session := range a.Sessions {
 		running = running || session.Running || session.Pending || session.Sending
 	}
-	incomplete := s.Mode == "在桌面客户端配置" && (strings.TrimSpace(s.BaseURL) == "" || strings.TrimSpace(s.Model) == "")
+	missingURL := s.Mode == "在桌面客户端配置" && strings.TrimSpace(s.BaseURL) == ""
+	incomplete := missingURL || s.Mode == "在桌面客户端配置" && strings.TrimSpace(s.Model) == ""
 	ui.Row(c).Gap(12).Wrap().Margin(12, 0, 0, 0).Children(func() {
-		a.action(c, "检测连接").Disabled(l.Loading["model-check"] || l.configBusy() || incomplete).OnClick(a.checkLiveModel)
-		a.primary(c, "应用并重新连接").Disabled(l.configBusy() || l.Connecting || incomplete || running).OnClick(a.applyLiveModel)
+		a.action(c, "检测连接").Disabled(busy || missingURL).OnClick(a.checkLiveModel)
+		a.primary(c, "应用并重新连接").Disabled(busy || l.Connecting || incomplete || running).OnClick(a.applyLiveModel)
+		a.action(c, "撤销未保存修改").Disabled(busy).OnClick(func() { a.syncSettingsConfig(); s.APIKey = ""; a.clearModelCheck() })
 	})
+	if busy {
+		a.note(c, "正在处理模型配置…")
+	}
 	if running {
 		a.note(c, "当前有任务正在执行，完成或停止任务后即可应用配置。")
 	}
+	a.note(c, "检测只读取模型目录，不发送推理请求。应用后重启本地核心，新会话使用新的默认模型，已有会话的单独选择保留。")
 	if catalog := object(l.Data["model-check"]); len(catalog) > 0 {
+		a.heading(c, "检测到的模型")
 		a.note(c, str(catalog["message"]))
-		for _, item := range list(catalog["data"]) {
-			name := str(object(item)["id"])
-			a.action(c, name).OnClick(func() { s.Model = name })
-		}
+		a.input(c, "搜索检测到的模型", &s.ModelCatalogSearch, "按模型 ID 搜索", false)
+		ui.Scroll(c).Label("默认模型目录").MaxHeight(260).Children(func() {
+			count := 0
+			for _, item := range list(catalog["data"]) {
+				name := str(object(item)["id"])
+				if !strings.Contains(strings.ToLower(name), strings.ToLower(s.ModelCatalogSearch)) {
+					continue
+				}
+				count++
+				menuOption(c.Key(name), "cpu", name, s.Model == name).Label("设为默认模型：" + name).Disabled(busy || s.Mode != "在桌面客户端配置").OnClick(func() { s.Model = name })
+			}
+			if count == 0 {
+				a.note(c, "没有匹配的模型")
+			}
+		})
 	}
 	if catalog := object(l.Data["models"]); str(catalog["discovery_error"]) != "" {
 		a.note(c, "模型目录读取失败；当前配置的模型仍可选择。")
 	}
 }
+func (a *preview) clearModelCheck() {
+	delete(a.Live.Data, "model-check")
+	a.Settings.ModelCatalogSearch = ""
+	a.Live.Versions["model-check"]++
+}
+
 func (a *preview) modelCandidate() (modelConfig, string, error) {
+	return a.modelCandidateWithModel(a.Settings.Model)
+}
+func (a *preview) modelCandidateWithModel(model string) (modelConfig, string, error) {
 	s := &a.Settings
 	cfg := modelConfig{Mode: "inherit"}
 	if s.Mode == "在桌面客户端配置" {
@@ -195,7 +253,7 @@ func (a *preview) modelCandidate() (modelConfig, string, error) {
 		if s.Provider == "Anthropic" {
 			provider = "anthropic"
 		}
-		cfg = modelConfig{Mode: "override", Provider: provider, BaseURL: s.BaseURL, Model: s.Model, HasKey: true}
+		cfg = modelConfig{Mode: "override", Provider: provider, BaseURL: s.BaseURL, Model: model, HasKey: true}
 	}
 	cfg, err := validatedModel(cfg)
 	key := strings.TrimSpace(s.APIKey)
@@ -204,9 +262,22 @@ func (a *preview) modelCandidate() (modelConfig, string, error) {
 	}
 	return cfg, key, err
 }
+
+// Catalog discovery needs a connection, but not a model selected in advance.
+func (a *preview) modelCandidateForCheck() (modelConfig, string, error) {
+	model := a.Settings.Model
+	if strings.TrimSpace(model) == "" {
+		model = "catalog-discovery"
+	}
+	return a.modelCandidateWithModel(model)
+}
+
 func (a *preview) checkLiveModel() {
 	l := a.Live
-	cfg, key, err := a.modelCandidate()
+	if l.configBusy() || l.Loading["model-check"] {
+		return
+	}
+	cfg, key, err := a.modelCandidateForCheck()
 	if err != nil {
 		l.Error = err.Error()
 		return
@@ -216,6 +287,8 @@ func (a *preview) checkLiveModel() {
 		l.Notice = "已读取核心当前配置的模型目录；未执行推理请求。"
 		return
 	}
+	a.clearModelCheck()
+	version := l.Versions["model-check"]
 	l.Loading["model-check"] = true
 	epoch, ctx, secrets := l.epoch, l.ctx, l.Secrets
 	oldProvider := l.Config.Model.Provider
@@ -264,6 +337,9 @@ func (a *preview) checkLiveModel() {
 		}
 		a.post(epoch, func() {
 			l.Loading["model-check"] = false
+			if version != l.Versions["model-check"] {
+				return
+			}
 			if err != nil {
 				l.Error = err.Error()
 				return
@@ -276,7 +352,7 @@ func (a *preview) checkLiveModel() {
 }
 func (a *preview) applyLiveModel() {
 	l := a.Live
-	if l.configBusy() {
+	if l.configBusy() || l.Loading["model-check"] {
 		l.Error = "正在保存配置，请稍后再试"
 		return
 	}
@@ -348,7 +424,8 @@ func (a *preview) applyLiveModel() {
 			}
 			l.Config = next
 			a.syncSettingsConfig()
-			l.Notice = "模型配置已保存，本地核心已重启。"
+			a.clearModelCheck()
+			l.Notice = "全局模型配置已保存，新建会话将使用新的默认模型。"
 			a.connectLive()
 		})
 	}()
@@ -582,6 +659,9 @@ func (a *preview) liveUsageSettings(c *ui.Context) {
 	}
 }
 func (a *preview) liveComputerSettings(c *ui.Context) {
+	if a.resourceFeedback(c, "computer", a.loadSettingsPage) {
+		return
+	}
 	l := a.Live
 	m := object(l.Data["computer"])
 	if l.Data["computer"] == nil {

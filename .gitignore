@@ -35,3 +35,6 @@ bin/
 
 # Python validation caches
 __pycache__/
+
+# Retired Electron/Capacitor local outputs (source lives in Git history).
+/desktop/

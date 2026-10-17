@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -75,7 +76,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	run(root, "go", "build", "-trimpath", "-ldflags", "-s -w -X main.version=native-"+strings.TrimSpace(string(sha)), "-o", filepath.Join(target, "easyagent"), "./cmd/easyagent")
+	version := os.Getenv("EASYAGENT_BUILD_VERSION")
+	if version == "" {
+		version = "native-" + strings.TrimSpace(string(sha))
+	}
+	run(root, "go", "build", "-trimpath", "-ldflags", "-s -w -X main.version="+version, "-o", filepath.Join(target, "easyagent"), "./cmd/easyagent")
 	modules := []string{"github.com/zkrebbekx/go-mermaid", "github.com/srwiley/oksvg", "github.com/srwiley/rasterx"}
 	// 冷缓存下 go list -m 的 {{.Dir}} 可能未解压间接依赖，先显式下载。
 	for _, module := range modules {
@@ -94,6 +99,19 @@ func main() {
 		copyFile(license, filepath.Join(target, "licenses", name+"-LICENSE"))
 	}
 	if runtime.GOOS == "darwin" {
+		data, err := os.ReadFile(filepath.Join(cwd, "mygo.json"))
+		if err != nil {
+			panic(err)
+		}
+		var manifest struct {
+			Version string `json:"version"`
+		}
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			panic(err)
+		}
+		if manifest.Version == "" || strings.ContainsAny(manifest.Version, "<>&") {
+			panic("invalid native version")
+		}
 		app := filepath.Join(target, "cua-helper/EasyAgent Computer Use.app/Contents")
 		_ = os.MkdirAll(filepath.Join(app, "MacOS"), 0755)
 		arch := runtime.GOARCH
@@ -105,7 +123,7 @@ func main() {
 			panic(err)
 		}
 		run(root, "xcrun", "swiftc", "-O", "-target", arch+"-apple-macosx14.0", "-sdk", strings.TrimSpace(string(sdk)), filepath.Join(root, "native/computer-use/main.swift"), "-o", filepath.Join(app, "MacOS/easyagent-cua-helper"))
-		plist := `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.hwj.easyagent.cua-helper</string><key>CFBundleName</key><string>EasyAgent Native Computer Use</string><key>CFBundleExecutable</key><string>easyagent-cua-helper</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>0.16.0</string><key>CFBundleVersion</key><string>0.16.0</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>LSUIElement</key><true/></dict></plist>`
+		plist := `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.hwj.easyagent.cua-helper</string><key>CFBundleName</key><string>EasyAgent Native Computer Use</string><key>CFBundleExecutable</key><string>easyagent-cua-helper</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>` + manifest.Version + `</string><key>CFBundleVersion</key><string>` + manifest.Version + `</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>LSUIElement</key><true/></dict></plist>`
 		if err = os.WriteFile(filepath.Join(app, "Info.plist"), []byte(plist), 0644); err != nil {
 			panic(err)
 		}

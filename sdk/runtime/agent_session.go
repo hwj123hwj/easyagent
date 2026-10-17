@@ -133,6 +133,23 @@ func NewAgentSession(ctx context.Context, opts AgentSessionOptions, deps Depende
 		slog.Info("created new session", "id", s.sessionID)
 	}
 
+	choice, err := s.sessionMgr.LoadModel(s.sessionID)
+	if err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("load session model: %w", err)
+	}
+	if choice.Model != "" {
+		switch choice.Provider {
+		case "openai":
+			s.cfg.Provider, s.cfg.OpenAIModel = choice.Provider, choice.Model
+		case "anthropic":
+			s.cfg.Provider, s.cfg.AnthropicModel = choice.Provider, choice.Model
+		default:
+			_ = s.Close()
+			return nil, fmt.Errorf("unsupported saved model provider %q", choice.Provider)
+		}
+	}
+
 	// Build the agent
 	var version uint64
 	if deps.ToolRevision != nil {
@@ -141,6 +158,10 @@ func NewAgentSession(ctx context.Context, opts AgentSessionOptions, deps Depende
 	ag, err := s.buildAgent(ctx, deps.Registry, opts.SkillDirs)
 	if err != nil {
 		return nil, fmt.Errorf("build agent: %w", err)
+	}
+	if err := s.saveModel(); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("save session model: %w", err)
 	}
 	s.agent = ag
 	s.toolVersion = version
@@ -365,10 +386,28 @@ func (s *AgentSession) SwitchModel(ctx context.Context, modelID string, provider
 		s.cfg = previousConfig
 		return fmt.Errorf("rebuild agent with model %q: %w", modelID, err)
 	}
+	if err := s.saveModel(); err != nil {
+		s.cfg = previousConfig
+		return fmt.Errorf("save session model: %w", err)
+	}
 	s.agent = ag
 
 	slog.Info("switched model", "provider", providerName, "model", modelID)
 	return nil
+}
+
+func (s *AgentSession) saveModel() error {
+	if s.sessionMgr == nil || s.sessionID == "" {
+		return nil
+	}
+	model := s.cfg.AnthropicModel
+	if s.cfg.Provider == "openai" {
+		model = s.cfg.OpenAIModel
+	}
+	if model == "" || s.cfg.Provider == "" {
+		return nil
+	}
+	return s.sessionMgr.SaveModel(s.sessionID, sessionmgr.ModelPreference{Model: model, Provider: s.cfg.Provider})
 }
 
 // Compact manually triggers context compaction.

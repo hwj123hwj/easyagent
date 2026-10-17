@@ -1,2 +1,3 @@
 build.noindex/
-resources/
+resources/*
+!resources/icon.png

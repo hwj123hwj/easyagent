@@ -329,7 +329,9 @@ func (a *preview) liveComposer(c *ui.Context) {
 				composing := input.Composing()
 				if input.Changed() && !composing {
 					l.CommandIndex = 0
+					l.CommandJump = true
 					s.MentionIndex = 0
+					s.MentionJump = true
 					a.SlashMenu = strings.HasPrefix(s.Draft, "/") && !strings.ContainsAny(s.Draft, " \n") && len(a.commandMatches(s.Draft)) > 0
 				}
 				input.OnTextKey(func(ev ui.TextKey) bool {
@@ -350,6 +352,7 @@ func (a *preview) liveComposer(c *ui.Context) {
 									step = -1
 								}
 								s.MentionIndex = (s.MentionIndex + step + len(matches)) % len(matches)
+								s.MentionJump = true
 								return true
 							}
 							if ev.Key == ui.KeyTab || ev.Key == ui.KeyEnter && ev.Mods&ui.Shift == 0 {
@@ -360,6 +363,7 @@ func (a *preview) liveComposer(c *ui.Context) {
 						}
 					}
 					if a.SlashMenu && (ev.Key == ui.KeyDown || ev.Key == ui.KeyUp) {
+						l.CommandJump = true
 						count := len(a.commandMatches(s.Draft))
 						if count > 0 {
 							if ev.Key == ui.KeyDown {
@@ -420,7 +424,13 @@ func (a *preview) liveComposer(c *ui.Context) {
 					if name == "" {
 						name = "选择模型"
 					}
-					model := flatButton(c, "cpu", name).MaxWidth(180).MinWidth(60).Clip().Tooltip(name).Disabled(s.Running || s.Pending || s.Sending || l.configBusy()).OnClick(func() { a.toggleMenu(&a.ModelMenu); a.ModelSearch = ""; a.refreshModels() })
+					model := flatButton(c, "cpu", name).MaxWidth(180).MinWidth(60).Clip().Tooltip(name).Disabled(s.Running || s.Pending || s.Sending || l.configBusy()).OnClick(func() {
+						a.toggleMenu(&a.ModelMenu)
+						a.ModelSearch = ""
+						l.ModelIndex = 0
+						l.ModelJump = true
+						a.refreshModels()
+					})
 					a.liveModelPicker(c, model)
 					flatButton(c, "", "/").Label("斜杠命令").OnClick(func() { a.toggleMenu(&a.SlashMenu) })
 					ui.Spacer(c)
@@ -450,12 +460,16 @@ func (a *preview) liveComposer(c *ui.Context) {
 			}
 			popup := a.menuPanel(c, box, &a.SlashMenu, func() {
 				menuCaption(c, "命令 · Tab 补全 · Esc 关闭")
-				ui.Scroll(c).MaxHeight(300).Children(func() {
+				ui.Scroll(c).Label("命令列表").MaxHeight(300).Children(func() {
 					for index, cmd := range a.commandMatches(s.Draft) {
-						menuOption(c.Key(cmd.Name), "", cmd.Name+" · "+cmd.Description, l.CommandIndex == index).OnClick(func() { s.Draft = cmd.Name + " "; a.SlashMenu = false; a.ReturnToComposer = true })
+						row := menuOption(c.Key(cmd.Name), "", cmd.Name+" · "+cmd.Description, l.CommandIndex == index).OnClick(func() { s.Draft = cmd.Name + " "; a.SlashMenu = false; a.ReturnToComposer = true })
+						if l.CommandJump && l.CommandIndex == index {
+							row.ScrollIntoView()
+						}
 					}
 				})
 			})
+			l.CommandJump = false
 			if popup.Valid() {
 				popup.Label("命令菜单").AttachTo(box, ui.AnchorTopLeft, ui.AnchorBottomLeft).Width(max(240, box.Bounds().W)).Margin(0, 0, 8, 0)
 			}
