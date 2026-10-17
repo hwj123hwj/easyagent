@@ -54,9 +54,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - name: Build core payloads from exact revision
         env:
           TAG: ${{ needs.validate.outputs.version }}
@@ -65,42 +62,6 @@ jobs:
         with:
           name: release-core
           path: dist/*
-          if-no-files-found: error
-          retention-days: 3
-  desktop:
-    needs: [validate, verify]
-    # Desktop installers ship Apple Silicon only; Intel Macs stay on v0.10.1.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            runner: macos-15
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate.outputs.sha }}
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - id: package
-        name: Build and validate desktop installer
-        env:
-          TAG: ${{ needs.validate.outputs.version }}
-          ARCH: ${{ matrix.arch }}
-        run: |
-          test "$(node -p process.arch)" = "$ARCH"
-          bash scripts/build-desktop.sh "$ARCH" "$TAG"
-          printf 'dmg=desktop/release.noindex/%s/%s/EasyAgent-%s-%s.dmg\n' "${TAG#v}" "$ARCH" "${TAG#v}" "$ARCH" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-desktop-${{ matrix.arch }}
-          path: ${{ steps.package.outputs.dmg }}
           if-no-files-found: error
           retention-days: 3
   native:
@@ -115,15 +76,18 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build and validate the MyGo native installer
-        run: bash scripts/build-native.sh darwin-arm64 native-dist
+        env:
+          TAG: ${{ needs.validate.outputs.version }}
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+        run: bash scripts/build-native.sh darwin-arm64 native-dist "$TAG"
       - uses: actions/upload-artifact@v4
         with:
           name: release-native
-          path: native-dist/easyagent-native-darwin-arm64.dmg
+          path: native-dist/*
           if-no-files-found: error
           retention-days: 3
   publish:
-    needs: [validate, core, desktop, native]
+    needs: [validate, core, native]
     runs-on: ubuntu-latest
     permissions:
       contents: write

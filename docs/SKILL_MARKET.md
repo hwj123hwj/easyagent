@@ -43,7 +43,7 @@ easyagent 内置技能市场客户端，对接 EasyCode 官方 skill store（`ht
 
 桌面端设置页新增「技能市场」标签：搜索/排序/主题分组浏览、一键安装（实时进度条：解析 → 下载（百分比/不确定动画）→ 校验 → 解压）、已安装徽标与二次确认卸载、分页。
 
-客户端（`desktop/src/client/skill-market.ts`）桌面使用主进程带认证的 IPC 轮询，不把 token 暴露给页面；浏览器通过 fetch + ReadableStream 消费带认证的 SSE，中断时自动回退轮询 `GET /skills/market/jobs/{id}`。
+Go 原生桌面客户端通过带认证的 HTTP 接口读取安装任务状态；Web 客户端消费带认证的 SSE，并可使用 `GET /skills/market/jobs/{id}` 查询任务。
 
 ## 安全模型
 

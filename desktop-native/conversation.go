@@ -75,14 +75,20 @@ func copyNativeConversation(s *session) string {
 	return strings.Join(parts, "\n\n")
 }
 func (a *preview) conversationFind(c *ui.Context, s *session) {
-	fileEditing := false
-	if f := a.Live.Workbench.Files[a.Live.Workbench.ActiveFile]; f != nil && f.Code != nil {
-		fileEditing = f.Code.Focused()
+	editorFocused := false
+	if f := a.Live.Workbench.Files[a.Live.Workbench.ActiveFile]; f != nil {
+		editorFocused = (f.Code != nil && f.Code.Focused()) || (f.Markdown.source != nil && f.Markdown.source.Focused())
 	}
-	if !fileEditing && c.Shortcut(ui.Cmd, ui.KeyF) {
+	for _, m := range s.Messages {
+		if m.Markdown.source != nil && m.Markdown.source.Focused() {
+			editorFocused = true
+		}
+	}
+	if !editorFocused && c.Shortcut(ui.Cmd, ui.KeyF) {
 		s.FindOpen = true
 		s.FindFocus = true
 	}
+
 	if !s.FindOpen {
 		return
 	}

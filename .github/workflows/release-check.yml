@@ -7,15 +7,12 @@ on:
       - 'scripts/publish-release.py'
       - 'scripts/build-release.sh'
       - 'scripts/check-release-build.sh'
-      - 'scripts/build-desktop.sh'
-      - 'scripts/build-cua-helper.sh'
       - 'scripts/test_cua_helper.py'
       - 'native/computer-use/**'
-      - 'scripts/check-desktop*.sh'
       - 'scripts/test_release*.py'
-      - 'desktop/**'
       - 'desktop-native/**'
       - 'scripts/build-native.sh'
+      - 'scripts/check-native-release-build.sh'
       - 'CHANGELOG.md'
       - 'cmd/easyagent*/**'
 permissions:
@@ -30,34 +27,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - run: bash scripts/check-release-build.sh
-  desktop-build:
-    strategy:
-      fail-fast: false
-      # Desktop installers ship Apple Silicon only; Intel Macs stay on v0.10.1.
-      matrix:
-        include:
-          - arch: arm64
-            runner: macos-15
-    runs-on: ${{ matrix.runner }}
+  native-build:
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Exercise the real desktop release builder with a local-only tag
-        env:
-          ARCH: ${{ matrix.arch }}
-        run: |
-          test "$(node -p process.arch)" = "$ARCH"
-          bash scripts/check-desktop-release-build.sh "$ARCH"
+          go-version-file: desktop-native/go.mod
       - name: Exercise the native release builder
-        run: bash scripts/build-native.sh darwin-arm64
+        run: bash scripts/check-native-release-build.sh

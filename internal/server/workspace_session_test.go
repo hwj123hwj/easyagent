@@ -245,3 +245,23 @@ func TestWorkspaceSession_RequiresAuthentication(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceListingPreservesSymlinkSpelling(t *testing.T) {
+	f := newWorkspaceSessionFixture(t)
+	alias := filepath.Join(filepath.Dir(f.project), "project-alias")
+	if err := os.Symlink(f.project, alias); err != nil {
+		t.Skip(err)
+	}
+	w := f.request(http.MethodGet, "list-dir", alias, &f.id, workspaceSessionTestToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var entries []DirEntry
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	for _, entry := range entries {
+		assert.Equal(t, filepath.Join(alias, entry.Name), entry.Path)
+	}
+	w = f.request(http.MethodGet, "read-file", filepath.Join(alias, "hello.txt"), &f.id, workspaceSessionTestToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NoError(t, os.Symlink(f.outside, filepath.Join(f.project, "escape")))
+	w = f.request(http.MethodGet, "list-dir", filepath.Join(alias, "escape"), &f.id, workspaceSessionTestToken)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}

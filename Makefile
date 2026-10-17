@@ -24,8 +24,7 @@ help:
 	@echo "  make clean       Remove bin/ directory"
 	@echo "  make tidy        Run go mod tidy"
 	@echo ""
-	@echo "  make desktop     Build desktop app (Electron)"
-	@echo "  make android     Build Android APK"
+	@echo "  make desktop     Build Go native desktop app"
 	@echo ""
 
 # ── Build ──
@@ -69,9 +68,6 @@ clean:
 tidy:
 	$(GO) mod tidy
 
-# ── Desktop / Android ──
+# ── Native desktop ──
 desktop:
-	cd desktop && npm install && npm run build
-
-android:
-	bash scripts/build-android.sh
+	bash scripts/build-native.sh darwin-arm64

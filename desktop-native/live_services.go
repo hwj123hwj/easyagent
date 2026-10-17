@@ -28,6 +28,9 @@ func newModelRequest(ctx context.Context, b *backendClient, key string) (*http.R
 	return req, err
 }
 func (a *preview) liveMCPSettings(c *ui.Context) {
+	if a.resourceFeedback(c, "mcp", a.loadSettingsPage) {
+		return
+	}
 	s := &a.Settings
 	l := a.Live
 	m := object(l.Data["mcp"])
@@ -522,6 +525,9 @@ func (a *preview) cancelMCPLogin() {
 	l.Loading["mcp-login"] = false
 }
 func (a *preview) cancelSettingsTransient() {
+	if a.Settings.Tab == "models" {
+		a.clearModelCheck()
+	}
 	a.cancelQR()
 	a.cancelMCPLogin()
 	delete(a.Live.Data, "pairing")

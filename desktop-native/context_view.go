@@ -70,6 +70,10 @@ func nativeDisclosure(c *ui.Context, key, label string, body func()) {
 	})
 }
 func nativePre(c *ui.Context, text string) {
+	if largeRichText(text) {
+		nativeSource(c, text, 320, "详细内容源码")
+		return
+	}
 	ui.Scroll(c).MaxHeight(320).MinWidth(0).Children(func() { ui.Text(c, text).Font("monospace").FontSize(11).Selectable().LineHeight(1.6) })
 }
 

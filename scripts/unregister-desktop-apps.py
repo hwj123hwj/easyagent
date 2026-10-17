@@ -25,14 +25,18 @@ def unregister(app, commands):
     native_helper = app == ROOT / "desktop/.bundle/cua-helper/EasyAgent Computer Use.app"
     native_preview = app == ROOT / "desktop-native/build.noindex/darwin-arm64/EasyAgent Native Preview.app"
     native_app = app == ROOT / "desktop-native/build.noindex/darwin-arm64/EasyAgent.app"
-    if not (any(app.is_relative_to(p) for p in outputs) or mounted_test or development or native_helper or native_preview or native_app):
+    native_baseline = (app.name == "EasyAgent.app"
+                       and app.parent.parent == Path(tempfile.gettempdir()).resolve()
+                       and app.parent.name.startswith("easyagent-baseline.")
+                       and app.parent.name.endswith(".noindex"))
+    if not (any(app.is_relative_to(p) for p in outputs) or mounted_test or development or native_helper or native_preview or native_app or native_baseline):
         raise ValueError(f"Refusing to unregister an installed or unrelated app: {app}")
     if any(line.startswith(str(app) + "/Contents/") for line in commands.splitlines()):
         raise ValueError(f"Quit the test app before unregistering it: {app}")
     if not app.is_dir():
         return
     identifier = plistlib.loads((app / "Contents/Info.plist").read_bytes()).get("CFBundleIdentifier", "")
-    if not (identifier.startswith("com.easyagent.") or (development and identifier == "com.github.Electron") or (native_preview and identifier == "com.hwj.easyagent.native-preview") or (native_app and identifier == "com.hwj.easyagent")):
+    if not (identifier.startswith("com.easyagent.") or (development and identifier == "com.github.Electron") or (native_preview and identifier == "com.hwj.easyagent.native-preview") or ((native_app or native_baseline) and identifier == "com.hwj.easyagent")):
         raise ValueError(f"Unrelated bundle identifier: {identifier}")
     # Unregister helpers explicitly; -R can trigger Spotlight scans of packages.
     for bundle in [*app.rglob("*.app"), app]:

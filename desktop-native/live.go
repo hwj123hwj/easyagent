@@ -23,7 +23,9 @@ type liveState struct {
 	Market                                                                 nativeMarketState
 	CollapsedProjects                                                      map[string]bool
 	ModelIndex                                                             int
+	ModelJump                                                              bool
 	CommandIndex                                                           int
+	CommandJump                                                            bool
 	RenameOwner                                                            *session
 	EditQueueOwner                                                         *session
 	EditQueueID, QueueDraft                                                string
@@ -174,11 +176,13 @@ func (a *preview) postOwned(epoch uint64, fn, discard func()) {
 		}
 	}
 }
-func (a *preview) liveTick() {
+func (a *preview) liveTick() bool {
+	changed := false
 	l := a.Live
 	for i := 0; i < 256; i++ {
 		select {
 		case r := <-l.results:
+			changed = true
 			if r.epoch == l.epoch {
 				r.apply()
 			} else if r.discard != nil {
@@ -190,6 +194,7 @@ func (a *preview) liveTick() {
 	}
 	if (l.Workbench.Term != nil || l.Workbench.TerminalStarting) && !l.Workbench.matchesTerminal(l.Config.ActiveHost, a.current().RemoteID) {
 		l.Workbench.close()
+		changed = true
 	}
 	if time.Since(l.LastSave) > 750*time.Millisecond {
 		a.saveFileState()
@@ -214,7 +219,9 @@ func (a *preview) liveTick() {
 	if a.Settings.Open && a.Settings.Tab == "feishu" && l.QRCode != "" && !l.QRAuthorized && time.Now().Before(l.QRExpires) && time.Now().After(l.QRNext) && !l.Loading["qr-poll"] {
 		l.QRNext = time.Now().Add(l.QRInterval)
 		a.pollQR()
+		changed = true
 	}
+	return changed
 }
 func (a *preview) background(work func(context.Context, *backendClient) (any, error), done func(any)) {
 	a.run("", work, done)
@@ -442,7 +449,7 @@ func (a *preview) refreshModels() {
 			}
 		}
 		a.Live.Models = models
-		if model := str(object(m["current"])["id"]); a.current().Model == "" {
+		if model := str(object(m["current"])["id"]); a.current().Model == "" || a.current().RemoteID == "" && !a.current().ModelChosen {
 			a.current().Model = model
 		}
 	})
@@ -563,9 +570,12 @@ func (a *preview) createLiveSessionIn(draft, workspace, application string, read
 		return
 	}
 
-	model := a.current().Model
 	origin := a.current()
 	initial := origin.RemoteID == ""
+	model := ""
+	if initial && origin.ModelChosen {
+		model = origin.Model
+	}
 	a.Live.Versions["sessions"]++
 	a.operation("create-session", "POST", "/sessions", map[string]any{"cwd": workspace, "model": model, "application": application}, func(v any) {
 		id := str(object(v)["id"])
@@ -723,6 +733,7 @@ func (a *preview) patchLiveSession(patch map[string]any) {
 func (a *preview) switchLiveModel(name string) {
 	s := a.current()
 	if s.RemoteID == "" {
+		s.ModelChosen = true
 		s.Model = name
 		a.ModelMenu = false
 		return
