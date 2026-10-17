@@ -35,6 +35,10 @@ DMG=$(find build.noindex/darwin-arm64 -maxdepth 1 -name '*.dmg' | head -1)
 plutil -extract CFBundleIdentifier raw -o - "$APP/Contents/Info.plist" | grep -qx 'com.hwj.easyagent' \
   || { echo 'Native app bundle identifier is not com.hwj.easyagent' >&2; exit 1; }
 
+ICON=$(plutil -extract CFBundleIconFile raw -o - "$APP/Contents/Info.plist")
+[[ -n "$ICON" && -s "$APP/Contents/Resources/$ICON" ]] \
+  || { echo 'Native app is missing its Dock icon' >&2; exit 1; }
+
 if [[ -n "$TAG" ]]; then
   CORE="$APP/Contents/Resources/easyagent"
   [[ $("$CORE" --version) == "easyagent $TAG" ]] || { echo 'Bundled core version does not match tag' >&2; exit 1; }
