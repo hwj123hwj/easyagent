@@ -67,7 +67,12 @@ func main() {
 		panic(err)
 	}
 	run(root, "go", "build", "-trimpath", "-ldflags", "-s -w -X main.version=native-"+strings.TrimSpace(string(sha)), "-o", filepath.Join(target, "easyagent"), "./cmd/easyagent")
-	for _, module := range []string{"github.com/zkrebbekx/go-mermaid", "github.com/srwiley/oksvg", "github.com/srwiley/rasterx"} {
+	modules := []string{"github.com/zkrebbekx/go-mermaid", "github.com/srwiley/oksvg", "github.com/srwiley/rasterx"}
+	// 冷缓存下 go list -m 的 {{.Dir}} 可能未解压间接依赖，先显式下载。
+	for _, module := range modules {
+		run(".", "go", "mod", "download", module)
+	}
+	for _, module := range modules {
 		directory, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", module).Output()
 		if err != nil {
 			panic(err)
