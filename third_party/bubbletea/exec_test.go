@@ -2,8 +2,10 @@ package tea
 
 import (
 	"bytes"
+	"io"
 	"os/exec"
 	"runtime"
+	"sync/atomic"
 	"testing"
 )
 
@@ -101,3 +103,34 @@ func TestTeaExec(t *testing.T) {
 		})
 	}
 }
+
+func TestExecPreservesIgnoredSignals(t *testing.T) {
+	m := &signalFreeExecModel{}
+	p := NewProgram(m, WithInput(&bytes.Buffer{}), WithOutput(&bytes.Buffer{}), WithoutSignals())
+	if _, err := p.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadUint32(&p.ignoreSignals) != 1 {
+		t.Fatal("Exec re-enabled signals disabled by WithoutSignals")
+	}
+}
+
+type signalFreeCommand struct{}
+
+func (signalFreeCommand) SetStdin(io.Reader)  {}
+func (signalFreeCommand) SetStdout(io.Writer) {}
+func (signalFreeCommand) SetStderr(io.Writer) {}
+func (signalFreeCommand) Run() error          { return nil }
+
+type signalFreeExecModel struct{}
+
+func (*signalFreeExecModel) Init() Cmd {
+	return Exec(signalFreeCommand{}, func(err error) Msg { return execFinishedMsg{err} })
+}
+func (m *signalFreeExecModel) Update(msg Msg) (Model, Cmd) {
+	if _, ok := msg.(execFinishedMsg); ok {
+		return m, Quit
+	}
+	return m, nil
+}
+func (*signalFreeExecModel) View() string { return "" }
