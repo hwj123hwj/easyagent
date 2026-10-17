@@ -149,6 +149,7 @@ func TestNativeRunFileAggregationAndStats(t *testing.T) {
 type fixtureVoice struct{ data []byte }
 
 func (v *fixtureVoice) Stop() ([]byte, error) { return v.data, nil }
+func (v *fixtureVoice) Levels() [6]float32    { return [6]float32{.2, .4, .6, .5, .3, .1} }
 func TestNativeVoiceTranscriptReturnsToOrigin(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/asr/transcribe" {

@@ -396,3 +396,60 @@ func (a *preview) nativeTool(c *ui.Context, m *message) {
 		})
 	})
 }
+
+func (a *preview) nativeThought(c *ui.Context, s *session, i int, m *message) {
+	isGenerating := s.Running && i == len(s.Messages)-1
+	if isGenerating && !m.ExpansionTouched {
+		m.Expanded = true
+	}
+
+	ui.Column(c).Gap(6).MinWidth(0).Children(func() {
+		label := "展开深度思考"
+		if m.Expanded {
+			label = "收起深度思考"
+		}
+		head := ui.ButtonBase(c).Label(label).FillWidth().MinWidth(0).Padding(6, 10).Gap(8).Radius(6).Background(c.Theme().SurfaceHover.Alpha(.3)).Expanded(m.Expanded).OnClick(func() {
+			m.Expanded = !m.Expanded
+			m.ExpansionTouched = true
+		})
+		head.Children(func() {
+			glyph := "chevron-right"
+			if m.Expanded {
+				glyph = "chevron-down"
+			}
+			icon(c, glyph)
+			iconGlyph := "sparkle"
+			iconColor := c.Theme().TextMuted
+			statusText := "深度思考"
+			if isGenerating {
+				iconGlyph = "activity"
+				iconColor = c.Theme().Accent
+				statusText = "正在思考…"
+			} else if words := len([]rune(strings.TrimSpace(m.Text))); words > 0 {
+				statusText = fmt.Sprintf("已深度思考 · %d 字", words)
+			}
+			ui.Row(c).TextColor(iconColor).Children(func() { icon(c, iconGlyph) })
+			ui.Text(c, "思考过程").FontSize(12).FontWeight(500)
+			ui.Spacer(c)
+			ui.Text(c, statusText).FontSize(11).TextColor(c.Theme().TextMuted)
+		})
+		if !m.Expanded {
+			return
+		}
+		ui.Column(c).Padding(10, 14).Background(c.Theme().Surface.Alpha(.35)).Border(1, c.Theme().Border.Alpha(.5)).Radius(8).MinWidth(0).Children(func() {
+			if strings.TrimSpace(m.Text) == "" && isGenerating {
+				a.text(c, "思考中…").FontSize(12).TextColor(c.Theme().TextMuted)
+			} else {
+				a.renderSessionMarkdown(c, &m.Markdown, m.Text, s, "", isGenerating)
+			}
+			if !isGenerating && strings.TrimSpace(m.Text) != "" {
+				ui.Row(c).Children(func() {
+					iconButton(c, "copy", "复制思考内容").Size(24, 24).OnClick(func() {
+						c.WriteClipboard(m.Text)
+						c.Toast("已复制思考内容")
+					})
+				})
+			}
+		})
+	})
+}
