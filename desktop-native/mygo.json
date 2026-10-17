@@ -1,6 +1,6 @@
 {
-  "name": "EasyAgent Native Preview",
-  "identifier": "com.hwj.easyagent.native-preview",
+  "name": "EasyAgent",
+  "identifier": "com.hwj.easyagent",
   "version": "0.2.9",
   "out": "build.noindex",
   "macos": {

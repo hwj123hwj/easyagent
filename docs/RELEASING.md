@@ -9,7 +9,7 @@
 - MAJOR：1.0 之后不兼容的公开接口变更。当前仍处于 0.x，不为发布流程整改直接跳到 1.0。
 - 预发布用于验收，不标记为 GitHub Latest；正式发布只推进版本，不倒退。
 
-公开接口包括 CLI 参数、配置名、HTTP 协议及 `sdk/`。`desktop/package.json` 描述 Electron 客户端的包版本；从 `v0.2.0-alpha.1` 起，同一个 Release 包含 CLI、桥接和桌面，发布时该包版本必须与 tag 去掉 `v` 后一致。
+公开接口包括 CLI 参数、配置名、HTTP 协议及 `sdk/`。`desktop/package.json` 描述 Electron 客户端的包版本；从 `v0.2.0-alpha.1` 起，同一个 Release 包含 CLI、桥接和桌面；自 `v0.15.12` 起再包含 MyGo 原生客户端 DMG（`easyagent-native-darwin-arm64.dmg`）。发布时桌面包版本必须与 tag 去掉 `v` 后一致。
 
 2026-10-01 按维护者明确要求，在备份旧 Pi Agent 的 Release 元数据、全部资产和 Git 标签对象后，清理 `v0.10.0` 至 `v0.11.0` 的公开 Release 与 tag，以 EasyAgent `v0.1.0` 重新开始。这是更名时的一次性迁移；提交历史不清理。后续**一个 tag 永远对应一个提交；不能删除重打、强推移动或覆盖已发布资产。** GitHub 的 Release immutability 对启用之后的新发布锁定资产；tag ruleset 保护 `v*` 标签免于移动、删除。[GitHub 不可变发布说明](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 
@@ -44,9 +44,9 @@ git push origin refs/tags/v0.1.1-rc.1
 ## 自动发布的强制检查
 
 1. 严格版本格式；附注 tag；HEAD 与 tag 一致；提交已进入 main；版本高于现有版本；对应 CHANGELOG 节非空。
-2. 复用完整 Verify：Go 测试/vet、Bubble Tea、Web、桌面 TypeScript / 测试 / 构建、更新器，以及发布与安装脚本测试。
-3. 同一 SHA 构建 Linux/macOS、amd64/arm64 的核心与桥接共 8 个程序。注入相同版本，并验证 Linux 程序的 `--version`。桌面 DMG 仅在 Apple Silicon runner 构建并核验包版本、内置核心的源码 SHA 与架构及 DMG 内部内容，并检查包内应用的完整 ad hoc 签名；Intel 安装包自 v0.11.0 起不再构建。
-4. 汇集 8 个核心及桥接程序和 1 个 DMG，生成完整 `release.json`（版本、完整提交 SHA、各资产 SHA-256）和 `checksums.txt`，共 11 项资产。Linux core 阶段的 `core_only` 清单不能发布；缺失任一 DMG、空文件、错版本文件名、额外旧文件或校验失败都会阻止发布。
+2. 复用完整 Verify：Go 测试/vet、Bubble Tea、Web、桌面 TypeScript / 测试 / 构建、更新器，以及发布与安装脚本测试；Release build check 另在 Apple Silicon runner 实际构建原生客户端。
+3. 同一 SHA 构建 Linux/macOS、amd64/arm64 的核心与桥接共 8 个程序。注入相同版本，并验证 Linux 程序的 `--version`。桌面 DMG 与原生客户端 DMG 仅在 Apple Silicon runner 构建；桌面 DMG 核验包版本、内置核心的源码 SHA 与架构及 DMG 内部内容，并检查包内应用的完整 ad hoc 签名；原生 DMG 核验 Bundle ID 为 `com.hwj.easyagent`。Intel 安装包自 v0.11.0 起不再构建。
+4. 汇集 8 个核心及桥接程序、1 个桌面 DMG 和 1 个原生 DMG，生成完整 `release.json`（版本、完整提交 SHA、各资产 SHA-256）和 `checksums.txt`，共 12 项资产。Linux core 阶段的 `core_only` 清单不能发布；缺失任一 DMG、空文件、错版本文件名、额外旧文件或校验失败都会阻止发布。
 5. 先建草稿，上传全部资产，核对 GitHub 返回的各文件 digest，再一次性公开；已公开版本拒绝重传。失败只保留草稿供检查，不公开半套文件。
 
 发布相关脚本变更还会运行 `Release build check`：在临时仓库创建仅供测试的 tag，实际构建所有核心目标及两个桌面目标，不向 GitHub 推送测试 tag，也不创建 Release。

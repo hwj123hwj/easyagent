@@ -14,6 +14,8 @@ on:
       - 'scripts/check-desktop*.sh'
       - 'scripts/test_release*.py'
       - 'desktop/**'
+      - 'desktop-native/**'
+      - 'scripts/build-native.sh'
       - 'CHANGELOG.md'
       - 'cmd/easyagent*/**'
 permissions:
@@ -57,3 +59,5 @@ jobs:
         run: |
           test "$(node -p process.arch)" = "$ARCH"
           bash scripts/check-desktop-release-build.sh "$ARCH"
+      - name: Exercise the native release builder
+        run: bash scripts/build-native.sh darwin-arm64

@@ -1,6 +1,8 @@
 # 桌面客户端
 
-Electron / React 客户端使用同一 Go 会话服务。个人任务以对话为中心，保留青夜颜色、固定输入区、可展开的工具过程和独立工作区入口。
+正式桌面客户端是 MyGo 原生应用（`desktop-native/`，Bundle ID `com.hwj.easyagent`），构建与安装见 [desktop-native/README](../desktop-native/README.md)；本篇覆盖进入维护态的 Electron / React 客户端。
+
+Electron 客户端使用同一 Go 会话服务。个人任务以对话为中心，保留青夜颜色、固定输入区、可展开的工具过程和独立工作区入口。
 
 ## 连接与使用
 

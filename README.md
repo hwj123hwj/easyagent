@@ -6,7 +6,7 @@
 
 ## 能做什么
 
-- **桌面客户端**：青夜界面、此 Mac 与远程主机连接配置、Slash 命令、可搜索模型、工具审批与展开、历史虚拟列表。连接凭据由主进程加密保存，见 [桌面说明](docs/DESKTOP.md)。
+- **原生桌面客户端**：MyGo 原生界面（青夜视觉）、此 Mac 与远程主机连接配置、Slash 命令、可搜索模型、工具审批与展开。连接凭据由主进程加密保存，安装包随 Release 发布（`easyagent-native-darwin-arm64.dmg`）；Electron 客户端进入维护态，见 [桌面说明](docs/DESKTOP.md)。
 - **Web 工作区**：流式对话、Slash 命令提示、模型切换、工具结果展开与复制、历史会话，以及飞书和 MCP 设置。断线后恢复当前任务，发送确认前保留草稿。
 - **MCP 工具**：官方 Go SDK 传输，支持 stdio、Streamable HTTP、兼容 SSE、用户/项目配置、逐工具过滤与 OAuth。工具进入同一 Agent 执行流程，见 [MCP](docs/MCP.md)。
 - **终端 TUI**：独立全屏界面、Markdown 渲染、多行输入、工具分组折叠、鼠标选区复制。输入框位于快捷键和状态栏上方。
