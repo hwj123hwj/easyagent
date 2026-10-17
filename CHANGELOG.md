@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [v0.16.0] - 2026-10-17
+
+MyGo 原生客户端转正为正式桌面宿主，版本号全线统一为 0.16.0；workflow 功能整体下线。
+
+### 变更
+
+- **原生桌面客户端转正**：desktop-native 正式标识 `com.hwj.easyagent`，品牌从「Native Preview」更名；`easyagent-native-darwin-arm64.dmg` 自本版本起进入正式 Release 资产清单与发布流水线，新增 `scripts/build-native.sh` 构建脚本与 CI 构建任务。Linux 原生包暂仍走 `native-preview-*-linux` 标签通道。`native-preview-preferences.json` 等用户数据文件名不变。
+- 桌面（Electron 维护版）、原生客户端与电脑控制助手版本号统一为 0.16.0。
+
 ### 移除
 
 - **工作流功能整体下线**：动态工作流（`/workflow`）、YAML 流水线（`/workflows`）、`workflow-runtime` Node 运行时及其 REST/WS API、斜杠命令、设置页与打包链路全部移除；主程序与桌面安装包不再需要或捆绑 Node.js。功能代码保留在 `archive/workflow` 分支；`data/` 下的历史工作流运行数据不受影响。

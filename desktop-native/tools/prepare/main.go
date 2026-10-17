@@ -96,7 +96,7 @@ func main() {
 			panic(err)
 		}
 		run(root, "xcrun", "swiftc", "-O", "-target", arch+"-apple-macosx14.0", "-sdk", strings.TrimSpace(string(sdk)), filepath.Join(root, "native/computer-use/main.swift"), "-o", filepath.Join(app, "MacOS/easyagent-cua-helper"))
-		plist := `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.hwj.easyagent.cua-helper</string><key>CFBundleName</key><string>EasyAgent Native Computer Use</string><key>CFBundleExecutable</key><string>easyagent-cua-helper</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>0.2.9</string><key>CFBundleVersion</key><string>0.2.9</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>LSUIElement</key><true/></dict></plist>`
+		plist := `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.hwj.easyagent.cua-helper</string><key>CFBundleName</key><string>EasyAgent Native Computer Use</string><key>CFBundleExecutable</key><string>easyagent-cua-helper</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>0.16.0</string><key>CFBundleVersion</key><string>0.16.0</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>LSUIElement</key><true/></dict></plist>`
 		if err = os.WriteFile(filepath.Join(app, "Info.plist"), []byte(plist), 0644); err != nil {
 			panic(err)
 		}

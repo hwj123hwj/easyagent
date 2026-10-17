@@ -1,7 +1,7 @@
 {
   "name": "EasyAgent",
   "identifier": "com.hwj.easyagent",
-  "version": "0.2.9",
+  "version": "0.16.0",
   "out": "build.noindex",
   "macos": {
     "minimumSystemVersion": "13.0",
