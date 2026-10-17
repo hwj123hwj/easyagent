@@ -78,14 +78,14 @@ class AssetsTest(unittest.TestCase):
         with self.assertRaises(ValueError): publisher.validate_assets(self.directory, self.tag, self.sha)
 
     def test_missing_and_unexpected_assets_fail_closed(self):
-        (self.directory / 'workflow-runtime.mjs').unlink()
+        (self.directory / 'easyagent-linux-amd64').unlink()
         with self.assertRaises(ValueError): release.manifest(self.directory, self.tag, self.sha)
-        (self.directory / 'workflow-runtime.mjs').write_text('ok')
+        (self.directory / 'easyagent-linux-amd64').write_text('ok')
         (self.directory / 'old-binary').write_text('leftover')
         with self.assertRaises(ValueError): release.manifest(self.directory, self.tag, self.sha)
 
     def test_desktop_assets_required_from_first_desktop_version(self):
-        self.assertEqual(len(release.ASSETS), 10)
+        self.assertEqual(len(release.ASSETS), 8)
         self.assertEqual(release.required_assets('v0.1.0'), release.ASSETS)
         for tag in ('v0.2.0-alpha.1', 'v0.2.0-beta.1', 'v0.2.0-rc.1', 'v0.2.0', 'v1.2.3'):
             with self.subTest(tag=tag):

@@ -99,9 +99,6 @@ func (s *Server) startRun(sessionID, prompt, requestID string, values ...promptI
 	if strings.TrimSpace(prompt) == "" || len(prompt) > 128*1024 {
 		return nil, false, &runAdmissionError{"invalid_prompt", "prompt is empty"}
 	}
-	if s.app.DynamicWorkflows().ActiveActorSession(sessionID) {
-		return nil, false, &runAdmissionError{"workflow_busy", "此 Actor 正由工作流管理"}
-	}
 	g.mu.Lock()
 	if sessionID != "" {
 		state := g.sessionLocked(sessionID)

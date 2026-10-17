@@ -5,7 +5,7 @@
 实验|Experiments
 运行主机|Runtime hosts
 MCP 工具|MCP tools
-技能与工作流|Skills & workflows
+技能|Skills
 飞书机器人|Feishu bot
 基础设置|Basic settings
 连接与能力|Connections & capabilities
@@ -19,7 +19,7 @@ Go 原生预览 · 0.1.0|Native Go preview · 0.1.0
 实验性功能开关：Computer use 等能力。|Manage experimental features, including computer use.
 选择任务运行的位置，管理远程 Agent 连接。|Choose where tasks run and manage remote Agent connections.
 为当前主机接入工具服务，管理信任与授权。|Connect tool services and manage trust and authorization for this host.
-查看当前项目实际加载的能力与工作流运行记录。|View the current project's loaded capabilities and workflow runs.
+查看当前项目实际加载的能力。|View the capabilities actually loaded by the current project.
 配置应用凭据、查看桥接状态，并完成私聊配对。|Configure app credentials, view bridge status, and pair through private chat.
 语言与外观保存在此设备；连接与能力设置仅为演示。|Language and appearance are saved on this device. Connections and capabilities use demo state.
 界面语言|Interface language
@@ -166,13 +166,6 @@ MCP 工具连接|MCP tool connections
 已加载技能 · 1|Loaded skills · 1
 项目 · 可由模型调用|Project · model invocation enabled
 检查当前修改的功能与回归风险。|Review the current changes and regression risks.
-工作流|Workflows
-入口 workflow，使用 create_workflow / get_workflow / resume_workflow 创建、查看与恢复。|Use create_workflow / get_workflow / resume_workflow to create, inspect, and resume workflows.
-可用工具：create_workflow · get_workflow · resume_workflow（演示）|Available tools: create_workflow · get_workflow · resume_workflow (demo)
-界面验收工作流|Interface validation workflow
-已完成 · 演示记录|Completed · demo record
-结果：布局、草稿、命令菜单与审批交互已验证。|Result: layout, drafts, command menu, and approval interaction verified.
-在对话中查看|View in conversation
 配置所在主机|Configuration host
 配置与配对均针对这台主机，消息由这里的 Agent 处理。|Configuration and pairing belong to this host. Its Agent handles the messages.
 快速绑定（扫码登录）|Quick binding (QR sign-in)

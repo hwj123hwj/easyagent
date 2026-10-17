@@ -10,8 +10,6 @@
 | [桌面客户端](DESKTOP.md) | 本地/远程连接、桌面交互、macOS 构建 |
 | [MCP](MCP.md) | 传输、用户/项目配置、工具信任与 OAuth |
 | [飞书](FEISHU.md) | 网页配置、长连接、首次配对、故障定位 |
-| [动态工作流](DYNAMIC_WORKFLOW.md) | `/workflow`、ZCode 引擎接入、并发与恢复 |
-| [YAML 流水线](WORKFLOW.md) | 固定 DAG、模板、重试、审批与缓存 |
 | [迷你主机部署](MINI_DEPLOY.md) | 自动更新、systemd 自启动、健康检查与回滚 |
 | [版本与发布](RELEASING.md) | tag、版本说明、发布校验与安装完整性 |
 | [API](API.md) | 对话、流式事件、会话和管理接口 |
@@ -22,7 +20,7 @@
 - [核心机制](INTERNALS.md)：工具生命周期、确认门、循环检测、双层压缩与事件流。
 - [贡献指南](CONTRIBUTING.md)：本地验证、PR、合并及分支清理。
 - [Worktree 开发指南](WORKTREES.md)：并行任务隔离、会话提交纪律与收尾清理。
-- [SDK 边界](decisions/sdk-extraction.md)、[Skills 与 Application](decisions/skills-vs-application.md)、[两类工作流](decisions/workflow-engine.md)、[移除 LSP 工具](decisions/remove-lsp-tools.md)：仍适用的设计取舍。
+- [SDK 边界](decisions/sdk-extraction.md)、[Skills 与 Application](decisions/skills-vs-application.md)、[移除 LSP 工具](decisions/remove-lsp-tools.md)：仍适用的设计取舍。工作流引擎的取舍记录见 decisions/workflow-engine.md（功能已于 2026-10 下线）。
 
 ## 历史调研
 

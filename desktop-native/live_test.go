@@ -381,7 +381,7 @@ func TestNativeDelayedCommandKeepsSessionAndDraft(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, "/command") {
 			close(entered)
 			<-release
-			fmt.Fprint(w, `{"should_query":true,"query_prompt":"generated workflow query"}`)
+			fmt.Fprint(w, `{"should_query":true,"query_prompt":"generated query"}`)
 		} else if strings.HasSuffix(r.URL.Path, "/queue") {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -396,20 +396,20 @@ func TestNativeDelayedCommandKeepsSessionAndDraft(t *testing.T) {
 	defer a.closeLive()
 	a.Live.Client, _ = newBackendClient(srv.URL, "")
 	a.Live.Connected = true
-	first := &session{ID: 1, RemoteID: "A", Running: true, Draft: "/workflow create plan"}
+	first := &session{ID: 1, RemoteID: "A", Running: true, Draft: "/demo create plan"}
 	second := &session{ID: 2, RemoteID: "B", Draft: "B unsent draft"}
 	a.Sessions = []*session{first, second}
 	a.Active = 1
 	a.submitLive()
 	<-entered
-	if first.Draft != "/workflow create plan" {
+	if first.Draft != "/demo create plan" {
 		t.Fatal("command cleared before acknowledgement")
 	}
 	first.Draft = "new A draft"
 	a.Active = 2
 	once.Do(func() { close(release) })
 	waitNative(t, a, func() bool { return first.Queue.Revision == 1 })
-	if gotSession != "/sessions/A/queue" || gotPrompt != "generated workflow query" || first.Draft != "new A draft" || second.Draft != "B unsent draft" {
+	if gotSession != "/sessions/A/queue" || gotPrompt != "generated query" || first.Draft != "new A draft" || second.Draft != "B unsent draft" {
 		t.Fatalf("wrong session or overwritten draft: %q %q %q %q", gotSession, gotPrompt, first.Draft, second.Draft)
 	}
 }

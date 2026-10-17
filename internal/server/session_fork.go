@@ -25,9 +25,6 @@ type forkResponse struct {
 
 func (s *Server) forkSession(w http.ResponseWriter, r *http.Request) {
 	sourceID := r.PathValue("id")
-	if s.rejectActiveWorkflowActor(w, sourceID) {
-		return
-	}
 	var req forkRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()

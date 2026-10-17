@@ -10,14 +10,6 @@ interface Catalog {
     model_invocation: boolean;
   }[];
   tools: string[];
-  workflow_entry: string;
-  workflows: {
-    id: string;
-    name: string;
-    status: string;
-    error?: string;
-    result?: unknown;
-  }[];
 }
 export function CapabilitySettings() {
   const id = useStore((s) => s.activeSessionId),
@@ -56,7 +48,7 @@ export function CapabilitySettings() {
           刷新
         </button>
       </div>
-      {!id && <p>选择一个项目会话后查看实际加载的技能与工作流。</p>}
+      {!id && <p>选择一个项目会话后查看实际加载的技能。</p>}
       {error && <p className="inline-error">{error}</p>}
       {data && (
         <>
@@ -81,59 +73,6 @@ export function CapabilitySettings() {
               <code>{skill.source}</code>
             </details>
           ))}
-          <h2>工作流</h2>
-          <p>
-            入口 <code>{data.workflow_entry}</code>，使用 create_workflow /
-            get_workflow / resume_workflow
-            工具创建、查看与恢复。可在对话里描述角色、步骤和验收条件。
-          </p>
-          <p className="settings-note">
-            可用工具：
-            {data.tools
-              .filter((name) => name.includes("workflow"))
-              .join(" · ") || "当前工具策略未开放工作流"}
-          </p>
-          {data.workflows.length ? (
-            data.workflows
-              .slice()
-              .reverse()
-              .slice(0, 20)
-              .map((run) => (
-                <details className="capability-entry" key={run.id}>
-                  <summary>
-                    <strong>{run.name}</strong>
-                    <small>{run.status}</small>
-                  </summary>
-                  <code>{run.id}</code>
-                  {run.result !== undefined && (
-                    <pre>
-                      {typeof run.result === "string"
-                        ? run.result
-                        : JSON.stringify(run.result, null, 2)}
-                    </pre>
-                  )}
-                  {run.error && <p className="inline-error">{run.error}</p>}
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      useStore
-                        .getState()
-                        .setDraft(
-                          id!,
-                          "请用 get_workflow 查看工作流 " +
-                            run.id +
-                            " 的状态和结果，不要新建流程。",
-                        );
-                      useStore.getState().openSettings(false);
-                    }}
-                  >
-                    在对话中查看
-                  </button>
-                </details>
-              ))
-          ) : (
-            <p>当前会话暂无工作流运行记录。</p>
-          )}
         </>
       )}
     </section>

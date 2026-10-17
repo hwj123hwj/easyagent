@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 移除
+
+- **工作流功能整体下线**：动态工作流（`/workflow`）、YAML 流水线（`/workflows`）、`workflow-runtime` Node 运行时及其 REST/WS API、斜杠命令、设置页与打包链路全部移除；主程序与桌面安装包不再需要或捆绑 Node.js。功能代码保留在 `archive/workflow` 分支；`data/` 下的历史工作流运行数据不受影响。
+
 ## [v0.15.11] - 2026-10-16
 
 修复桌面端「第二大脑」恒为空的问题。

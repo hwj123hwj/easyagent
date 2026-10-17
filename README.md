@@ -1,6 +1,6 @@
 # EasyAgent
 
-**Go 驱动的个人 AI 编程助手与 Agent 工作台，支持桌面、Web、TUI、飞书、MCP 和动态工作流。**
+**Go 驱动的个人 AI 编程助手与 Agent 工作台，支持桌面、Web、TUI、飞书和 MCP。**
 
 在对话中阅读与修改代码、执行工具、查看过程与结果，并保留可继续的历史会话。日常使用以桌面或浏览器工作区为中心，也可以从终端或已配对的飞书账号发起任务。底层 Agent 能力通过公共 Go SDK 复用。
 
@@ -11,15 +11,13 @@
 - **MCP 工具**：官方 Go SDK 传输，支持 stdio、Streamable HTTP、兼容 SSE、用户/项目配置、逐工具过滤与 OAuth。工具进入同一 Agent 执行流程，见 [MCP](docs/MCP.md)。
 - **终端 TUI**：独立全屏界面、Markdown 渲染、多行输入、工具分组折叠、鼠标选区复制。输入框位于快捷键和状态栏上方。
 - **飞书对话**：长连接接收消息，支持文本与富文本，卡片随生成过程更新；首次配对后只接受已授权账号的操作。
-- **动态工作流**：`/workflow` 将任务交给 Agent 编写 TypeScript 流程，支持多个 Actor、分支、循环、并行执行和受控恢复。复用固定版本的 ZCode 引擎。
-- **YAML 流水线**：为预先确定的步骤声明依赖、并发、重试与人工确认门，与动态工作流分别管理。
 - **可复用 SDK**：模型 Provider、工具、会话、上下文压缩、Skills、本地/SSH 执行和 AgentSession。
 
 仓库也保留知识库与音乐应用；桌面客户端使用 Electron/React，共用 Go 服务、会话与命令接口。
 
 ## 从源码开始
 
-需要 Go（版本以 [go.mod](go.mod) 为准，当前为 1.24.2）。动态工作流还需要 Node.js 22+。
+需要 Go（版本以 [go.mod](go.mod) 为准，当前为 1.24.2）。
 
 ```bash
 git clone https://github.com/hwj123hwj/easyagent.git
@@ -49,15 +47,6 @@ EA_API_KEY=your-api-key
 
 打开 `http://127.0.0.1:8080`，使用服务令牌登录。局域网部署、开机启动与自动更新见 [迷你主机部署](docs/MINI_DEPLOY.md)。桌面调试与 macOS 打包见 [桌面客户端](docs/DESKTOP.md)。
 
-构建动态工作流组件：
-
-```bash
-(cd workflow-runtime && npm ci --ignore-scripts && npm run build)
-export EA_WORKFLOW_RUNTIME="$PWD/workflow-runtime/output/workflow-runtime.mjs"
-./bin/easyagent serve --listen 127.0.0.1:8080
-```
-
-随后在对话输入 `/workflow 分别检查代码质量、测试覆盖和文档，再汇总建议`。构建产物、执行限制与恢复语义见 [动态工作流](docs/DYNAMIC_WORKFLOW.md)。普通对话不要求 Node 组件。
 
 ## 终端使用
 
@@ -80,8 +69,6 @@ TUI 中输入 `/help` 查看命令。`Enter` 发送，`Ctrl+J` 换行，`PgUp/Pg
 | 连接 Mac / 迷你主机、构建桌面应用 | [桌面客户端](docs/DESKTOP.md) |
 | 配置外部工具、项目授权与 OAuth | [MCP](docs/MCP.md) |
 | 接入飞书、配对与排错 | [飞书](docs/FEISHU.md) |
-| 编排多 Agent 动态任务 | [动态工作流](docs/DYNAMIC_WORKFLOW.md) |
-| 运行固定步骤 DAG | [YAML 流水线](docs/WORKFLOW.md) |
 | 开机启动、同步 main、健康检查与回滚 | [部署运维](docs/MINI_DEPLOY.md) |
 | 打 tag、发布和核验下载 | [版本与发布](docs/RELEASING.md) · [更新记录](CHANGELOG.md) |
 | 接入 HTTP / SSE / WebSocket | [API](docs/API.md) |
@@ -92,4 +79,4 @@ TUI 中输入 `/help` 查看命令。`Enter` 发送，`Ctrl+J` 换行，`PgUp/Pg
 
 ## 许可与开源组件
 
-项目代码使用 [MIT License](LICENSE)。第三方代码的来源与许可保留在各自目录，动态工作流尤其参见 [组件来源说明](workflow-runtime/vendor/SOURCE.md)。修改和发布时须保留对应许可及 NOTICE。
+项目代码使用 [MIT License](LICENSE)。第三方代码的来源与许可保留在各自目录。修改和发布时须保留对应许可及 NOTICE。

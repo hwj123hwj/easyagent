@@ -78,7 +78,7 @@ const settingGroups: Array<{
       },
       {
         id: "capabilities",
-        label: "技能与工作流",
+        label: "技能",
         icon: "code",
         description: "查看当前项目实际加载的能力与工作流运行记录。",
       },

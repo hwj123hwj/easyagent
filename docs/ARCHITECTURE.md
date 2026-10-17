@@ -1,6 +1,6 @@
 # EasyAgent 架构
 
-EasyAgent 由 Go Agent 核心、运行时、应用与入口组成。桌面、Web、TUI 和飞书共享会话与工具能力；动态工作流通过独立 Node 组件调用 Go 侧的真实 AgentSession。
+EasyAgent 由 Go Agent 核心、运行时、应用与入口组成。桌面、Web、TUI 和飞书共享会话与工具能力。
 
 ## 分层与源码
 
@@ -12,7 +12,6 @@ EasyAgent 由 Go Agent 核心、运行时、应用与入口组成。桌面、Web
 | 应用 | `internal/app`、`internal/agents`、`internal/server`、`internal/tui`、`internal/feishu`、`internal/web` | 应用组装、领域工具、协议和界面 |
 | 平台 | `sdk/runtime` | AgentSession、Application 注册、会话配置、命令与扩展 |
 | 核心 | `sdk/agent`、`sdk/ai`、`sdk/session`、`sdk/tools`、`sdk/mcp`、`sdk/operations` | Agent 循环、模型流、工具执行、MCP、历史和执行后端 |
-| 编排 | `sdk/workflow`、`internal/dynamicworkflow`、`workflow-runtime` | YAML DAG 与动态 TypeScript 工作流 |
 
 `sdk/` 是外部 Go 模块可导入的公共能力，不能依赖 `internal/`，由 [架构测试](../sdk/arch_test.go) 检查。音乐、飞书等领域逻辑属于应用层。
 
@@ -31,13 +30,6 @@ EasyAgent 由 Go Agent 核心、运行时、应用与入口组成。桌面、Web
 ## Application 扩展
 
 [runtime.Application](../sdk/runtime/application.go) 提供 `BuildTools`、`BuildPrompt` 和 `NewSessionExt`。入口目前注册 coding、music、kb；它们复用运行时，并分别提供领域能力。Skills 是任务方法和提示资源，不替代工具权限与 Application 的状态管理。
-
-## 两类工作流
-
-- [动态工作流](DYNAMIC_WORKFLOW.md)：Agent 编写 TypeScript，ZCode 引擎负责 Actor 和脚本调度，Go 适配层负责真实会话、权限、结果与持久化。需要 Node.js 22+ 和已构建 bundle。
-- [YAML 流水线](WORKFLOW.md)：Go 原生 DAG，适用于已确定的步骤依赖、fan-out、重试、审批与缓存。
-
-动态工作流支持按记录恢复，但中断中的外部副作用可能重复，恢复需要检查与确认。YAML 流水线的限制单独记录在其文档中，不能把两个引擎的恢复能力混用。
 
 ## 权限与部署边界
 

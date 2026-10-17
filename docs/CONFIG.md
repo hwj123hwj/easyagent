@@ -45,7 +45,7 @@ Web 页面可加载不代表 API 已获授权。远程使用需要登录；WebSo
 | 变量 | 默认值 | 作用 |
 |---|---|---|
 | `EA_WORKSPACE` | 当前工作目录 | 会话工作目录 |
-| `EA_DATA_DIR` | `./data` | 会话与工作流运行数据 |
+| `EA_DATA_DIR` | `./data` | 会话运行数据 |
 | `EA_HOME` | `~/.easyagent` | 用户配置与凭据目录 |
 | `EA_ENABLE_BASH` | `false` | 启用命令执行工具 |
 | `EA_AUTO_APPROVE` | `false` | 跳过交互工具确认，对应 `-y` |
@@ -67,7 +67,6 @@ Bash 并非文件路径沙箱；启用它就授予相应系统命令能力。ser
 | 配置 | 用途 |
 |---|---|
 | `EA_EXECUTION_MODE=ssh`、`EA_SSH_HOST`、`EA_SSH_PORT`、`EA_SSH_WORKDIR` | SSH 执行后端；端口默认 22 |
-| `EA_WORKFLOW_RUNTIME` | 动态工作流 bundle 绝对路径，见 [构建说明](DYNAMIC_WORKFLOW.md) |
 | `EA_MCP_CONFIG` / `--mcp-config` / YAML `mcp_config` | 用户 MCP 配置文件，默认 `EA_HOME/mcp.json`；项目文件与授权见 [MCP](MCP.md) |
 | `EA_KB_REPO_PATH` | 知识库目录；未设置时运行入口使用 `~/agent-lessons` |
 | `EA_SKILL_MARKET`、`EA_SKILL_MARKET_BASE_URL`、`EA_SKILL_MARKET_SKILL_DIR` | 技能市场（EasyCode 官方 skill store）；默认开启，`EA_SKILL_MARKET=0` 关闭。安装到 `EA_SKILL_MARKET_SKILL_DIR`（默认 `~/.agents/skills`），下一轮或新会话生效，见 [技能市场](SKILL_MARKET.md) |

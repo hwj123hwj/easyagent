@@ -27,12 +27,6 @@ func (s *Server) getCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 		skills = append(skills, map[string]any{"name": skill.Name, "description": skill.Description, "source": skill.FilePath, "scope": scope, "model_invocation": !skill.DisableModelInvocation})
 	}
-	workflows := []any{}
-	for _, run := range s.app.DynamicWorkflows().List() {
-		if run.Parent == id {
-			workflows = append(workflows, run)
-		}
-	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"workspace": sess.Workspace(), "skills": skills, "workflows": workflows, "workflow_entry": "/workflow", "tools": sess.ToolNames()})
+	_ = json.NewEncoder(w).Encode(map[string]any{"workspace": sess.Workspace(), "skills": skills, "tools": sess.ToolNames()})
 }

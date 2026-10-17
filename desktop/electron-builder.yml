@@ -30,12 +30,6 @@ extraResources:
     to: cua-helper
   - from: .bundle/easyagent
     to: easyagent
-  - from: .bundle/workflow-runtime.mjs
-    to: workflow-runtime.mjs
-  - from: .bundle/node
-    to: runtime/bin/node
-  - from: .bundle/licenses
-    to: licenses
 
 # macOS specific
 mac:

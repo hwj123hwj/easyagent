@@ -57,7 +57,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Build core and workflow payloads from exact revision
+      - name: Build core payloads from exact revision
         env:
           TAG: ${{ needs.validate.outputs.version }}
         run: bash scripts/build-release.sh "$TAG"
@@ -77,8 +77,6 @@ jobs:
           - arch: arm64
             runner: macos-15
     runs-on: ${{ matrix.runner }}
-    env:
-      EA_DESKTOP_NODE_VERSION: v24.21.0
     steps:
       - uses: actions/checkout@v4
         with:

@@ -26,7 +26,7 @@ var settingsPages = []settingsPage{
 	{"experiments", "实验", "wrench", "实验性功能开关：Computer use 等能力。", 0},
 	{"connections", "运行主机", "laptop", "选择任务运行的位置，管理远程 Agent 连接。", 1},
 	{"mcp", "MCP 工具", "link", "为当前主机接入工具服务，管理信任与授权。", 1},
-	{"capabilities", "技能与工作流", "code", "查看当前项目实际加载的能力与工作流运行记录。", 1},
+	{"capabilities", "技能", "code", "查看当前项目实际加载的能力。", 1},
 	{"feishu", "飞书机器人", "feishu", "配置应用凭据、查看桥接状态，并完成私聊配对。", 1},
 }
 
@@ -76,7 +76,7 @@ type settingsState struct {
 	SkillQuery, SkillFilter, SkillCategory, SkillDetail                                string
 	ConfirmSkill, ConfirmServer, ConfirmScope, ConfirmHost, ConfirmWorkspace           string
 	ProjectTrustByWorkspace                                                            map[string]bool
-	CapabilityOpen, WorkflowOpen                                                       bool
+	CapabilityOpen                                                                     bool
 	AppID, AppSecret                                                                   string
 	Bridge, FeishuSaved, Pairing, QR, QRAuthorized                                     bool
 }

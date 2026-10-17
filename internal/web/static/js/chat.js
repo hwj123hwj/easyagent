@@ -178,8 +178,7 @@ export class ChatPanel {
     if (this.state.restoringSession) return;
     const draft = this.input.value;
     let text = draft.trim();
-    const workflow = parseCommand(text);
-    if (text.startsWith('/') && !text.startsWith('//') && !(workflow?.name === 'workflow' && workflow.args)) { await this._command(text); return; }
+    if (text.startsWith('/') && !text.startsWith('//')) { await this._command(text); return; }
     if (text.startsWith('//')) text = text.slice(1);
     if (!text || this.commandRunning || this.state.streaming || this.creating || this.loading || this.state.modelChanging || this.state.modelInfoLoading) return;
     if (this.pendingSends?.has(this.state.currentSessionId)) { this._notice('正在确认发送结果，消息已保留。'); return; }
@@ -408,7 +407,6 @@ export class ChatPanel {
         case 'help': output = commands.map(c => '/' + c.name + ' — ' + c.description).join('\n') + '\n\nEnter 发送 · Shift Enter 换行\n命令菜单：↑ ↓ 选择，Tab / Enter 补全，Esc 关闭\n// 开头按普通文本发送；草稿在当前标签页刷新后恢复。'; break;
         case 'new': { const next = await this.state.createSession?.(); if (!next) throw new Error('新建对话失败，请重试'); if (id !== this.state.currentSessionId || revision !== this.inputRevision) { this._notice('新对话已创建，可从历史列表打开；当前输入已保留。'); break; } consume(); await this.state.selectSession(next); this.input.focus(); break; }
         case 'model': if (document.getElementById('model-select').disabled) throw new Error('当前无法切换模型，请等待连接或任务完成'); consume(); this.state.openModels?.(); break;
-        case 'workflow': consume(); this.state.navigate?.('page-dynamic-workflows'); break;
         case 'mcp': {
           if(!parsed.args){consume();this.state.navigate?.('page-settings');break;}
           if(!id)throw new Error('请先选择会话，或在设置中管理 MCP');

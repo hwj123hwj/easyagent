@@ -228,25 +228,6 @@ func (a *preview) capabilitySettings(c *ui.Context) {
 			ui.Text(c, ".agents/skills/code-review/SKILL.md").Font("monospace").FontSize(12).Selectable()
 		}
 	})
-	a.heading(c, "工作流")
-	a.note(c, "入口 workflow，使用 create_workflow / get_workflow / resume_workflow 创建、查看与恢复。")
-	a.note(c, "可用工具：create_workflow · get_workflow · resume_workflow（演示）")
-	ui.Column(c).Gap(10).Padding(12, 0).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
-		flatButton(c, "chevron-right", a.tr("界面验收工作流")).Justify(ui.Start).TextColor(c.Theme().Text).OnClick(func() { s.WorkflowOpen = !s.WorkflowOpen })
-		a.note(c, "已完成 · 演示记录")
-		if s.WorkflowOpen {
-			ui.Text(c, "workflow-demo-001").Font("monospace").FontSize(12).Selectable()
-			a.note(c, "结果：布局、草稿、命令菜单与审批交互已验证。")
-			a.action(c, "在对话中查看").OnClick(func() {
-				session := a.current()
-				if session.Draft != "" {
-					session.Draft += "\n"
-				}
-				session.Draft += "请用 get_workflow 查看工作流 workflow-demo-001 的状态和结果，不要新建流程。"
-				a.closeSettings()
-			})
-		}
-	})
 }
 func (a *preview) feishuSettings(c *ui.Context) {
 	s := &a.Settings

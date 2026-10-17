@@ -99,7 +99,7 @@ func coreBinaryAt(exe string) (string, error) {
 	}
 	dir := filepath.Dir(exe)
 	for _, candidate := range []string{
-		filepath.Join(dir, "easyagent"),                      // deb / tar.gz / AppImage 布局：核心与 UI 同目录
+		filepath.Join(dir, "easyagent"),                              // deb / tar.gz / AppImage 布局：核心与 UI 同目录
 		filepath.Clean(filepath.Join(dir, "../Resources/easyagent")), // macOS .app bundle 布局
 	} {
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
@@ -203,13 +203,6 @@ func (m *localBackend) start(ctx context.Context, dir string, model modelConfig,
 			env["OPENAI_BASE_URL"] = model.BaseURL
 			env["OPENAI_MODEL"] = model.Model
 		}
-	}
-	resources := filepath.Clean(filepath.Join(filepath.Dir(binary)))
-	if _, err := os.Stat(filepath.Join(resources, "workflow-runtime.mjs")); err == nil {
-		env["EA_WORKFLOW_RUNTIME"] = filepath.Join(resources, "workflow-runtime.mjs")
-	}
-	if _, err := os.Stat(filepath.Join(resources, "runtime/bin")); err == nil {
-		env["PATH"] = filepath.Join(resources, "runtime/bin") + string(os.PathListSeparator) + os.Getenv("PATH")
 	}
 	cmd := exec.Command(binary, "serve", "--listen", address)
 	cmd.Dir = home

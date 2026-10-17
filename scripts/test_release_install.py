@@ -43,7 +43,7 @@ pathlib.Path(args[args.index('-o')+1]).write_bytes(source.read_bytes())
         (self.assets / (core + '-linux-amd64')).write_text('#!/bin/sh\necho "' + core + ' ' + reported + '"\n')
         if not legacy:
             (self.assets / 'easyagent-bridge-linux-amd64').write_text('#!/bin/sh\necho "easyagent-bridge v1.2.3"\n')
-            for name in ['release.json', 'workflow-runtime.mjs', 'workflow-runtime-licenses.tar.gz']:
+            for name in ['release.json']:
                 (self.assets / name).write_text('fixture ' + name)
         self.checksums()
 
@@ -62,12 +62,11 @@ pathlib.Path(args[args.index('-o')+1]).write_bytes(source.read_bytes())
         self.assertEqual((self.install / 'easyagent').read_text(), 'previous core')
         self.assertFalse(list(self.install.glob('.download.*')))
 
-    def test_success_installs_matching_core_bridge_and_bundle(self):
+    def test_success_installs_matching_core_and_bridge(self):
         self.env.pop('EA_VERSION') # Exercise stable-release discovery, too.
         result = self.run_install(); self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('v1.2.3', (self.install / 'easyagent').read_text())
         self.assertTrue((self.install / 'easyagent-bridge').exists())
-        self.assertTrue((self.install / 'workflow-runtime-licenses.tar.gz').exists())
 
     def test_latest_discovery_accepts_compact_json(self):
         self.env.pop('EA_VERSION')
@@ -76,7 +75,7 @@ pathlib.Path(args[args.index('-o')+1]).write_bytes(source.read_bytes())
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_hash_mismatch_keeps_previous_install(self):
-        (self.assets / 'workflow-runtime.mjs').write_text('corrupt bundle')
+        (self.assets / 'release.json').write_text('corrupt manifest')
         self.assert_unchanged(self.run_install())
 
     def test_missing_checksums_never_falls_back_to_main(self):
@@ -105,18 +104,17 @@ pathlib.Path(args[args.index('-o')+1]).write_bytes(source.read_bytes())
 
     def test_partial_install_error_rolls_back_all_components(self):
         old = {'easyagent': 'previous core', 'easyagent-bridge': 'previous bridge',
-               'workflow-runtime.mjs': 'previous bundle', 'release.json': 'previous manifest'}
+               'release.json': 'previous manifest'}
         for name, content in old.items(): (self.install / name).write_text(content)
         real_mv = shutil.which('mv')
         self.wrapper('mv', '''import os,pathlib,subprocess,sys
 root=pathlib.Path(os.environ['EA_TEST_ROOT']);marker=root/'mv-failed'
-if sys.argv[-1]==str(root/'bin/workflow-runtime.mjs') and not marker.exists():
+if sys.argv[-1]==str(root/'bin/release.json') and not marker.exists():
  marker.touch();sys.exit(1)
 sys.exit(subprocess.run([''' + repr(real_mv) + ''',*sys.argv[1:]]).returncode)
 ''')
         self.assert_unchanged(self.run_install())
         for name, content in old.items(): self.assertEqual((self.install / name).read_text(), content)
-        self.assertFalse((self.install / 'workflow-runtime-licenses.tar.gz').exists())
 
 
 if __name__ == '__main__': unittest.main()

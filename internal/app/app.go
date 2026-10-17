@@ -3,9 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"github.com/hwj123hwj/easyagent/internal/dynamicflow"
 	"log/slog"
-	"path/filepath"
 	"sync"
 
 	"github.com/hwj123hwj/easyagent/internal/agents/coding"
@@ -25,22 +23,20 @@ import (
 // It assembles dependencies (providers, session manager, runtime registry, etc.)
 // but does NOT carry session-specific behavior — that belongs to AgentSession.
 type App struct {
-	mcpState          mcpState
-	skillMarket       *skillMarketState
-	workflowConfirmMu sync.Mutex
-	flows             *dynamicflow.Manager
-	cfgMu             sync.Mutex
-	cfg               config.Config
-	skillDirs         []string
-	sessionMgr        *sessionmgr.Manager
-	registry          *providers.Registry
-	sessionStore      *runtime.SessionRegistry
-	extRegistry       *extensions.Registry
-	application       runtime.Application            // default application (backward compat)
-	applications      map[string]runtime.Application // named applications for per-session selection
-	extraTools        []agent.ExternalToolDef
-	profile           *profile.Store // unified user profile (shared across agents)
-	loopMgr           *scheduler.LoopManager
+	mcpState     mcpState
+	skillMarket  *skillMarketState
+	cfgMu        sync.Mutex
+	cfg          config.Config
+	skillDirs    []string
+	sessionMgr   *sessionmgr.Manager
+	registry     *providers.Registry
+	sessionStore *runtime.SessionRegistry
+	extRegistry  *extensions.Registry
+	application  runtime.Application            // default application (backward compat)
+	applications map[string]runtime.Application // named applications for per-session selection
+	extraTools   []agent.ExternalToolDef
+	profile      *profile.Store // unified user profile (shared across agents)
+	loopMgr      *scheduler.LoopManager
 }
 
 // AppOptions holds the options for creating a new App.
@@ -108,11 +104,6 @@ func New(opts AppOptions) (*App, error) {
 		profile:      opts.Profile,
 		loopMgr:      scheduler.NewLoopManager(),
 	}
-	flows, err := dynamicflow.New(filepath.Join(cfg.DataDir, "dynamic-workflows"), dynamicflow.RuntimePath(), workflowHost{app: result})
-	if err != nil {
-		return nil, err
-	}
-	result.flows = flows
 	result.initMCP()
 	result.skillMarket = initSkillMarket(cfg)
 	return result, nil
@@ -167,9 +158,6 @@ func (a *App) NewSession(ctx context.Context) (*runtime.AgentSession, error) {
 // LoadSession loads an existing AgentSession by ID.
 // If already loaded in the registry, returns the cached instance.
 func (a *App) LoadSession(ctx context.Context, sessionID string) (*runtime.AgentSession, error) {
-	if a.flows != nil && a.flows.ActorSession(sessionID) {
-		return a.loadWorkflowActor(ctx, sessionID)
-	}
 	deps := a.deps()
 	opts := runtime.AgentSessionOptions{
 		Config:    a.Config(),
@@ -215,9 +203,6 @@ func (a *App) SessionDepsWithApp(appName string) runtime.Dependencies {
 	d := a.deps()
 	if appName != "" {
 		d.Application = a.ResolveApplication(appName)
-		if appName == "coding" {
-			d.Application = workflowApplication{Application: d.Application, app: a}
-		}
 	}
 	return d
 }
@@ -249,9 +234,6 @@ func (a *App) LoopManager() *scheduler.LoopManager {
 // Close cleans up all resources.
 func (a *App) Close() error {
 	a.closeMCP()
-	if a.flows != nil {
-		a.flows.Close()
-	}
 	if a.loopMgr != nil {
 		a.loopMgr.StopAll()
 	}
@@ -269,7 +251,7 @@ func (a *App) deps() runtime.Dependencies {
 		Registry:        a.registry,
 		SessionMgr:      a.sessionMgr,
 		ExtRegistry:     a.extRegistry,
-		Application:     workflowApplication{Application: a.ResolveApplication(""), app: a},
+		Application:     a.ResolveApplication(""),
 		ExternalTools:   a.extraTools,
 		AdditionalTools: func(workspace string) []agent.Tool { return a.additionalTools(workspace) },
 		ToolRevision:    a.combinedToolRevision,
@@ -340,7 +322,6 @@ func (a *App) ToolNames() []string {
 		baseNames = append(baseNames, def.Name)
 	}
 
-	baseNames = append(baseNames, "create_workflow", "get_workflow", "resume_workflow")
 	if a.skillMarket != nil {
 		baseNames = append(baseNames, "skill_market")
 	}
