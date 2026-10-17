@@ -87,11 +87,19 @@ class AssetsTest(unittest.TestCase):
     def test_desktop_assets_required_from_first_desktop_version(self):
         self.assertEqual(len(release.ASSETS), 8)
         self.assertEqual(release.required_assets('v0.1.0'), release.ASSETS)
-        for tag in ('v0.2.0-alpha.1', 'v0.2.0-beta.1', 'v0.2.0-rc.1', 'v0.2.0', 'v1.2.3'):
+        for tag in ('v0.2.0-alpha.1', 'v0.2.0-beta.1', 'v0.2.0-rc.1', 'v0.2.0'):
             with self.subTest(tag=tag):
                 # Apple Silicon only; the Intel DMG was dropped from v0.11.0.
                 self.assertEqual(release.required_assets(tag), release.ASSETS + (
                     f'EasyAgent-{tag[1:]}-arm64.dmg',))
+
+    def test_native_asset_required_from_promotion_version(self):
+        self.assertEqual(release.native_assets('v0.15.11'), ())
+        self.assertEqual(release.native_assets('v0.15.12'), ('easyagent-native-darwin-arm64.dmg',))
+        self.assertEqual(
+            release.required_assets('v1.2.3'),
+            release.ASSETS + ('EasyAgent-1.2.3-arm64.dmg', 'easyagent-native-darwin-arm64.dmg'),
+        )
 
     def test_each_missing_desktop_asset_rejects_manifest_and_publish(self):
         release.manifest(self.directory, self.tag, self.sha)
@@ -121,7 +129,7 @@ class AssetsTest(unittest.TestCase):
         with self.assertRaises(ValueError): publisher.validate_assets(self.directory, self.tag, self.sha)
 
     def test_core_only_manifest_is_never_publishable(self):
-        for name in release.desktop_assets(self.tag): (self.directory / name).unlink()
+        for name in release.desktop_assets(self.tag) + release.native_assets(self.tag): (self.directory / name).unlink()
         for tag in (self.tag, 'v0.1.0'):
             with self.subTest(tag=tag):
                 release.manifest(self.directory, tag, self.sha, core_only=True)
@@ -131,7 +139,7 @@ class AssetsTest(unittest.TestCase):
                 with mock.patch.object(publisher, 'api') as api, self.assertRaises(ValueError):
                     publisher.publish(tag, self.sha, self.directory)
                 api.assert_not_called()
-        for name in release.desktop_assets(self.tag): (self.directory / name).write_text('fixture:' + name)
+        for name in release.desktop_assets(self.tag) + release.native_assets(self.tag): (self.directory / name).write_text('fixture:' + name)
         release.manifest(self.directory, self.tag, self.sha)
         manifest = json.loads((self.directory / 'release.json').read_text())
         manifest['core_only'] = True
@@ -141,7 +149,7 @@ class AssetsTest(unittest.TestCase):
         api.assert_not_called()
 
     def test_manifest_cli_requires_explicit_core_only(self):
-        for name in release.desktop_assets(self.tag): (self.directory / name).unlink()
+        for name in release.desktop_assets(self.tag) + release.native_assets(self.tag): (self.directory / name).unlink()
         command = ['python3', str(Path(release.__file__)), 'manifest', self.tag, self.sha, str(self.directory)]
         result = subprocess.run(command, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
@@ -151,7 +159,7 @@ class AssetsTest(unittest.TestCase):
         self.assertTrue(json.loads((self.directory / 'release.json').read_text())['core_only'])
 
     def test_old_release_manifest_remains_compatible(self):
-        for name in release.desktop_assets(self.tag): (self.directory / name).unlink()
+        for name in release.desktop_assets(self.tag) + release.native_assets(self.tag): (self.directory / name).unlink()
         tag = 'v0.1.0'
         release.manifest(self.directory, tag, self.sha)
         data = json.loads((self.directory / 'release.json').read_text())

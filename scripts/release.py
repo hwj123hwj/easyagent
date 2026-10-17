@@ -31,10 +31,19 @@ def desktop_assets(tag):
     return (f"EasyAgent-{tag[1:]}-arm64.dmg",)
 
 
+def native_assets(tag):
+    version_key(tag)
+    # MyGo native client ships an Apple Silicon DMG with the promoted release.
+    if version_key(tag) >= version_key("v0.15.12"):
+        return ("easyagent-native-darwin-arm64.dmg",)
+    return ()
+
+
 def required_assets(tag):
+    required = ASSETS
     if version_key(tag) >= version_key("v0.2.0-alpha.1"):
-        return ASSETS + desktop_assets(tag)
-    return ASSETS
+        required = required + desktop_assets(tag)
+    return required + native_assets(tag)
 
 
 def check_next(tag, tags):

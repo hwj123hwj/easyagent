@@ -89,7 +89,7 @@ jobs:
         with:
           node-version: 22
       - id: package
-        name: Build and validate native desktop installer
+        name: Build and validate desktop installer
         env:
           TAG: ${{ needs.validate.outputs.version }}
           ARCH: ${{ matrix.arch }}
@@ -103,8 +103,27 @@ jobs:
           path: ${{ steps.package.outputs.dmg }}
           if-no-files-found: error
           retention-days: 3
+  native:
+    needs: [validate, core]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build and validate the MyGo native installer
+        run: bash scripts/build-native.sh darwin-arm64 native-dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-native
+          path: native-dist/easyagent-native-darwin-arm64.dmg
+          if-no-files-found: error
+          retention-days: 3
   publish:
-    needs: [validate, core, desktop]
+    needs: [validate, core, desktop, native]
     runs-on: ubuntu-latest
     permissions:
       contents: write

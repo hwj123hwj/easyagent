@@ -217,9 +217,9 @@ func (a *preview) generalSettings(c *ui.Context) {
 				a.syncNativeLocale()
 			}
 		})
-		version := "EasyAgent Native Preview 0.1.0 · MyGo 0.5.5"
+		version := "EasyAgent 0.1.0 · MyGo 0.5.5"
 		if a.Live != nil {
-			version = "EasyAgent Native Preview 0.2.5 · MyGo 0.5.5"
+			version = "EasyAgent 0.2.5 · MyGo 0.5.5"
 		}
 		a.preferenceRow(c, "桌面版本", version, func() {
 			a.action(c, "检查更新").OnClick(func() {

@@ -12,7 +12,7 @@ import (
 func main() {
 	app := mygo.App
 	app.SetLanguages("zh-Hans", "en")
-	app.SetName("EasyAgent Native Preview")
+	app.SetName("EasyAgent")
 	app.WhenReady(func() {
 		app.SetMenu(mygo.NewMenu([]*mygo.MenuItem{{Role: mygo.RoleAppMenu}, {Role: mygo.RoleEditMenu}, {Role: mygo.RoleWindowMenu}}))
 		dir, err := app.Path(mygo.PathUserData)
