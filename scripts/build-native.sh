@@ -15,6 +15,9 @@ go run ./tools/build
 
 APP=$(find build.noindex/darwin-arm64 -maxdepth 1 -name '*.app' | head -1)
 [[ -n "$APP" && -d "$APP" ]] || { echo 'MyGo build did not produce an .app bundle' >&2; exit 1; }
+# Clean up registration even when validation fails; never launch the GUI here.
+trap 'python3 "$ROOT/scripts/unregister-desktop-apps.py" "$APP" || true' EXIT
+
 DMG=$(find build.noindex/darwin-arm64 -maxdepth 1 -name '*.dmg' | head -1)
 [[ -n "$DMG" && -s "$DMG" ]] || { echo 'MyGo build did not produce a DMG' >&2; exit 1; }
 
@@ -22,8 +25,9 @@ DMG=$(find build.noindex/darwin-arm64 -maxdepth 1 -name '*.dmg' | head -1)
 plutil -extract CFBundleIdentifier raw -o - "$APP/Contents/Info.plist" | grep -qx 'com.hwj.easyagent' \
   || { echo 'Native app bundle identifier is not com.hwj.easyagent' >&2; exit 1; }
 
-# LaunchServices hygiene: the staged app is a build artifact, never registered.
-python3 "$ROOT/scripts/unregister-desktop-apps.py" "$APP" || true
+# Exercise bundle discovery AND the actual local-backend launcher with isolated
+# configuration. A healthy Resources binary alone does not catch UI recursion.
+EASYAGENT_TEST_BUNDLE="$PWD/$APP" go test ./... -count=1
 
 if [[ -n "$DIST" ]]; then
   mkdir -p "$DIST"

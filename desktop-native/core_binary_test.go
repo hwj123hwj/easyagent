@@ -45,7 +45,7 @@ func TestCoreBinary_MacBundleLayout(t *testing.T) {
 	if err := os.MkdirAll(resDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	exe := filepath.Join(exeDir, "easyagent-native-preview")
+	exe := filepath.Join(exeDir, "EasyAgent")
 	core := filepath.Join(resDir, "easyagent")
 	for _, f := range []string{exe, core} {
 		if err := os.WriteFile(f, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
@@ -135,7 +135,11 @@ func TestCoreBinary_EnvOverride(t *testing.T) {
 	}
 	t.Setenv("EASYAGENT_NATIVE_CORE", core)
 
-	got, err := coreBinaryAt(filepath.Join(dir, "ui"))
+	exe := filepath.Join(dir, "ui")
+	if err := os.WriteFile(exe, []byte("ui"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := coreBinaryAt(exe)
 	if err != nil {
 		t.Fatalf("coreBinaryAt: %v", err)
 	}
@@ -155,6 +159,68 @@ func TestLocalHostName_NotMacWordingOnLinux(t *testing.T) {
 	default:
 		if name == "此 Mac" || name == "" {
 			t.Fatalf("on %s hostname must not be macOS wording, got %q", runtime.GOOS, name)
+		}
+	}
+}
+
+// The promoted UI name collides with easyagent on default macOS filesystems.
+// File identity must also reject symlinks and hardlinks on every platform.
+func TestCoreBinary_RejectsSelf(t *testing.T) {
+	for _, source := range []string{"sibling", "bundle", "env", "path"} {
+		for _, alias := range []string{"same", "symlink", "hardlink", "case"} {
+			t.Run(source+"/"+alias, func(t *testing.T) {
+				dir := t.TempDir()
+				exeDir := filepath.Join(dir, "Contents", "MacOS")
+				candidateDir := exeDir
+				switch source {
+				case "bundle":
+					candidateDir = filepath.Join(dir, "Contents", "Resources")
+				case "env", "path":
+					candidateDir = filepath.Join(dir, "bin")
+				}
+				for _, d := range []string{exeDir, candidateDir} {
+					if err := os.MkdirAll(d, 0755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				candidate := filepath.Join(candidateDir, "easyagent")
+				exe := filepath.Join(exeDir, "ui")
+				if alias == "same" {
+					exe = candidate
+				}
+				if alias == "case" {
+					exe = filepath.Join(candidateDir, "EasyAgent")
+				}
+				marker := filepath.Join(dir, "executed")
+				t.Setenv("CORE_PROBE_MARKER", marker)
+				if err := os.WriteFile(exe, []byte("#!/bin/sh\necho started > \"$CORE_PROBE_MARKER\"\nexit 0\n"), 0755); err != nil {
+					t.Fatal(err)
+				}
+				switch alias {
+				case "symlink":
+					if err := os.Symlink(exe, candidate); err != nil {
+						t.Fatal(err)
+					}
+				case "hardlink":
+					if err := os.Link(exe, candidate); err != nil {
+						t.Fatal(err)
+					}
+				}
+				t.Setenv("EASYAGENT_NATIVE_CORE", "")
+				t.Setenv("PATH", filepath.Join(dir, "empty-path"))
+				if source == "env" {
+					t.Setenv("EASYAGENT_NATIVE_CORE", candidate)
+				}
+				if source == "path" {
+					t.Setenv("PATH", candidateDir)
+				}
+				if got, err := coreBinaryAt(exe); err == nil {
+					t.Errorf("selected UI as core: %s", got)
+				}
+				if _, err := os.Stat(marker); !os.IsNotExist(err) {
+					t.Error("UI was executed during core discovery")
+				}
+			})
 		}
 	}
 }

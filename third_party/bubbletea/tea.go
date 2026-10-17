@@ -183,6 +183,8 @@ type Program struct {
 	// was the altscreen active before releasing the terminal?
 	altScreenWasActive bool
 	ignoreSignals      uint32
+	resumeSignals      chan chan struct{}
+	signalsWereIgnored uint32
 
 	bpWasActive bool // was the bracketed paste mode active before releasing the terminal?
 	reportFocus bool // was focus reporting active before releasing the terminal?
@@ -272,6 +274,9 @@ func NewProgram(model Model, opts ...ProgramOption) *Program {
 
 func (p *Program) handleSignals() chan struct{} {
 	ch := make(chan struct{})
+	p.resumeSignals = make(chan chan struct{})
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
 	// Listen for SIGINT and SIGTERM.
 	//
@@ -282,27 +287,43 @@ func (p *Program) handleSignals() chan struct{} {
 	//
 	// SIGTERM is sent by unix utilities (like kill) to terminate a process.
 	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		defer func() {
 			signal.Stop(sig)
 			close(ch)
 		}()
 
+		var pending Msg
+		var out chan Msg
 		for {
 			select {
 			case <-p.ctx.Done():
 				return
+			case out <- pending:
+				return
+
+			case resumed := <-p.resumeSignals:
+				// Stop waits for in-flight deliveries. Drain while still ignoring
+				// signals, on the same goroutine that consumes them, so a wizard's
+				// Ctrl+C cannot be interpreted after terminal ownership changes.
+				signal.Stop(sig)
+				select {
+				case <-sig:
+				default:
+				}
+				atomic.StoreUint32(&p.ignoreSignals, p.signalsWereIgnored)
+				signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+				close(resumed)
 
 			case s := <-sig:
 				if atomic.LoadUint32(&p.ignoreSignals) == 0 {
 					switch s {
 					case syscall.SIGINT:
-						p.msgs <- InterruptMsg{}
+						pending = InterruptMsg{}
 					default:
-						p.msgs <- QuitMsg{}
+						pending = QuitMsg{}
 					}
-					return
+					// Keep servicing restoration while the event loop is in Exec.
+					out = p.msgs
 				}
 			}
 		}
@@ -870,7 +891,7 @@ func (p *Program) recoverFromGoPanic(r interface{}) {
 // ReleaseTerminal restores the original terminal state and cancels the input
 // reader. You can return control to the Program with RestoreTerminal.
 func (p *Program) ReleaseTerminal() error {
-	atomic.StoreUint32(&p.ignoreSignals, 1)
+	p.signalsWereIgnored = atomic.SwapUint32(&p.ignoreSignals, 1)
 	if p.cancelReader != nil {
 		p.cancelReader.Cancel()
 	}
@@ -891,8 +912,6 @@ func (p *Program) ReleaseTerminal() error {
 // terminal to the former state when the program was running, and repaints.
 // Use it to reinitialize a Program after running ReleaseTerminal.
 func (p *Program) RestoreTerminal() error {
-	atomic.StoreUint32(&p.ignoreSignals, 0)
-
 	if err := p.initTerminal(); err != nil {
 		return err
 	}
@@ -921,6 +940,18 @@ func (p *Program) RestoreTerminal() error {
 	// needed.
 	go p.checkResize()
 
+	// Raw mode must be restored before handing SIGINT back to the TUI.
+	if p.resumeSignals != nil {
+		resumed := make(chan struct{})
+		select {
+		case p.resumeSignals <- resumed:
+			select {
+			case <-resumed:
+			case <-p.ctx.Done():
+			}
+		case <-p.ctx.Done():
+		}
+	}
 	return nil
 }
 
