@@ -547,7 +547,7 @@ func (s *AgentSession) buildAgent(ctx context.Context, registry *providers.Regis
 		Name:          modelID,
 		Provider:      providerName,
 		ContextWindow: models.ContextWindow(modelID),
-		MaxTokens:     4096,
+		MaxTokens:     models.MaxOutput(modelID),
 	}
 
 	// Compaction settings
