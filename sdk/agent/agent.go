@@ -473,14 +473,19 @@ func (a *Agent) appendToolResult(call ai.ToolCall, result ToolResult) ai.ToolRes
 }
 
 func (a *Agent) llmRequest(messages []ai.Message) ai.StreamRequest {
-	return ai.StreamRequest{
+	// MaxTokens 为 nil 时 provider 会兜底 4096，长回复会在输出触顶后断流；
+	// 模型定义了上限则随请求下发。
+	req := ai.StreamRequest{
 		Model:      a.model,
 		Messages:   messages,
 		System:     a.system,
 		Tools:      a.toolDefinitions(),
-		MaxTokens:  nil,
 		ToolChoice: nil,
 	}
+	if max := a.model.MaxTokens; max > 0 {
+		req.MaxTokens = &max
+	}
+	return req
 }
 
 func (a *Agent) handleAssistantMessage(message ai.StreamAssistantMessage) (ai.AssistantMessage, error) {
