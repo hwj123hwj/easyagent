@@ -123,3 +123,82 @@ func TestPromptCachingUsage(t *testing.T) {
 		t.Fatal("expected 'Prompt Caching 复用 3500 tokens' in context usage panel")
 	}
 }
+
+func TestKnowledgeViewParityAndTags(t *testing.T) {
+	a := alignmentPreview(t)
+	l := a.Live
+	a.Workbench = true
+	l.Workbench.Tab = "kb"
+	l.Workbench.KBView = ""
+	l.Data["kb"] = map[string]any{
+		"entries": []any{
+			map[string]any{
+				"path":      "docs/guide.md",
+				"rel_path":  "docs/guide.md",
+				"title":     "Go 并发指南",
+				"category":  "tech",
+				"summary":   "详细讲解 channel 与 goroutine 调度。",
+				"tags":      []any{"Go", "并发", "性能"},
+				"modified":  "2026-10-17",
+			},
+		},
+	}
+	l.Data["kb-stats"] = map[string]any{"total_entries": 1, "categories": 1, "tags": 3}
+	l.Data["kb-categories"] = map[string]any{
+		"categories": []any{map[string]any{"name": "tech", "count": 1}},
+	}
+	l.Data["kb-tags"] = map[string]any{
+		"tags": []any{
+			map[string]any{"name": "Go", "count": 10},
+			map[string]any{"name": "并发", "count": 5},
+		},
+	}
+
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.kbWorkbench(c)
+	}, 500, 700)
+	tt.Frame()
+
+	// 1. Verify Browse View renders title, tags, and category chip
+	if !tt.HasText("Go 并发指南") {
+		t.Fatal("expected entry title 'Go 并发指南' to be rendered")
+	}
+	if !tt.HasText("Go") || !tt.HasText("并发") || !tt.HasText("性能") {
+		t.Fatal("expected tags 'Go', '并发', '性能' to be rendered in entry card")
+	}
+	if !tt.HasText("tech") {
+		t.Fatal("expected category 'tech' to be rendered")
+	}
+
+	// 2. Open entry detail view
+	entry := object(list(object(l.Data["kb"])["entries"])[0])
+	a.openKBEntry(entry)
+	l.Data["kb-read"] = map[string]any{"content": "# Go 并发指南正文\n调度器模型详解。"}
+	tt.Frame()
+
+	if !tt.HasText("返回") {
+		t.Fatal("expected '返回' back button in detail view")
+	}
+	if !tt.HasText("#Go") {
+		t.Fatal("expected clickable tag '#Go' in detail header")
+	}
+
+	// 3. Test Health View metrics
+	l.Workbench.KBPath = ""
+	l.Workbench.KBView = "health"
+	l.Data["kb-health"] = map[string]any{
+		"total_entries":           100,
+		"categories":              8,
+		"tags":                    45,
+		"entries_missing_title":   []any{},
+		"entries_missing_summary": []any{map[string]any{"rel_path": "a.md", "title": "A"}},
+		"entries_missing_tags":    []any{},
+		"duplicate_groups":        []any{},
+		"tag_clusters":            []any{},
+	}
+	tt.Frame()
+
+	if !tt.HasText("待优化") || !tt.HasText("1") {
+		t.Fatal("expected health metrics card to show '待优化' count 1")
+	}
+}
