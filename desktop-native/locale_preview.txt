@@ -213,4 +213,4 @@ MCP 工具连接|MCP tool connections
 已归档|Archived
 此 Mac|This Mac
 原生预览 · 演示数据|Native preview · Demo data
-当前状态：|Status:
+当前状态：|Status: 

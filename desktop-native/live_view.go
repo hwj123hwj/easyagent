@@ -36,7 +36,7 @@ func (a *preview) liveChrome(c *ui.Context) {
 	bar := c.TitleBar()
 	viewportWidth, _ := c.Size()
 	sidebarVisible := a.Sidebar && (!a.Workbench || viewportWidth >= 1100)
-	ui.Row(c).Height(48).Padding(1, 14, 0, max(bar.Left, 76)+6).Gap(10).AlignItems(ui.Center).DragWindow().BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
+	ui.Row(c).Height(48).Padding(1, max(bar.Right, 14)+6, 0, max(bar.Left, 76)+6).Gap(10).AlignItems(ui.Center).DragWindow().BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 		if !a.Settings.Open {
 			iconButton(c, "panel", "切换会话侧栏").OnClick(func() {
 				if a.Workbench && viewportWidth < 1100 {
