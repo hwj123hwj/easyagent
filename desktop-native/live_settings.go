@@ -633,7 +633,7 @@ func (a *preview) liveComputerSettings(c *ui.Context) {
 }
 func (a *preview) liveCapabilitySettings(c *ui.Context) {
 	if a.current().RemoteID == "" {
-		a.note(c, "选择一个项目会话后查看实际加载的技能与工作流。")
+		a.note(c, "选择一个项目会话后查看实际加载的技能。")
 		return
 	}
 	if a.resourceFeedback(c, "capabilities", a.loadSettingsPage) {
@@ -664,47 +664,7 @@ func (a *preview) liveCapabilitySettings(c *ui.Context) {
 		})
 	}
 	a.heading(c, "工作流")
-	a.note(c, "入口 "+str(m["workflow_entry"])+"，使用 create_workflow / get_workflow / resume_workflow 创建、查看与恢复。")
-	var tools []string
-	for _, v := range list(m["tools"]) {
-		if name := str(v); strings.Contains(name, "workflow") {
-			tools = append(tools, name)
-		}
-	}
-	if len(tools) > 0 {
-		a.note(c, "可用工具："+strings.Join(tools, " · "))
-	} else {
-		a.note(c, "当前工具策略未开放工作流")
-	}
-	runs := list(m["workflows"])
-	if len(runs) == 0 {
-		a.note(c, "当前会话暂无工作流运行记录。")
-	}
-	for i := len(runs) - 1; i >= max(0, len(runs)-20); i-- {
-		run := object(runs[i])
-		id := str(run["id"])
-		nativeDisclosure(c, id, str(run["name"])+" · "+str(run["status"]), func() {
-			nativePre(c, id)
-			if run["result"] != nil {
-				nativePre(c, displayText(run["result"]))
-			}
-			if str(run["error"]) != "" {
-				ui.Text(c, str(run["error"])).TextColor(c.Theme().Danger)
-			}
-			a.action(c, "在对话中查看").AlignSelf(ui.Start).OnClick(func() {
-				a.current().Draft = "请用 get_workflow 查看工作流 " + id + " 的状态和结果，不要新建流程。"
-				a.closeSettings()
-			})
-		})
-	}
-	a.action(c, "设计并运行工作流").AlignSelf(ui.Start).OnClick(func() {
-		if strings.TrimSpace(a.current().Draft) == "" {
-			a.current().Draft = "/workflow "
-		} else {
-			a.Live.Notice = "已有草稿已保留；可另建会话设计工作流。"
-		}
-		a.closeSettings()
-	})
+	a.note(c, "工作流功能已下线；历史运行记录可从 archive/workflow 分支版本查看。")
 }
 
 // Keep map iteration out of the view so keyed form rows remain stable.

@@ -35,7 +35,6 @@ func RegisterBuiltins(registry *slashcmd.Registry) {
 			return slashcmd.CommandResult{Output: out}, err
 		},
 	})
-	registerWorkflow(registry)
 	registry.Register(slashcmd.Command{
 		Name:        "confirm",
 		Description: "Show or toggle dangerous-tool confirmation (/confirm on|off)",

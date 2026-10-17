@@ -67,11 +67,6 @@ func main() {
 		panic(err)
 	}
 	run(root, "go", "build", "-trimpath", "-ldflags", "-s -w -X main.version=native-"+strings.TrimSpace(string(sha)), "-o", filepath.Join(target, "easyagent"), "./cmd/easyagent")
-	run(filepath.Join(root, "workflow-runtime"), "node", "build.mjs")
-	copyFile(filepath.Join(root, "workflow-runtime/output/workflow-runtime.mjs"), filepath.Join(target, "workflow-runtime.mjs"))
-	for _, name := range []string{"ZCODE-LICENSE", "ZCODE-NOTICE.md", "ZCODE-THIRD-PARTY-NOTICES.md", "SOURCE.md"} {
-		copyFile(filepath.Join(root, "workflow-runtime/vendor", name), filepath.Join(target, "licenses", name))
-	}
 	for _, module := range []string{"github.com/zkrebbekx/go-mermaid", "github.com/srwiley/oksvg", "github.com/srwiley/rasterx"} {
 		directory, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", module).Output()
 		if err != nil {
@@ -84,25 +79,7 @@ func main() {
 		}
 		copyFile(license, filepath.Join(target, "licenses", name+"-LICENSE"))
 	}
-	node := filepath.Join(root, "desktop/.bundle/node")
-	if _, err := os.Stat(node); err != nil {
-		node, err = exec.LookPath("node")
-		if err != nil {
-			panic(err)
-		}
-		node, err = filepath.EvalSymlinks(node)
-		if err != nil {
-			panic(err)
-		}
-	}
-	packagedNode := filepath.Join(target, "runtime/bin/node")
-	copyFile(node, packagedNode)
 	if runtime.GOOS == "darwin" {
-		// Remove only debug and local symbols from our staged copy. Retain
-		// exported Node/V8 symbols; never alter the Electron runtime source.
-		run(cwd, "/usr/bin/strip", "-S", "-x", packagedNode)
-		run(cwd, "codesign", "--force", "--sign", "-", packagedNode)
-		run(cwd, packagedNode, filepath.Join(target, "workflow-runtime.mjs"), "--check")
 		app := filepath.Join(target, "cua-helper/EasyAgent Computer Use.app/Contents")
 		_ = os.MkdirAll(filepath.Join(app, "MacOS"), 0755)
 		arch := runtime.GOARCH
@@ -119,5 +96,5 @@ func main() {
 			panic(err)
 		}
 	}
-	fmt.Println("Prepared current EasyAgent core, workflow runtime, Node and native computer helper")
+	fmt.Println("Prepared current EasyAgent core and native computer helper")
 }

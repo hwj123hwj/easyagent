@@ -14,11 +14,6 @@ export const commands: Command[] = [
     description: "打开搜索列表，或追加模型名称",
   },
   { name: "sessions", label: "历史会话", description: "打开或收起会话侧栏" },
-  {
-    name: "workflow",
-    label: "动态工作流",
-    description: "追加任务，让 Agent 设计并执行",
-  },
   { name: "tools", label: "可用工具", description: "查看当前 Agent 的工具" },
   {
     name: "context",

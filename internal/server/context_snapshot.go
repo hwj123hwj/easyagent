@@ -13,7 +13,7 @@ import (
 
 func (s *Server) getContextSnapshot(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if s.rejectActiveWorkflowActor(w, id) || s.rejectActiveRun(w, id) {
+	if s.rejectActiveRun(w, id) {
 		return
 	}
 	sess, err := s.app.LoadSession(r.Context(), id)

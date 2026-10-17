@@ -34,15 +34,6 @@ func (g *activityGate) begin() (func(), bool) {
 	var once sync.Once
 	return func() { once.Do(func() { g.mu.Lock(); g.active--; g.mu.Unlock() }) }, true
 }
-func (s *Server) backgroundRuns() int {
-	n := s.app.DynamicWorkflows().ActiveCount()
-	s.wfMu.Lock()
-	defer s.wfMu.Unlock()
-	if s.wfReg != nil {
-		n += s.wfReg.ActiveCount()
-	}
-	return n
-}
 func (s *Server) admissionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions || r.URL.Path == "/admin/deploy" {
@@ -69,7 +60,7 @@ func (s *Server) deploymentControl(w http.ResponseWriter, r *http.Request) {
 	g := &s.activity
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	active := g.active + s.backgroundRuns()
+	active := g.active
 	switch r.Method {
 	case http.MethodGet:
 		writeDeploymentJSON(w, map[string]any{"active": active, "draining": g.closing || time.Now().Before(g.until)})
@@ -123,12 +114,6 @@ func (s *Server) serveUntilSignal(addr string) error {
 	s.activity.closing = true
 	s.activity.mu.Unlock()
 	s.cancel()
-	s.wfMu.Lock()
-	if s.wfReg != nil {
-		s.wfReg.CancelAll()
-	}
-	s.wfMu.Unlock()
-	go s.app.DynamicWorkflows().Close()
 	// Cancellation first; keep the process alive while tool results are persisted.
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -139,7 +124,7 @@ func (s *Server) serveUntilSignal(addr string) error {
 		s.activity.mu.Lock()
 		active := s.activity.active
 		s.activity.mu.Unlock()
-		if active+s.backgroundRuns() == 0 {
+		if active == 0 {
 			break
 		}
 		select {

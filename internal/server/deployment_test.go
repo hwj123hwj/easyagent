@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hwj123hwj/easyagent/sdk/workflow"
 	"github.com/stretchr/testify/require"
 )
 
@@ -108,18 +107,4 @@ func TestAdmissionConcurrentPrepareAndPrompt(t *testing.T) {
 		close(finish)
 		wg.Wait()
 	}
-}
-
-func TestDeploymentDefersWhileWorkflowWaitsForApproval(t *testing.T) {
-	s, _ := newWorkflowTestServer(t)
-	s.SetAPIKey("test")
-	spec, err := workflow.ParseSpec([]byte("name: pending\nsteps:\n  - id: approval\n    prompt: wait\n    confirm: true\n"))
-	require.NoError(t, err)
-	id, err := s.workflowRegistry().Start(spec, nil)
-	require.NoError(t, err)
-	defer s.workflowRegistry().Cancel(id)
-	require.Equal(t, 409, deployRequest(s, "POST", "{}", "test").Code)
-	require.NoError(t, s.workflowRegistry().Cancel(id))
-	require.Eventually(t, func() bool { return s.workflowRegistry().ActiveCount() == 0 }, time.Second, time.Millisecond)
-	require.Equal(t, 200, deployRequest(s, "POST", "{}", "test").Code)
 }

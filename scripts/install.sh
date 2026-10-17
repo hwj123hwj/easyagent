@@ -150,11 +150,7 @@ download_release() (
         [ "$("$stage/easyagent-bridge-$OS-$ARCH" --version)" = "easyagent-bridge $tag" ] \
             || fail 'Bridge version differs from release'
         mv "$stage/easyagent-bridge-$OS-$ARCH" "$stage/easyagent-bridge"
-        fetch_verified workflow-runtime.mjs
-        fetch_verified workflow-runtime-licenses.tar.gz
-        destinations+=(easyagent-bridge workflow-runtime.mjs workflow-runtime-licenses.tar.gz release.json)
-    elif [ -e "$INSTALL_DIR/workflow-runtime.mjs" ]; then
-        fail 'This historical release has no workflow bundle; use a separate EA_HOME for downgrades'
+        destinations+=(easyagent-bridge release.json)
     fi
     mkdir "$stage/backup"
     for dest in "${destinations[@]}"; do

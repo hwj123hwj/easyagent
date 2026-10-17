@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -38,26 +37,26 @@ type nativeFile struct {
 	Image                                      *ui.Bitmap
 }
 type nativeWorkbench struct {
-	KBSearchAt                                                                                     time.Time
-	SavedFiles                                                                                     map[string]fileWorkspace
-	RestoredFiles                                                                                  map[string]bool
-	PendingTerminalText, TerminalError                                                             string
-	KBView, KBCategory, KBTag                                                                      string
-	PendingReviewPath                                                                              string
-	Scope                                                                                          string
-	FileScope                                                                                      string
-	ShowTree, FileOpenMenu, SearchLoaded, SearchLoading                                            bool
-	Directories                                                                                    map[string]*nativeDirectory
-	SearchFiles                                                                                    []string
-	CompactInstructions                                                                            string
-	Tab, Directory, Search, ActiveFile, SelectedRun, SelectedChange, KBQuery, KBPath, WorkflowYAML string
-	Files                                                                                          map[string]*nativeFile
-	Tabs                                                                                           []string
-	Diff                                                                                           *editor.DiffState
-	TerminalHost, TerminalSession, TerminalWorkspace                                               string
-	TerminalGeneration                                                                             uint64
-	Term                                                                                           *terminal.Terminal
-	TerminalOpen, TerminalStarting                                                                 bool
+	KBSearchAt                                                                       time.Time
+	SavedFiles                                                                       map[string]fileWorkspace
+	RestoredFiles                                                                    map[string]bool
+	PendingTerminalText, TerminalError                                               string
+	KBView, KBCategory, KBTag                                                        string
+	PendingReviewPath                                                                string
+	Scope                                                                            string
+	FileScope                                                                        string
+	ShowTree, FileOpenMenu, SearchLoaded, SearchLoading                              bool
+	Directories                                                                      map[string]*nativeDirectory
+	SearchFiles                                                                      []string
+	CompactInstructions                                                              string
+	Tab, Directory, Search, ActiveFile, SelectedRun, SelectedChange, KBQuery, KBPath string
+	Files                                                                            map[string]*nativeFile
+	Tabs                                                                             []string
+	Diff                                                                             *editor.DiffState
+	TerminalHost, TerminalSession, TerminalWorkspace                                 string
+	TerminalGeneration                                                               uint64
+	Term                                                                             *terminal.Terminal
+	TerminalOpen, TerminalStarting                                                   bool
 }
 
 func newNativeWorkbench() nativeWorkbench {
@@ -122,14 +121,11 @@ func (a *preview) refreshWorkbench() {
 		if w.KBView == "health" {
 			a.resource("kb-health", "/kb/health")
 		}
-	case "workflows":
-		a.resource("workflows", "/dynamic-workflows")
-		a.resource("static-workflows", "/workflows")
 	}
 }
 
 var workbenchTabs = []struct{ id, label, icon string }{
-	{"review", "审查", "git-branch"}, {"files", "文件", "folder"}, {"plan", "计划", "file"}, {"tasks", "任务", "check"}, {"kb", "知识库", "book"}, {"profile", "记忆", "user"}, {"context", "上下文", "activity"}, {"tools", "工具", "wrench"}, {"workflows", "工作流", "code"},
+	{"review", "审查", "git-branch"}, {"files", "文件", "folder"}, {"plan", "计划", "file"}, {"tasks", "任务", "check"}, {"kb", "知识库", "book"}, {"profile", "记忆", "user"}, {"context", "上下文", "activity"}, {"tools", "工具", "wrench"},
 }
 
 func (a *preview) liveWorkbench(c *ui.Context) {
@@ -176,8 +172,6 @@ func (a *preview) liveWorkbench(c *ui.Context) {
 				a.profileWorkbench(c)
 			case "kb":
 				a.kbWorkbench(c)
-			case "workflows":
-				a.workflowWorkbench(c)
 			}
 		})
 		ui.Column(c).Width(44).Padding(6, 4).Gap(2).BorderWidth(0, 0, 0, 1).BorderColor(c.Theme().Border).Children(func() {
@@ -369,62 +363,6 @@ func (a *preview) tasksWorkbench(c *ui.Context) {
 					ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() { ui.Text(c, m.Tool).FontSize(12).Font("monospace"); a.note(c, m.Status) })
 				})
 			}
-		})
-	})
-}
-func (a *preview) workflowWorkbench(c *ui.Context) {
-	l := a.Live
-	w := &l.Workbench
-	ui.Scroll(c).Grow(1).Padding(12).Children(func() {
-		for _, typeKey := range []string{"workflows", "static-workflows"} {
-			prefix := "/dynamic-workflows/"
-			if typeKey == "static-workflows" {
-				prefix = "/workflows/"
-			}
-			for _, raw := range list(object(l.Data[typeKey])["runs"]) {
-				run := object(raw)
-				id := str(run["id"])
-				if id == "" {
-					id = str(run["run_id"])
-				}
-				ui.Column(c.Key(typeKey+id)).Padding(10).Gap(8).Border(1, c.Theme().Border).Radius(6).Children(func() {
-					ui.Text(c, id).FontSize(12).Bold()
-					a.note(c, str(run["status"]))
-					ui.Row(c).Gap(6).Wrap().Children(func() {
-						a.action(c, "详情").OnClick(func() { a.resource("workflow-detail", prefix+pathSegment(id)) })
-						a.action(c, "取消运行").OnClick(func() {
-							a.operation("workflow-action", "POST", prefix+pathSegment(id)+"/cancel", map[string]any{}, func(any) { a.refreshWorkbench() })
-						})
-						if typeKey == "workflows" {
-							a.action(c, "恢复").OnClick(func() {
-								l.Confirm = &nativeConfirmation{"恢复工作流？", "可能重试未完成的操作，请先查看执行记录。", func() {
-									a.operation("workflow-action", "POST", prefix+pathSegment(id)+"/resume", map[string]any{"acknowledge_incomplete_actions": true}, func(any) { a.refreshWorkbench() })
-								}}
-							})
-						} else {
-							for _, action := range []string{"approve", "reject"} {
-								a.action(c, action).OnClick(func() {
-									a.operation("workflow-action", "POST", prefix+pathSegment(id)+"/"+action, map[string]any{}, func(any) { a.refreshWorkbench() })
-								})
-							}
-						}
-					})
-				})
-			}
-		}
-		if v := l.Data["workflow-detail"]; v != nil {
-			ui.Text(c, pretty(v)).Font("monospace").FontSize(11).Selectable()
-		}
-		a.heading(c, "运行 YAML 工作流")
-		a.multiline(c, "工作流定义", &w.WorkflowYAML, 6, 14)
-		a.primary(c, "开始工作流").Disabled(strings.TrimSpace(w.WorkflowYAML) == "").OnClick(func() {
-			l.Confirm = &nativeConfirmation{"运行工作流？", "会创建真实 Agent 会话并执行定义的步骤。", func() {
-				if l.configBusy() {
-					l.Error = "正在应用连接配置，请稍后运行工作流"
-					return
-				}
-				a.operation("workflow-start", "POST", "/workflows", map[string]any{"yaml": w.WorkflowYAML}, func(any) { a.refreshWorkbench() })
-			}}
 		})
 	})
 }

@@ -72,18 +72,6 @@ export class EasyAgentManager {
         EA_ALLOW_NO_AUTH: "0",
         EA_ALLOWED_ORIGINS: "",
         EA_ENABLE_TERMINAL: "1",
-        ...(app.isPackaged
-          ? {
-              PATH:
-                path.join(process.resourcesPath, "runtime/bin") +
-                path.delimiter +
-                (process.env.PATH || ""),
-              EA_WORKFLOW_RUNTIME: path.join(
-                process.resourcesPath,
-                "workflow-runtime.mjs",
-              ),
-            }
-          : {}),
       };
       this.child = spawn(binary, ["serve", "--listen", `127.0.0.1:${port}`], {
         cwd: app.isPackaged ? app.getPath("home") : root,

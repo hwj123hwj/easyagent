@@ -7,13 +7,7 @@ revision=$(git rev-parse HEAD)
 # Never mix leftovers from another tag into an upload.
 [[ ! -e dist ]] || { echo 'dist already exists; use a clean checkout' >&2; exit 1; }
 mkdir dist
-(cd workflow-runtime && npm ci --ignore-scripts && npm run build)
-node workflow-runtime/output/workflow-runtime.mjs --check
-cp workflow-runtime/output/workflow-runtime.mjs dist/
 source_epoch=$(git show -s --format=%ct HEAD)
-tar --sort=name --mtime="@$source_epoch" --owner=0 --group=0 --numeric-owner \
-  -C workflow-runtime/vendor -cf - ZCODE-LICENSE ZCODE-NOTICE.md ZCODE-THIRD-PARTY-NOTICES.md SOURCE.md \
-  | gzip -n > dist/workflow-runtime-licenses.tar.gz
 # Generated output is ignored; source changes during bundle generation are not.
 [[ -z $(git status --porcelain --untracked-files=normal) ]] \
   || { echo 'Source changed during release build; publication refused' >&2; exit 1; }

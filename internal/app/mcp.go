@@ -249,7 +249,7 @@ func (a *App) ManageMCP(ctx context.Context, workspace, args string) (string, er
 }
 
 // BeginMCPEdit excludes new prompts and rejects edits while any integration is
-// in use. This also covers workflow actors and SDK-backed entries.
+// in use. This also covers SDK-backed entries.
 func (a *App) BeginMCPEdit() (func(), error) {
 	if !a.mcpState.gate.TryLock() {
 		return nil, errors.New("MCP 正在被任务使用，请先等任务结束或停止任务")

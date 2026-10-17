@@ -14,7 +14,6 @@ on:
       - 'scripts/check-desktop*.sh'
       - 'scripts/test_release*.py'
       - 'desktop/**'
-      - 'workflow-runtime/**'
       - 'CHANGELOG.md'
       - 'cmd/easyagent*/**'
 permissions:
@@ -42,8 +41,6 @@ jobs:
           - arch: arm64
             runner: macos-15
     runs-on: ${{ matrix.runner }}
-    env:
-      EA_DESKTOP_NODE_VERSION: v24.21.0
     steps:
       - uses: actions/checkout@v4
         with:

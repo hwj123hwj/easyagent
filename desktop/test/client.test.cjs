@@ -168,12 +168,12 @@ test("replay merges sequence cursor and final status", () => {
 });
 test("slash is parsed only as a command prefix, supports argument newlines and // escape", () => {
   assert.equal(parseCommand("//普通消息"), null);
-  assert.deepEqual(parseCommand("/workflow 第一行\n第二行"), {
-    name: "workflow",
+  assert.deepEqual(parseCommand("/compact 第一行\n第二行"), {
+    name: "compact",
     args: "第一行\n第二行",
   });
   assert(filterCommands("/m").some((c) => c.name === "mcp"));
-  assert.equal(filterCommands("/workflow 任务"), null);
+  assert.equal(filterCommands("/nonexistent 任务"), null);
 });
 test("transport retains prompt until accepted and reports an unsent message", async () => {
   let handler,
@@ -310,12 +310,12 @@ test("cancelled snapshots mark outstanding tools interrupted and clear approvals
   assert.equal(state.confirmations.length, 0);
   assert.equal(state.transcript.at(-1).status, "failed");
 });
-test("server catalog offers workflow subcommands without treating normal arguments as suggestions", () => {
+test("server catalog offers subcommands without treating normal arguments as suggestions", () => {
   const catalog = [
     {
-      name: "workflow",
-      label: "工作流",
-      description: "工作流",
+      name: "mcp",
+      label: "MCP",
+      description: "MCP 工具",
       subcommands: [
         { name: "run", description: "运行" },
         { name: "list", description: "列表" },
@@ -323,10 +323,10 @@ test("server catalog offers workflow subcommands without treating normal argumen
     },
   ];
   assert.equal(
-    filterCommands("/workflow r", catalog)[0].insert,
-    "/workflow run ",
+    filterCommands("/mcp r", catalog)[0].insert,
+    "/mcp run ",
   );
-  assert.equal(filterCommands("/workflow run 描述", catalog), null);
+  assert.equal(filterCommands("/mcp run 描述", catalog), null);
 });
 test("receipt snapshot explicitly resets a cursor after core restart without duplicating its user message", () => {
   let state = delta(accepted(), 99, "已产生部分结果");

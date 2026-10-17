@@ -14,7 +14,7 @@ Electron / React 客户端使用同一 Go 会话服务。个人任务以对话�
 
 正式桌面应用通过主进程代理 HTTP / WebSocket；远程令牌使用 Electron `safeStorage` 保存，不传给渲染器。不具备安全存储时拒绝保存秘密。连接状态、认证失败、启动错误与重试入口直接显示在界面中。切换主机不会取消旧主机上的任务。
 
-- 输入 `/` 查看共享命令目录，方向键选择，Tab / Enter 补全，Escape 关闭。`/workflow <任务>` 进入已有动态工作流引擎。
+- 输入 `/` 查看共享命令目录，方向键选择，Tab / Enter 补全，Escape 关闭。
 - 命令结果随当前会话保留，切换会话再返回仍可查看；关闭结果或重新连接后清除。
 - Enter 发送，Shift Enter 换行；服务确认接受前保留草稿。发送结果不确定时重试同一请求标识，避免重复任务。
 - 首段输出立即显示，后续增量按渲染帧合并；无逐字播放延迟。模型返回的思考内容实时展开并计时，结束后折叠，可重新展开；历史和断线恢复保留思考及耗时。未返回思考内容的模型只显示运行状态，不生成模拟思考。工具分组折叠，参数与结果可展开、复制；错误单独说明。
@@ -62,7 +62,7 @@ npm run dev
 
 浏览器预览在设置中连接自己的 Go 服务；跨域时需设置 `EA_ALLOWED_ORIGINS`。预览模式不具备 Electron 安全存储、进程管理或系统 OAuth 回调能力，不应作为正式远程入口。
 
-完整 Electron 开发使用 `npm run electron:dev`，需先构建 `../bin/easyagent` 和动态工作流 bundle（见 [工作流](DYNAMIC_WORKFLOW.md)）。首次安装依赖若跳过 scripts，应运行 `node node_modules/electron/install.js` 安装 Electron 运行时。
+完整 Electron 开发使用 `npm run electron:dev`，需先构建 `../bin/easyagent`。首次安装依赖若跳过 scripts，应运行 `node node_modules/electron/install.js` 安装 Electron 运行时。
 
 ## macOS 打包
 
@@ -71,7 +71,7 @@ npm run dev
 scripts/build-desktop.sh arm64
 ```
 
-脚本使用独立 `desktop/.bundle` 构建 Go 核心、工作流 bundle 与许可证，下载并核验官方便携 Node.js，随后检查 TypeScript、测试并打包。不会替换已有 CLI 或 8080 服务。输出在 `desktop/release.noindex/版本/架构`；包版本来自 `desktop/package.json`，本地打包不自动发布 GitHub Release。
+脚本使用独立 `desktop/.bundle` 构建 Go 核心，随后检查 TypeScript、测试并打包。不会替换已有 CLI 或 8080 服务。输出在 `desktop/release.noindex/版本/架构`；包版本来自 `desktop/package.json`，本地打包不自动发布 GitHub Release。
 
 macOS 测试包与安装包的临时挂载放在 `.noindex` 目录，并在检查结束后撤销应用及 Helper 注册，避免旧包反复出现在应用搜索中。原生 GUI 验收或 `electron:dev` 结束后先退出进程，再执行 `python3 scripts/unregister-desktop-apps.py <测试应用路径>`；开发运行时路径为 `desktop/node_modules/electron/dist/Electron.app`。日常安装仅保留 `/Applications/EasyAgent.app` 一份，不把多个测试构建作为启动入口。清理旧副本时保留用户数据及正在运行的应用。
 
@@ -96,7 +96,7 @@ macOS 测试包与安装包的临时挂载放在 `.noindex` 目录，并在检�
 
 审阅页按任务选择快照，只对有明确文件工具记录且未发生后续修改的文件开放逐文件撤回。撤回恢复任务开始前内容，保持 Git 暂存区；Bash/MCP 改动来源未确认时不开放撤回。快照最多 2000 个文件、32 MiB 总量、单文件 4 MiB；达到上限会提示并关闭不安全撤回。快照在服务数据目录，附件在项目目录，不自动过期，请纳入备份与清理策略。
 
-“技能与工作流”显示当前会话实际加载的能力；项目技能优先于同名个人技能，支持 `.agents/skills` 的网关同步符号链接，兼容 `.claude/skills`。修改技能后新建会话生效。MCP 默认使用结构化连接表单，高级 JSON 保留其他字段。文件标签与文本预览位置按连接、项目恢复。
+“技能”显示当前会话实际加载的能力；项目技能优先于同名个人技能，支持 `.agents/skills` 的网关同步符号链接，兼容 `.claude/skills`。修改技能后新建会话生效。MCP 默认使用结构化连接表单，高级 JSON 保留其他字段。文件标签与文本预览位置按连接、项目恢复。
 
 ### 上下文与压缩
 

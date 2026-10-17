@@ -21,12 +21,12 @@ func TestWebUI_ServesConsolePages(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "no-cache", w.Header().Get("Cache-Control"))
 	body := w.Body.String()
-	for _, want := range []string{"page-workflows", "page-sessions", "page-chat", "login-overlay"} {
+	for _, want := range []string{"page-sessions", "page-chat", "login-overlay"} {
 		assert.Contains(t, body, want)
 	}
 
 	// 新增模块可访问
-	for _, path := range []string{"/js/api.js", "/js/workflows.js", "/js/sessions.js", "/js/app.js"} {
+	for _, path := range []string{"/js/api.js", "/js/sessions.js", "/js/app.js"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)

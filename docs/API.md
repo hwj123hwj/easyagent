@@ -137,7 +137,7 @@ GET /ws
 
 `answers` 按问题顺序排列，每题必须有答案；单选题只允许一个选项或自定义文本，多选题可组合。无效答案返回 400 并保留待回答请求；过期/重复提交返回 409。`approved:false` 表示跳过，不会伪造答案。答案作为工具结果回传模型；无交互通道的入口不会直接返回提问成功。
 
-`access_mode` 为 `ask`（确认危险工具）或 `full`（自动批准普通工具）；仅在当前服务进程的会话内保留，活跃任务及工作流 Actor 返回 409。不会解决已经等待的批准，MCP 独立审批及工作区边界仍有效。
+`access_mode` 为 `ask`（确认危险工具）或 `full`（自动批准普通工具）；仅在当前服务进程的会话内保留，活跃任务返回 409。不会解决已经等待的批准，MCP 独立审批及工作区边界仍有效。
 
 工具被拒绝时，`tool_details.approval` 为 `declined`（流及历史均保留）；`is_error` 仍为 false，以避免将用户拒绝当作系统故障重试。
 
@@ -204,26 +204,6 @@ POST /sessions/{id}/model
 | `GET` | `/workspace/read-file-base64` | 以 base64 读取文件 |
 | `PUT` | `/workspace/write-file` | 写入文件内容 |
 
----
-
-## YAML 流水线
-
-多步骤 Agent 编排（DAG、fan-out、重试、人工确认门、步骤缓存）。YAML 规范与模板语法见 [WORKFLOW.md](WORKFLOW.md)。
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/workflows` | 提交工作流并启动运行（body 为 YAML 原文，或 `{"yaml":"...","vars":{...}}`），返回 `run_id` |
-| `GET` | `/workflows` | 列出全部运行（活跃 + 历史） |
-| `GET` | `/workflows/{id}` | 运行详情：`meta`（状态、各步骤、产出）+ `events`（journal） |
-| `POST` | `/workflows/{id}/cancel` | 取消运行；也用于清理重启后残留的孤儿运行 |
-| `POST` | `/workflows/{id}/approve` | 放行确认门（body 可选 `{"step":"..."}`，省略时须只有一个等待门） |
-| `POST` | `/workflows/{id}/reject` | 拒绝确认门，运行终态 `rejected` |
-
-```bash
-curl -s -H "Authorization: Bearer $EA_API_KEY" -X POST http://localhost:8080/workflows -H 'Content-Type: text/yaml' --data-binary @workflow.yaml
-# 202 {"run_id":"wf-1790344371-2333d68c","status":"running"}
-curl -s -H "Authorization: Bearer $EA_API_KEY" http://localhost:8080/workflows/wf-1790344371-2333d68c | jq .meta.status
-```
 
 ---
 
@@ -232,7 +212,6 @@ curl -s -H "Authorization: Bearer $EA_API_KEY" http://localhost:8080/workflows/w
 serve 模式内嵌网页控制台（浏览器打开 `http://<host>:<port>/`），无需独立前端：
 
 - **对话**：原有聊天界面（WebSocket 流式 + 会话侧栏 + 模型切换）。
-- **工作流**：动态流程、Actor、脚本、节点结果与恢复。
 - **流水线**：YAML DAG 提交、运行详情、审批与取消。
 - **设置**：托管飞书配置、配对、服务状态与 MCP 工具配置。
 - **会话**：会话列表、消息回看（含工具调用）、删除。
@@ -253,19 +232,6 @@ GET /health
 }
 ```
 
-
-## 动态工作流（ZCode 引擎）
-
-沿用 API 认证。创建由对话中的 `/workflow <任务>` 和 `create_workflow` 工具完成，Actor 继承父会话配置。
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/dynamic-workflows` | `runs` 摘要，以及运行组件 `available` / `error` |
-| GET | `/dynamic-workflows/{id}` | 状态、脚本、父会话、Actor 会话映射、节点快照与最终结果 |
-| POST | `/dynamic-workflows/{id}/cancel` | 取消运行，成功返回 202 |
-| POST | `/dynamic-workflows/{id}/resume` | body 必须为 `{"acknowledge_incomplete_actions":true}`；成功返回 202 及运行记录 |
-
-取消/恢复状态冲突返回 409，详情不存在返回 404。恢复重复使用已完成结果，未完成 ask 的外部操作可能重复执行。运行中的 Actor 会话拒绝外部聊天、命令、删除、压缩和模型修改请求（409）。协议详情与限制见 [DYNAMIC_WORKFLOW.md](DYNAMIC_WORKFLOW.md)。
 
 ## Slash 命令
 

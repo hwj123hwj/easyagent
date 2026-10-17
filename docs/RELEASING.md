@@ -9,7 +9,7 @@
 - MAJOR：1.0 之后不兼容的公开接口变更。当前仍处于 0.x，不为发布流程整改直接跳到 1.0。
 - 预发布用于验收，不标记为 GitHub Latest；正式发布只推进版本，不倒退。
 
-公开接口包括 CLI 参数、配置名、HTTP 协议及 `sdk/`。`desktop/package.json` 描述 Electron 客户端的包版本；从 `v0.2.0-alpha.1` 起，同一个 Release 包含 CLI、桥接、工作流和桌面，发布时该包版本必须与 tag 去掉 `v` 后一致。工作流 bundle 同样跟随该 tag 和提交。
+公开接口包括 CLI 参数、配置名、HTTP 协议及 `sdk/`。`desktop/package.json` 描述 Electron 客户端的包版本；从 `v0.2.0-alpha.1` 起，同一个 Release 包含 CLI、桥接和桌面，发布时该包版本必须与 tag 去掉 `v` 后一致。
 
 2026-10-01 按维护者明确要求，在备份旧 Pi Agent 的 Release 元数据、全部资产和 Git 标签对象后，清理 `v0.10.0` 至 `v0.11.0` 的公开 Release 与 tag，以 EasyAgent `v0.1.0` 重新开始。这是更名时的一次性迁移；提交历史不清理。后续**一个 tag 永远对应一个提交；不能删除重打、强推移动或覆盖已发布资产。** GitHub 的 Release immutability 对启用之后的新发布锁定资产；tag ruleset 保护 `v*` 标签免于移动、删除。[GitHub 不可变发布说明](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 
@@ -44,9 +44,9 @@ git push origin refs/tags/v0.1.1-rc.1
 ## 自动发布的强制检查
 
 1. 严格版本格式；附注 tag；HEAD 与 tag 一致；提交已进入 main；版本高于现有版本；对应 CHANGELOG 节非空。
-2. 复用完整 Verify：动态工作流测试、Go 测试/vet、Bubble Tea、Web、桌面 TypeScript / 测试 / 构建、更新器，以及发布与安装脚本测试。
-3. 同一 SHA 构建 Linux/macOS、amd64/arm64 的核心与桥接共 8 个程序。注入相同版本，并验证 Linux 程序的 `--version`；Node bundle 与许可文件一起构建。桌面 DMG 仅在 Apple Silicon runner 构建并核验包版本、内置核心的源码 SHA 与架构、Node、工作流、许可证及 DMG 内部内容，并检查包内应用的完整 ad hoc 签名；Intel 安装包自 v0.11.0 起不再构建。
-4. 汇集 8 个核心及桥接程序、工作流 bundle、工作流许可归档和 1 个 DMG，生成完整 `release.json`（版本、完整提交 SHA、各资产 SHA-256）和 `checksums.txt`，共 13 项资产。Linux core 阶段的 `core_only` 清单不能发布；缺失任一 DMG、空文件、错版本文件名、额外旧文件或校验失败都会阻止发布。
+2. 复用完整 Verify：Go 测试/vet、Bubble Tea、Web、桌面 TypeScript / 测试 / 构建、更新器，以及发布与安装脚本测试。
+3. 同一 SHA 构建 Linux/macOS、amd64/arm64 的核心与桥接共 8 个程序。注入相同版本，并验证 Linux 程序的 `--version`。桌面 DMG 仅在 Apple Silicon runner 构建并核验包版本、内置核心的源码 SHA 与架构及 DMG 内部内容，并检查包内应用的完整 ad hoc 签名；Intel 安装包自 v0.11.0 起不再构建。
+4. 汇集 8 个核心及桥接程序和 1 个 DMG，生成完整 `release.json`（版本、完整提交 SHA、各资产 SHA-256）和 `checksums.txt`，共 11 项资产。Linux core 阶段的 `core_only` 清单不能发布；缺失任一 DMG、空文件、错版本文件名、额外旧文件或校验失败都会阻止发布。
 5. 先建草稿，上传全部资产，核对 GitHub 返回的各文件 digest，再一次性公开；已公开版本拒绝重传。失败只保留草稿供检查，不公开半套文件。
 
 发布相关脚本变更还会运行 `Release build check`：在临时仓库创建仅供测试的 tag，实际构建所有核心目标及两个桌面目标，不向 GitHub 推送测试 tag，也不创建 Release。
@@ -63,9 +63,9 @@ macOS 桌面从 Release 下载 `EasyAgent-版本-arm64.dmg`（Apple Silicon）�
 EA_VERSION=v0.1.0 bash scripts/install.sh
 ```
 
-脚本校验 SHA-256 和程序报告的版本后才替换文件，新版同时安装核心、桥接、工作流 bundle 与许可归档。下载或校验失败保留旧安装；不再偷偷回退到 main 编译。安装器仍识别旧 `pi-agent-*` 资产，但本仓库旧公开 Release 已在更名迁移中清理。旧程序的 `--version` 存在启动副作用，因此安装器不会执行它来探测版本。
+脚本校验 SHA-256 和程序报告的版本后才替换文件，新版同时安装核心与桥接。下载或校验失败保留旧安装；不再偷偷回退到 main 编译。安装器仍识别旧 `pi-agent-*` 资产，但本仓库旧公开 Release 已在更名迁移中清理。旧程序的 `--version` 存在启动副作用，因此安装器不会执行它来探测版本。
 
-从带工作流 bundle 的新版降级到没有 bundle 的历史版本，应使用独立 `EA_HOME`，防止混用组件。安装器适合 CLI 安装，不负责生产服务的并发切换；正在运行的迷你主机继续使用其带锁和健康回滚的更新器。
+安装器适合 CLI 安装，不负责生产服务的并发切换；正在运行的迷你主机继续使用其带锁和健康回滚的更新器。
 
 SHA-256 用于检测下载损坏，信任根仍是 GitHub HTTPS 和发布权限。新版 Release 同时受 GitHub 不可变发布保护；下载完整资产后可运行 `sha256sum --check checksums.txt` 核验，macOS 可用 `shasum -a 256 -c checksums.txt`。
 

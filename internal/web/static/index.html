@@ -17,8 +17,6 @@
       </div>
       <div class="nav-tabs">
         <button class="nav-tab active" data-page="page-chat">对话</button>
-        <button class="nav-tab" data-page="page-dynamic-workflows">工作流</button>
-        <button class="nav-tab" data-page="page-workflows">流水线</button>
         <button class="nav-tab" data-page="page-sessions">会话</button>
         <button class="nav-tab" data-page="page-settings">设置</button>
       </div>
@@ -108,77 +106,6 @@
     </div>
 
     <section id="command-menu" class="command-menu" aria-label="斜杠命令" hidden><div class="command-menu-heading">快捷命令 <span>补全后再按 Enter 执行</span></div><div id="command-options" role="listbox" aria-label="可用命令"></div><p id="command-empty" hidden>没有匹配的命令。输入 / 查看列表；以 // 开头可发送普通文本。</p><div class="command-menu-hint">↑ ↓ 选择 · Tab / Enter 补全 · Esc 关闭</div></section>
-
-    <div id="page-dynamic-workflows" class="page" hidden>
-      <div class="dw-layout">
-        <section class="dw-list-panel" aria-labelledby="dw-heading">
-          <div class="panel-header"><h3 id="dw-heading">动态工作流</h3><button id="dw-refresh" class="btn btn-ghost">刷新</button></div>
-          <p class="dw-intro">描述目标，由 Agent 设计分工、并行任务和执行逻辑。</p>
-          <button id="dw-create" class="btn btn-primary">在对话中创建</button>
-          <p id="dw-notice" class="dw-notice" role="status"></p>
-          <div id="dw-list" class="dw-list"></div>
-        </section>
-        <section id="dw-detail" class="dw-detail" aria-label="工作流详情">
-          <p class="dw-empty">使用 <code>/workflow 任务描述</code> 开始，或选择左侧运行记录查看过程。</p>
-        </section>
-      </div>
-    </div>
-    <!-- Page: Workflows -->
-    <div id="page-workflows" class="page" hidden>
-      <div class="wf-layout">
-        <section class="wf-submit">
-          <div class="panel-header">
-            <div><h3>流水线</h3></div>
-            <div class="wf-mode-switch">
-              <button id="wf-mode-form" class="btn btn-sm active">表单</button>
-              <button id="wf-mode-yaml" class="btn btn-sm">YAML</button>
-            </div>
-          </div>
-          <div class="wf-templates">
-            <span class="wf-templates-label">模板</span>
-            <div id="wf-template-chips" class="wf-template-chips"></div>
-          </div>
-
-          <div id="wf-form" class="wf-form"></div>
-
-          <textarea id="wf-yaml" class="wf-yaml" spellcheck="false" hidden
-            placeholder="name: my-pipeline&#10;steps:&#10;  - id: draft&#10;    prompt: &quot;写一个大纲&quot;"></textarea>
-
-          <pre id="wf-yaml-preview" class="wf-yaml-preview" hidden></pre>
-
-          <div class="wf-submit-actions">
-            <span id="wf-submit-msg" class="wf-msg"></span>
-            <button id="wf-preview-btn" class="btn btn-ghost">预览 YAML</button>
-            <button id="wf-submit-btn" class="btn btn-primary">运行</button>
-          </div>
-        </section>
-
-        <section class="wf-runs">
-          <div class="panel-header">
-            <h3>运行记录</h3>
-            <button id="wf-refresh-btn" class="btn btn-ghost">刷新</button>
-          </div>
-          <div id="wf-run-list" class="wf-run-list"></div>
-
-          <div id="wf-detail" class="wf-detail" hidden>
-            <div class="panel-header">
-              <h3 id="wf-detail-title">运行详情</h3>
-              <div class="wf-detail-actions">
-                <button id="wf-approve-btn" class="btn btn-approve" hidden>批准</button>
-                <button id="wf-reject-btn" class="btn btn-reject" hidden>拒绝</button>
-                <button id="wf-cancel-btn" class="btn btn-danger" hidden>取消</button>
-                <button id="wf-close-btn" class="btn btn-ghost">关闭</button>
-              </div>
-            </div>
-            <div id="wf-steps" class="wf-steps"></div>
-            <h4 class="wf-section-title">产出</h4>
-            <div id="wf-outputs" class="wf-outputs"></div>
-            <h4 class="wf-section-title">事件</h4>
-            <div id="wf-events" class="wf-events"></div>
-          </div>
-        </section>
-      </div>
-    </div>
 
     <!-- Page: Sessions -->
     <div id="page-sessions" class="page" hidden>

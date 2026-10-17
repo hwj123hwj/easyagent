@@ -67,7 +67,7 @@ HELPER="$HELPER_APP/Contents/MacOS/easyagent-cua-helper"
 [[ $(plutil -extract CFBundleShortVersionString raw -o - "$HELPER_APP/Contents/Info.plist") == "$VERSION" ]]
 codesign --verify --deep --strict "$HELPER_APP"
 node desktop/scripts/macos-signing.cjs verify "$HELPER_APP" com.easyagent.cua-helper
-for binary in "$HELPER" "$APP/Contents/MacOS/EasyAgent" "$RESOURCES/easyagent" "$RESOURCES/runtime/bin/node"; do
+for binary in "$HELPER" "$APP/Contents/MacOS/EasyAgent" "$RESOURCES/easyagent"; do
   [[ -f "$binary" && -x "$binary" && $(lipo -archs "$binary") == "$MACH_ARCH" ]] \
     || { echo "Installer has an invalid $ARCH executable: $binary" >&2; exit 1; }
 done
@@ -87,14 +87,8 @@ for (const file of ['scripts/macos-signing.cjs','scripts/sign-adhoc.cjs','script
   if (!extractFile(process.argv[2],file).length) throw Error('Installer lacks the fixed-identity update runtime: '+file);
 }
 JS
-for license in Node-LICENSE ZCODE-LICENSE ZCODE-NOTICE.md ZCODE-THIRD-PARTY-NOTICES.md SOURCE.md; do
-  [[ -s "$RESOURCES/licenses/$license" ]] || { echo "Missing runtime license: $license" >&2; exit 1; }
-done
-[[ -s "$RESOURCES/workflow-runtime.mjs" ]]
 if [[ $(node -p process.arch) == "$ARCH" ]]; then
   python3 scripts/test_cua_helper.py "$HELPER" --no-tcc
   [[ $("$RESOURCES/easyagent" --version) == "easyagent v$VERSION" ]]
-  "$RESOURCES/runtime/bin/node" -e 'if(Number(process.versions.node.split(".")[0])<22)throw Error("Unsupported bundled Node version")'
-  "$RESOURCES/runtime/bin/node" "$RESOURCES/workflow-runtime.mjs" --check
 fi
 echo "Verified installer: EasyAgent-$VERSION-$ARCH.dmg at $REVISION"

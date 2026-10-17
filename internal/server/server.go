@@ -25,7 +25,6 @@ import (
 	"github.com/hwj123hwj/easyagent/sdk/ai"
 	"github.com/hwj123hwj/easyagent/sdk/runtime"
 	"github.com/hwj123hwj/easyagent/sdk/slashcmd"
-	"github.com/hwj123hwj/easyagent/sdk/workflow"
 )
 
 // Version is the server build version. Set by main.go via SetVersion().
@@ -58,10 +57,6 @@ type Server struct {
 	baseURL           string                                          // 本机自呼地址（ListenAndServe 时归一化），进程内飞书桥接回调核心 API 用
 	localBridge       feishuBridge                                    // 非 systemd 托管主机上随 serve 运行的进程内飞书桥接
 	localBridgeRunner func(ctx context.Context, baseURL string) error // 测试注入；nil 用真实实现
-
-	wfMu      sync.Mutex
-	wfReg     *workflow.Registry
-	wfFactory workflow.RunnerFactory
 
 	allowNoAuth    bool     // EA_ALLOW_NO_AUTH=1：未配 key 时完全开放（调试用）
 	allowedOrigins []string // EA_ALLOWED_ORIGINS：显式 CORS 白名单；空 = 不返回 CORS 头
@@ -229,10 +224,6 @@ func (s *Server) Handler() http.Handler {
 	// Knowledge base browser endpoints
 	s.registerKBRoutes(restMux)
 
-	// Workflow orchestration endpoints
-	s.registerWorkflowRoutes(restMux)
-	s.registerDynamicWorkflowRoutes(restMux)
-
 	s.registerFeishuSettings(restMux)
 	s.registerMCPRoutes(restMux)
 
@@ -279,10 +270,6 @@ func (s *Server) Handler() http.Handler {
 	topMux.Handle("/kb/", restHandler)
 	topMux.Handle("/skills/market", restHandler)
 	topMux.Handle("/skills/market/", restHandler)
-	topMux.Handle("/dynamic-workflows", restHandler)
-	topMux.Handle("/dynamic-workflows/", restHandler)
-	topMux.Handle("/workflows", restHandler)
-	topMux.Handle("/workflows/", restHandler)
 	topMux.Handle("/profile", restHandler)
 	topMux.Handle("/settings/", restHandler)
 	topMux.Handle("/asr/", restHandler)
@@ -525,9 +512,6 @@ func (s *Server) getSessionMessages(w http.ResponseWriter, r *http.Request) {
 // ─── DELETE /sessions/{id} ────────────────────────────────────────────────────
 
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
-	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
-		return
-	}
 	sessionID := r.PathValue("id")
 	s.runs.mu.Lock()
 	defer s.runs.mu.Unlock()
@@ -742,9 +726,6 @@ type SwitchModelRequest struct {
 }
 
 func (s *Server) switchModel(w http.ResponseWriter, r *http.Request) {
-	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
-		return
-	}
 	sessionID := r.PathValue("id")
 
 	var req SwitchModelRequest
@@ -791,9 +772,6 @@ type CompactResponse struct {
 }
 
 func (s *Server) compactSession(w http.ResponseWriter, r *http.Request) {
-	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
-		return
-	}
 	sessionID := r.PathValue("id")
 	if s.rejectActiveRun(w, sessionID) {
 		return
@@ -849,9 +827,6 @@ type CommandResponse struct {
 }
 
 func (s *Server) executeCommand(w http.ResponseWriter, r *http.Request) {
-	if s.rejectActiveWorkflowActor(w, r.PathValue("id")) {
-		return
-	}
 	sessionID := r.PathValue("id")
 	if s.rejectActiveRun(w, sessionID) {
 		return
@@ -1544,9 +1519,6 @@ func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // setSessionPermissions does not resolve an already pending approval or change a busy run.
 func (s *Server) setSessionPermissions(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if s.rejectActiveWorkflowActor(w, id) {
-		return
-	}
 	var req struct {
 		Mode string `json:"mode"`
 	}
