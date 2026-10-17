@@ -435,7 +435,19 @@ func (a *preview) liveComposer(c *ui.Context) {
 					flatButton(c, "", "/").Label("斜杠命令").OnClick(func() { a.toggleMenu(&a.SlashMenu) })
 					ui.Spacer(c)
 					if l.Voice != nil {
-						ui.Text(c, fmt.Sprintf("录音 %ds", int(time.Since(l.VoiceStarted).Seconds()))).FontSize(11).TextColor(c.Theme().Danger)
+						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+							ui.Row(c).Gap(2).AlignItems(ui.Center).Height(18).Children(func() {
+								levels := [6]float32{.2, .3, .2, .4, .3, .2}
+								if l.Voice != nil {
+									levels = l.Voice.Levels()
+								}
+								for _, lvl := range levels {
+									h := max(4, lvl*16)
+									ui.Box(c).Width(3).Height(h).Radius(1.5).Background(c.Theme().Accent)
+								}
+							})
+							ui.Text(c, fmt.Sprintf("录音 %ds", int(time.Since(l.VoiceStarted).Seconds()))).FontSize(11).TextColor(c.Theme().Accent)
+						})
 						iconButton(c, "x", "取消录音").OnClick(a.cancelVoice)
 						iconButton(c, "stop", "结束录音并转写").OnClick(a.startVoice)
 					} else {

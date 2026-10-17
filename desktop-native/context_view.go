@@ -163,16 +163,30 @@ func (a *preview) contextUsagePanel(c *ui.Context, s *session) {
 		if window := number(u["context_window"]); window > 0 {
 			ui.Progress(c, min(1, number(u["estimated_tokens"])/window)).Height(6).FillWidth()
 		}
-		for _, row := range []struct{ label, key string }{{"消息", "messages"}, {"系统提示词", "system"}, {"工具定义", "tools"}} {
+		for _, row := range []struct{ label, key string }{{"消息内容", "messages"}, {"系统提示词", "system"}, {"工具定义", "tools"}} {
 			ui.Row(c).Children(func() { a.note(c, row.label); ui.Spacer(c); a.note(c, formatCount(u[row.key])) })
 		}
 		a.note(c, "图片等多模态内容未计入，实际用量以模型返回为准。")
 		if !boolean(u["window_known"]) {
 			a.note(c, "模型容量尚未登记，分母为运行时默认预算。")
 		}
-		if last := object(u["last_request"]); number(last["input_tokens"]) > 0 {
+		if last := object(u["last_request"]); number(last["input_tokens"]) > 0 || number(last["output_tokens"]) > 0 {
+			ui.Divider(c)
 			ui.Text(c, "最近一次模型请求 · 实际").FontSize(12).FontWeight(600)
-			a.note(c, "输入 "+formatCount(last["input_tokens"])+" · 输出 "+formatCount(last["output_tokens"]))
+			inTok := number(last["input_tokens"])
+			outTok := number(last["output_tokens"])
+			cachedTok := number(last["cached_input_tokens"])
+			ui.Row(c).Children(func() {
+				a.note(c, "输入 "+formatCount(inTok)+" · 输出 "+formatCount(outTok))
+				if cachedTok > 0 && inTok+cachedTok > 0 {
+					ui.Spacer(c)
+					hitRate := 100 * cachedTok / (cachedTok + inTok)
+					ui.Text(c, fmt.Sprintf("缓存命中 %.0f%%", hitRate)).FontSize(11).TextColor(c.Theme().Accent)
+				}
+			})
+			if cachedTok > 0 {
+				a.note(c, fmt.Sprintf("Prompt Caching 复用 %s tokens", formatCount(cachedTok)))
+			}
 		}
 	})
 }

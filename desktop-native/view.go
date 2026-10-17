@@ -551,6 +551,8 @@ func (a *preview) conversationMessage(key *ui.Context, s *session, i int, m *mes
 		})
 	} else if m.Kind == "error" {
 		ui.Text(key, m.Text).TextColor(c.Theme().Danger).FontSize(13).Role(ui.RoleStatus)
+	} else if m.Kind == "thought" {
+		a.nativeThought(key, s, i, m)
 	} else if m.Tool != "" {
 		a.tool(key, m)
 	} else {

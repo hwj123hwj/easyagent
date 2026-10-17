@@ -13,7 +13,10 @@ import (
 	"github.com/egoist/mygo"
 )
 
-type voiceRecorder interface{ Stop() ([]byte, error) }
+type voiceRecorder interface {
+	Stop() ([]byte, error)
+	Levels() [6]float32
+}
 
 func pcmWAV(pcm []byte) []byte {
 	data := make([]byte, 44+len(pcm))

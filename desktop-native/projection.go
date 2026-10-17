@@ -135,9 +135,20 @@ func object(v any) map[string]any {
 	}
 	return m
 }
-func list(v any) []any     { s, _ := v.([]any); return s }
-func boolean(v any) bool   { b, _ := v.(bool); return b }
-func number(v any) float64 { n, _ := v.(float64); return n }
+func list(v any) []any   { s, _ := v.([]any); return s }
+func boolean(v any) bool { b, _ := v.(bool); return b }
+func number(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return 0
+	}
+}
 func (s *session) history(records []storedMessage) {
 	s.Messages = nil
 	s.Plan = nil

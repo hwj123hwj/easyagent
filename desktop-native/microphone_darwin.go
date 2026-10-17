@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"math"
 	"sync"
 	"unsafe"
 
@@ -26,6 +27,7 @@ type microphone struct {
 	pcm     []byte
 	stopped bool
 	token   uintptr
+	levels  [6]float32
 }
 
 var audioAPI struct {
@@ -71,7 +73,34 @@ func startMicrophone() (voiceRecorder, error) {
 				return
 			}
 			if buf.Data != 0 && buf.Size > 0 && buf.Size <= buf.Capacity && len(m.pcm)+int(buf.Size) <= 20<<20 {
-				m.pcm = append(m.pcm, unsafe.Slice((*byte)(nativePointer(buf.Data)), int(buf.Size))...)
+				dataSlice := unsafe.Slice((*byte)(nativePointer(buf.Data)), int(buf.Size))
+				m.pcm = append(m.pcm, dataSlice...)
+				sampleCount := int(buf.Size) / 2
+				if sampleCount > 0 {
+					samples := unsafe.Slice((*int16)(nativePointer(buf.Data)), sampleCount)
+					var sumSquares float64
+					for _, s := range samples {
+						val := float64(s) / 32768.0
+						sumSquares += val * val
+					}
+					rms := math.Sqrt(sumSquares / float64(sampleCount))
+					// 8% noise floor gating (Claude algorithm 2 & 6)
+					const noiseFloor = 0.08
+					clean := 0.0
+					if rms > noiseFloor {
+						clean = (rms - noiseFloor) / (1.0 - noiseFloor)
+					}
+					// Gamma 0.7 power compression
+					compressed := float32(math.Min(1.0, math.Pow(clean, 0.7)*1.8))
+					weights := [6]float32{0.65, 0.9, 1.0, 0.95, 0.8, 0.55}
+					for i := 0; i < 6; i++ {
+						target := compressed * weights[i]
+						if target > 1.0 {
+							target = 1.0
+						}
+						m.levels[i] = m.levels[i]*0.35 + target*0.65
+					}
+				}
 			}
 			m.mu.Unlock()
 			_ = audioAPI.enqueue(queue, buffer, 0, 0)
@@ -125,4 +154,10 @@ func (m *microphone) Stop() ([]byte, error) {
 		return nil, errors.New("没有录到声音，请检查麦克风权限")
 	}
 	return pcmWAV(m.pcm), nil
+}
+
+func (m *microphone) Levels() [6]float32 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.levels
 }

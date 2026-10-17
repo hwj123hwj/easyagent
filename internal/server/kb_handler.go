@@ -141,11 +141,11 @@ func (s *Server) kbStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	report := kbtools.GenerateHealthReport(idx)
+	cats := kbtools.CategoryOverview(idx)
 	writeJSON(w, kbStatsResponse{
-		TotalEntries: report.TotalEntries,
-		Categories:   report.Categories,
-		Tags:         report.Tags,
+		TotalEntries: len(idx.Entries),
+		Categories:   len(cats),
+		Tags:         kbtools.CountTagsDistinct(idx),
 		RepoPath:     repoPath,
 	})
 }

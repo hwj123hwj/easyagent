@@ -34,7 +34,7 @@ var (
 	cachedIndex   *Index
 	cachedAt      time.Time
 	cacheMu       sync.Mutex
-	cacheDuration = 30 * time.Second
+	cacheDuration = 5 * time.Minute
 )
 
 // skipFiles are filenames that should not be indexed (auto-generated or non-knowledge).
@@ -80,7 +80,14 @@ func GetIndex(repoPath string) (*Index, error) {
 
 	idx := &Index{Root: repoPath}
 	err := filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			name := info.Name()
+			if name == ".git" || name == ".claude" || name == "node_modules" || name == "devops" || name == "scripts" || name == "hooks" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		// Only index .md files
@@ -107,7 +114,7 @@ func GetIndex(repoPath string) (*Index, error) {
 			}
 		}
 
-		entry := parseEntry(path, repoPath)
+		entry := parseEntry(path, repoPath, info)
 		entry.RelPath = relPath
 		idx.Entries = append(idx.Entries, entry)
 		return nil
@@ -138,8 +145,13 @@ func ClearCache() {
 //   - chatgpt-export/doubao-export conversations (# Title\n> URL...\n## 👤 User)
 //   - project-journals (# Title\n> 自动生成于...)
 //   - Legacy markdown (# Title\n\n**Tags**: a, b\n\nbody)
-func parseEntry(absPath, repoPath string) Entry {
-	info, _ := os.Stat(absPath)
+func parseEntry(absPath, repoPath string, fileInfo ...os.FileInfo) Entry {
+	var info os.FileInfo
+	if len(fileInfo) > 0 && fileInfo[0] != nil {
+		info = fileInfo[0]
+	} else {
+		info, _ = os.Stat(absPath)
+	}
 	entry := Entry{
 		Path:     absPath,
 		Modified: modTime(info),

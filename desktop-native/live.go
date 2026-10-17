@@ -221,6 +221,17 @@ func (a *preview) liveTick() bool {
 		a.pollQR()
 		changed = true
 	}
+	w := &l.Workbench
+	if !w.KBSearchAt.IsZero() && !time.Now().Before(w.KBSearchAt) {
+		w.KBSearchAt = time.Time{}
+		if a.Workbench && !a.Settings.Open && w.Tab == "kb" && w.KBView == "" && w.KBPath == "" {
+			a.refreshWorkbench()
+			changed = true
+		}
+	}
+	if l.Voice != nil {
+		changed = true
+	}
 	return changed
 }
 func (a *preview) background(work func(context.Context, *backendClient) (any, error), done func(any)) {
@@ -394,7 +405,14 @@ func (a *preview) receive(e envelope) {
 		if s.RemoteID != e.SessionID {
 			continue
 		}
-		following := s.Scroll.Y >= s.Scroll.MaxY-12
+		now := time.Now()
+		if s.Scroll.Y < s.LastUserScrollY-2 {
+			s.ScrollCooldown = now.Add(200 * time.Millisecond)
+		}
+		s.LastUserScrollY = s.Scroll.Y
+		inBottomTolerance := s.Scroll.MaxY <= 0 || s.Scroll.Y >= s.Scroll.MaxY-40
+		cooldownActive := now.Before(s.ScrollCooldown)
+		following := inBottomTolerance && !cooldownActive
 		if e.Type == "accepted" && e.RequestID == s.PendingRequest || e.Type == "snapshot" && e.Run != nil && e.Run.RequestID == s.PendingRequest {
 			if s.Draft == s.SentDraft {
 				s.Draft = ""

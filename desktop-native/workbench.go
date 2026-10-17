@@ -37,6 +37,8 @@ type nativeFile struct {
 	Image                                      *ui.Bitmap
 }
 type nativeWorkbench struct {
+	KBList                                                                           ui.ListState
+	KBTags                                                                           ui.GridState
 	KBSearchAt                                                                       time.Time
 	SavedFiles                                                                       map[string]fileWorkspace
 	RestoredFiles                                                                    map[string]bool
@@ -50,6 +52,7 @@ type nativeWorkbench struct {
 	SearchFiles                                                                      []string
 	CompactInstructions                                                              string
 	Tab, Directory, Search, ActiveFile, SelectedRun, SelectedChange, KBQuery, KBPath string
+	KBEntry                                                                          map[string]any
 	Files                                                                            map[string]*nativeFile
 	Tabs                                                                             []string
 	Diff                                                                             *editor.DiffState
@@ -113,12 +116,16 @@ func (a *preview) refreshWorkbench() {
 		a.resource("profile", "/profile")
 	case "kb":
 		a.resource("kb", "/kb/entries"+query(map[string]string{"q": w.KBQuery, "category": w.KBCategory, "tag": w.KBTag}))
-		a.resource("kb-stats", "/kb/stats")
-		a.resource("kb-categories", "/kb/categories")
-		if w.KBView == "tags" {
+		if l.Data["kb-stats"] == nil {
+			a.resource("kb-stats", "/kb/stats")
+		}
+		if l.Data["kb-categories"] == nil {
+			a.resource("kb-categories", "/kb/categories")
+		}
+		if w.KBView == "tags" && l.Data["kb-tags"] == nil {
 			a.resource("kb-tags", "/kb/tags")
 		}
-		if w.KBView == "health" {
+		if w.KBView == "health" && l.Data["kb-health"] == nil {
 			a.resource("kb-health", "/kb/health")
 		}
 	}
@@ -154,7 +161,15 @@ func (a *preview) liveWorkbench(c *ui.Context) {
 			ui.Row(c).Height(44).Padding(0, 12).Gap(8).AlignItems(ui.Center).Children(func() {
 				a.text(c, title).FontSize(13).FontWeight(500)
 				ui.Spacer(c)
-				iconButton(c, "refresh", "刷新工作台").OnClick(a.refreshWorkbench)
+				iconButton(c, "refresh", "刷新工作台").OnClick(func() {
+					if l != nil && l.Workbench.Tab == "kb" {
+						delete(l.Data, "kb-stats")
+						delete(l.Data, "kb-categories")
+						delete(l.Data, "kb-tags")
+						delete(l.Data, "kb-health")
+					}
+					a.refreshWorkbench()
+				})
 				iconButton(c, "x", "关闭工作台").OnClick(func() { a.Workbench = false })
 			})
 			switch w.Tab {
@@ -510,13 +525,37 @@ func (a *preview) resizeEdge(c *ui.Context, label string, vertical bool, value, 
 			save(next)
 		}
 	}
+	clickTime := ui.Local(edge, "clickTime", func() time.Time {
+		return time.Time{}
+	})
+	edge.OnClick(func() {
+		now := time.Now()
+		if !clickTime.IsZero() && now.Sub(*clickTime) < 350*time.Millisecond {
+			if !vertical {
+				defaultWidth := float32(440)
+				if defaultWidth < minimum || defaultWidth > maximum {
+					defaultWidth = (minimum + maximum) / 2
+				}
+				set(defaultWidth)
+			}
+			*clickTime = time.Time{}
+		} else {
+			*clickTime = now
+		}
+	})
 	if dx, dy, held := edge.Dragged(); held {
 		if vertical {
-			if dy != 0 {
+			if dy < -4 || dy > 4 {
 				set(value - dy)
 			}
-		} else if dx != 0 {
-			set(value - dx)
+		} else {
+			if value-dx < minimum-40 {
+				a.Workbench = false
+				return
+			}
+			if dx < -4 || dx > 4 {
+				set(value - dx)
+			}
 		}
 	}
 	edge.HandleInput(func(ev ui.InputEvent) bool {

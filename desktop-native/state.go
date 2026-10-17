@@ -5,6 +5,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"math"
 	"strings"
+	"time"
 )
 
 type message struct {
@@ -49,6 +50,8 @@ type session struct {
 	Messages                                     []*message
 	Archived                                     bool
 	Scroll                                       ui.ScrollState
+	ScrollCooldown                               time.Time
+	LastUserScrollY                              float32
 	Running                                      bool
 	Pending                                      bool
 	Reply                                        []rune
@@ -152,7 +155,10 @@ func (a *preview) fork(index int) {
 	a.Search = ""
 	a.selectSession(s.ID)
 }
-func follow(s *session) { s.Scroll.Y = math.MaxFloat32 }
+func follow(s *session) {
+	s.ScrollCooldown = time.Time{}
+	s.Scroll.Y = math.MaxFloat32
+}
 func (a *preview) submit() {
 	if a.Live != nil {
 		a.submitLive()

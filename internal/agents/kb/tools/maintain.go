@@ -263,8 +263,8 @@ func TagOverview(idx *Index) []TagStat {
 
 // ── Tag Stats helper ──────────────────────────────────────────────────────
 
-// countTagsDistinct returns the number of distinct tags across all entries.
-func countTagsDistinct(idx *Index) int {
+// CountTagsDistinct returns the number of distinct tags across all entries.
+func CountTagsDistinct(idx *Index) int {
 	seen := make(map[string]bool)
 	for _, e := range idx.Entries {
 		for _, t := range e.Tags {
