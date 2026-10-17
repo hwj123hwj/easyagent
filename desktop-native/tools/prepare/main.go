@@ -55,11 +55,20 @@ func copyFile(from, to string) {
 		panic(err)
 	}
 }
+
+// Resources are generated build output; never carry files from older releases.
+func resetResources(target string) error {
+	if err := os.RemoveAll(target); err != nil {
+		return err
+	}
+	return os.MkdirAll(target, 0755)
+}
+
 func main() {
 	cwd, _ := os.Getwd()
 	root := filepath.Dir(cwd)
 	target := filepath.Join(cwd, "resources", runtime.GOOS+"-"+runtime.GOARCH)
-	if err := os.MkdirAll(target, 0755); err != nil {
+	if err := resetResources(target); err != nil {
 		panic(err)
 	}
 	sha, err := exec.Command("git", "-C", root, "rev-parse", "--short", "HEAD").Output()
