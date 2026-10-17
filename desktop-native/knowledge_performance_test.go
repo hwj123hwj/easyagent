@@ -57,7 +57,7 @@ func TestKnowledgeVirtualizedEntriesAndTags(t *testing.T) {
 			if view == "" {
 				a.Live.Workbench.KBList.ScrollTo(3406, ui.End)
 			} else {
-				a.Live.Workbench.KBTags.ScrollTo(6303, ui.End)
+				a.Live.Workbench.KBTags.ScrollTo(len(a.Live.Workbench.KBCloud.rows)-1, ui.End)
 				label = "标签：知识标签 6303"
 			}
 			tt.Frame()
@@ -99,5 +99,87 @@ func TestKnowledgeHealthVirtualizesExpandedFindings(t *testing.T) {
 	}
 	if _, ok := tt.Find("知识条目 0000 docs/0.md"); !ok {
 		t.Fatal("missing visible finding")
+	}
+}
+
+func TestKnowledgeTagCloudParityAndCache(t *testing.T) {
+	a := knowledgeFixture(t, "tags")
+	tags := []any{map[string]any{"name": "常用", "count": 100}, map[string]any{"name": "少用", "count": 1}}
+	a.Live.Data["kb-tags"] = map[string]any{"tags": tags}
+	a.Live.Workbench.KBCategory = "docs"
+	a.Live.Workbench.KBQuery = "preserve"
+	tt := ui.NewTester(a.View, 1240, 820)
+	cloud := &a.Live.Workbench.KBCloud
+	if cloud.tags[0].size != 22 || cloud.tags[1].size != 12 {
+		t.Fatalf("lost frequency sizing: %+v", cloud.tags)
+	}
+	first := &cloud.tags[0]
+	tt.Frame()
+	if first != &cloud.tags[0] {
+		t.Fatal("remeasured unchanged tags")
+	}
+	click(t, tt, "标签：常用")
+	w := &a.Live.Workbench
+	if w.KBView != "tags" || w.KBActiveTag != "常用" || w.KBCategory != "docs" || w.KBQuery != "preserve" {
+		t.Fatal("tag drilldown changed browse filters")
+	}
+	a.Live.Data["kb-tag-entries"] = map[string]any{"entries": []any{map[string]any{"title": "目标文章", "rel_path": "target.md"}}}
+	tt.Frame()
+	click(t, tt, "知识条目：目标文章")
+	if w.KBPath != "target.md" {
+		t.Fatal("entry did not open")
+	}
+	click(t, tt, "返回")
+	if w.KBView != "tags" || w.KBActiveTag != "常用" {
+		t.Fatal("detail lost tag context")
+	}
+	click(t, tt, "返回标签云")
+	if w.KBActiveTag != "" {
+		t.Fatal("tag cloud did not return")
+	}
+}
+
+func BenchmarkKnowledgeTagCloudFrame(b *testing.B) {
+	a := knowledgeFixture(b, "tags")
+	tt := ui.NewTester(a.View, 1240, 820)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tt.Frame()
+	}
+}
+
+func TestKnowledgeTagCloudReflowsWithoutRemeasure(t *testing.T) {
+	a := knowledgeFixture(t, "tags")
+	var width float32 = 600
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.Live.Workbench.KBCloud.layout(c, list(object(a.Live.Data["kb-tags"])["tags"]), width)
+	}, 700, 600)
+	cloud := &a.Live.Workbench.KBCloud
+	first := &cloud.tags[0]
+	wideRows := len(cloud.rows)
+	width = 220
+	tt.Frame()
+	if first != &cloud.tags[0] || len(cloud.rows) <= wideRows {
+		t.Fatal("resize failed to reuse metrics and reflow")
+	}
+	n := 0
+	for _, row := range cloud.rows {
+		used := float32(0)
+		for j, i := range row {
+			if j > 0 {
+				used += 12
+			}
+			used += min(width, cloud.tags[i].width)
+			if i != n {
+				t.Fatal("tag order changed")
+			}
+			n++
+		}
+		if used > width {
+			t.Fatal("row overflows pane")
+		}
+	}
+	if n != 6304 {
+		t.Fatalf("tags lost during resize: %d", n)
 	}
 }

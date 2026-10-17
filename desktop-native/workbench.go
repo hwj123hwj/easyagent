@@ -37,8 +37,11 @@ type nativeFile struct {
 	Image                                      *ui.Bitmap
 }
 type nativeWorkbench struct {
+	KBCloud                                                                          kbTagCloud
+	KBPaneWidth                                                                      float32
+	KBActiveTag                                                                      string
 	KBList                                                                           ui.ListState
-	KBTags                                                                           ui.GridState
+	KBTags                                                                           ui.ListState
 	KBSearchAt                                                                       time.Time
 	SavedFiles                                                                       map[string]fileWorkspace
 	RestoredFiles                                                                    map[string]bool
@@ -115,7 +118,13 @@ func (a *preview) refreshWorkbench() {
 	case "profile":
 		a.resource("profile", "/profile")
 	case "kb":
-		a.resource("kb", "/kb/entries"+query(map[string]string{"q": w.KBQuery, "category": w.KBCategory, "tag": w.KBTag}))
+		if w.KBView == "tags" {
+			if w.KBActiveTag != "" {
+				a.resource("kb-tag-entries", "/kb/entries"+query(map[string]string{"tag": w.KBActiveTag}))
+			}
+		} else if w.KBView == "" {
+			a.resource("kb", "/kb/entries"+query(map[string]string{"q": w.KBQuery, "category": w.KBCategory, "tag": w.KBTag}))
+		}
 		if l.Data["kb-stats"] == nil {
 			a.resource("kb-stats", "/kb/stats")
 		}
@@ -186,6 +195,7 @@ func (a *preview) liveWorkbench(c *ui.Context) {
 			case "profile":
 				a.profileWorkbench(c)
 			case "kb":
+				w.KBPaneWidth = paneWidth - 45
 				a.kbWorkbench(c)
 			}
 		})

@@ -173,37 +173,10 @@ func (a *preview) kbWorkbench(c *ui.Context) {
 		return
 	}
 	if w.KBView == "tags" {
-		if a.resourceFeedback(c, "kb-tags") {
-			return
-		}
-		tags := list(object(l.Data["kb-tags"])["tags"])
-		if len(tags) == 0 {
-			a.note(c, "暂无标签。")
-		}
-		w.KBTags.Key = func(i int) any { return str(object(tags[i])["name"]) }
-		ui.GridView(c, &w.KBTags, len(tags), 170, 38, func(i int) {
-			tag := object(tags[i])
-			name := str(tag["name"])
-			count := int(number(tag["count"]))
-			btn := ui.ButtonBase(c.Key("tag-"+name)).Label("标签："+name).Gap(5).Padding(6, 12).Radius(14).
-				Background(c.Theme().Surface).Border(1, c.Theme().Border).
-				OnClick(func() {
-					w.KBTag = name
-					w.KBView = ""
-					a.refreshWorkbench()
-				})
-			if btn.Hovered() {
-				btn.Background(c.Theme().SurfaceHover).Border(1, c.Theme().Accent)
-			}
-			btn.Children(func() {
-				ui.Text(c, "#"+name).SingleLine().Grow(1).MinWidth(0).FontSize(12).FontWeight(500).TextColor(c.Theme().Accent)
-				ui.Text(c, formatCount(count)).FontSize(10).FontWeight(600).
-					TextColor(c.Theme().TextMuted).Background(c.Theme().SurfaceHover).
-					Radius(8).Padding(1, 6)
-			})
-		}).Grow(1).MinHeight(0).Padding(14).Gap(8)
+		a.kbTagsView(c)
 		return
 	}
+
 	if w.KBView == "health" {
 		a.kbHealthView(c)
 		return
