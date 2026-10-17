@@ -55,6 +55,14 @@ func TestSettingsPreferencePersistenceAndThemes(t *testing.T) {
 	if recovered.Preferences.Theme != "light" {
 		t.Fatal("preferences not restored")
 	}
+	click(t, tt, "经典陶土")
+	if s.Preferences.Theme != "terracotta" {
+		t.Fatal("terracotta theme selection failed")
+	}
+	tcTheme := previewTheme(ui.DarkTheme(), s.Preferences)
+	if !tcTheme.Dark || tcTheme.Accent != ui.Hex("#d97757") || tcTheme.Background != ui.Hex("#262624") {
+		t.Fatal("terracotta theme tokens not applied correctly")
+	}
 	click(t, tt, "跟随系统")
 	tt.SetDark(false)
 	if theme := previewTheme(ui.LightTheme(), s.Preferences); theme.Dark {

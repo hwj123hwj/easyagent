@@ -253,25 +253,33 @@ func (a *preview) appearanceSettings(c *ui.Context) {
 	a.heading(c, "配色主题")
 	a.note(c, "立即应用到当前界面，选择会保留在此设备。")
 	ui.Row(c).AlignItems(ui.Stretch).Gap(12).Children(func() {
-		for _, option := range []struct{ id, label, detail string }{{"dark", "青夜", "深青背景 · 柔和浅青"}, {"light", "浅色", "明亮表面 · 清晰文字"}, {"system", "跟随系统", "随系统外观自动切换"}} {
+		for _, option := range []struct{ id, label, detail string }{
+			{"dark", "青夜", "深青背景 · 柔和浅青"},
+			{"terracotta", "经典陶土", "暖炭画布 · 陶土橙 Accent"},
+			{"light", "浅色", "明亮纸面 · 暖调红褐"},
+			{"system", "跟随系统", "随系统外观自动切换"},
+		} {
 			selected := s.Preferences.Theme == option.id
 			e := ui.ButtonBase(c.Key(option.id)).Label(a.tr(option.label)).Grow(1).Basis(0).MinWidth(0).Column().AlignItems(ui.Stretch).Justify(ui.Start).TextColor(c.Theme().Text).Padding(10, 12).Gap(10).Radius(10).Background(c.Theme().Surface).Border(1, c.Theme().Border).Selected(selected).TextColor(c.Theme().Text).OnClick(func() { s.Preferences.Theme = option.id; s.savePreferences() })
 			if selected {
 				e.BorderColor(c.Theme().Accent).Background(c.Theme().Accent.Alpha(.08))
 			}
 			e.Children(func() {
-				dark := option.id != "light"
-				background := ui.Hex("#f8fbfa")
-				side := ui.Hex("#eef5f2")
-				color := ui.Hex("#087f78")
-				if dark {
+				background := ui.Hex("#faf9f5")
+				side := ui.Hex("#ffffff")
+				color := ui.Hex("#c25a3c")
+				if option.id == "terracotta" {
+					background = ui.Hex("#262624")
+					side = ui.Hex("#2f2e2c")
+					color = ui.Hex("#d97757")
+				} else if option.id == "dark" {
 					background = bg
 					side = elevated
 					color = accent
 				}
 				ui.Row(c).FillWidth().Height(64).Radius(6).Clip().Border(1, c.Theme().Border).Background(background).AlignItems(ui.Stretch).Children(func() {
 					if option.id == "system" {
-						ui.Box(c).Absolute().Right(0).Top(0).Bottom(0).WidthPercent(50).Background(ui.Hex("#f8fbfa"))
+						ui.Box(c).Absolute().Right(0).Top(0).Bottom(0).WidthPercent(50).Background(ui.Hex("#faf9f5"))
 					}
 					ui.Box(c).WidthPercent(28).Background(side)
 					ui.Column(c).Grow(1).Padding(12, 10).Gap(8).Children(func() {
