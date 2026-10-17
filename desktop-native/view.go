@@ -244,7 +244,7 @@ func (a *preview) sidebar(c *ui.Context) {
 		})
 		ui.Column(c).Padding(12).Gap(6).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Children(func() {
 			flatButton(c, "settings", a.tr("设置")).Justify(ui.Start).OnClick(func() { a.openSettings("general") })
-			a.text(c, "MyGo 0.5.1 · Go 原生").FontSize(11).TextColor(c.Theme().TextMuted).Padding(4, 7)
+			a.text(c, "MyGo 0.5.5 · Go 原生").FontSize(11).TextColor(c.Theme().TextMuted).Padding(4, 7)
 		})
 	})
 
