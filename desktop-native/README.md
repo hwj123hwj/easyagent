@@ -1,6 +1,6 @@
 # EasyAgent Go 原生试用版
 
-MyGo v0.5.1 的原生界面，直接复用现有 EasyAgent Go 核心的 REST/WebSocket 协议。UI 不使用 React、HTML、JavaScript 或 WebView；电脑控制继续使用原有系统助手并随包提供。
+MyGo v0.5.5 的原生界面，直接复用现有 EasyAgent Go 核心的 REST/WebSocket 协议。UI 不使用 React、HTML、JavaScript 或 WebView；电脑控制继续使用原有系统助手并随包提供。
 
 这是独立试用入口，Bundle ID 为 `com.hwj.easyagent.native-preview`，不会替换 `/Applications/EasyAgent.app`。
 
