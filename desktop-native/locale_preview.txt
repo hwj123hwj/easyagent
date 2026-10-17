@@ -37,10 +37,7 @@ Go 原生预览 · 0.1.0|Native Go preview · 0.1.0
 配色主题|Color theme
 立即应用到当前界面，选择会保留在此设备。|Apply immediately and remember the choice on this device.
 青夜|Qingye
-经典陶土|Warm Terracotta
-暖炭画布 · 陶土橙 Accent|Warm charcoal canvas · terracotta accent
 明亮表面 · 清晰文字|Bright surfaces · clear text
-明亮纸面 · 暖调红褐|Bright paper surfaces · warm red-brown
 深青背景 · 柔和浅青|Deep teal background · soft cyan
 随系统外观自动切换|Follow system appearance
 当前模型|Current model

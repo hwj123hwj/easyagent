@@ -279,7 +279,7 @@ func (s *settingsState) loadPreferences(path string) {
 		return
 	}
 	var prefs localPreferences
-	if json.Unmarshal(b, &prefs) == nil && (prefs.Theme == "dark" || prefs.Theme == "terracotta" || prefs.Theme == "light" || prefs.Theme == "system") && (prefs.Language == "中文" || prefs.Language == "English") {
+	if json.Unmarshal(b, &prefs) == nil && (prefs.Theme == "dark" || prefs.Theme == "light" || prefs.Theme == "system") && (prefs.Language == "中文" || prefs.Language == "English") {
 		s.Preferences = prefs
 	}
 }
@@ -303,45 +303,10 @@ func (s *settingsState) savePreferences() {
 }
 func previewTheme(base *ui.Theme, prefs localPreferences) ui.Theme {
 	t := *base
+	dark := prefs.Theme == "dark" || (prefs.Theme == "system" && base.Dark)
+	t.Dark = dark
 	t.Radius = 6
-	themeID := prefs.Theme
-	if themeID == "" {
-		themeID = "dark"
-	}
-	if themeID == "system" {
-		if base.Dark {
-			themeID = "dark"
-		} else {
-			themeID = "light"
-		}
-	}
-	switch themeID {
-	case "terracotta":
-		t.Dark = true
-		t.Background = ui.Hex("#262624")
-		t.Surface = ui.Hex("#2f2e2c")
-		t.SurfaceHover = ui.Hex("#383735")
-		t.SurfacePressed = ui.Hex("#383735")
-		t.Text = ui.Hex("#f3f1ea")
-		t.TextMuted = ui.Hex("#b3b0a6")
-		t.Border = ui.Hex("#3a3937")
-		t.Accent = ui.Hex("#d97757")
-		t.AccentText = ui.Hex("#fbfaf7")
-		t.AccentHover = ui.Hex("#e08a6e")
-	case "light":
-		t.Dark = false
-		t.Background = ui.Hex("#faf9f5")
-		t.Surface = ui.Hex("#ffffff")
-		t.SurfaceHover = ui.Hex("#f3f1ea")
-		t.SurfacePressed = ui.Hex("#e9e6dd")
-		t.Text = ui.Hex("#1f1e1c")
-		t.TextMuted = ui.Hex("#6a685f")
-		t.Border = ui.Hex("#e9e6dd")
-		t.Accent = ui.Hex("#c25a3c")
-		t.AccentText = ui.Hex("#ffffff")
-		t.AccentHover = ui.Hex("#b04e32")
-	default: // "dark" (青夜)
-		t.Dark = true
+	if dark {
 		t.Background = bg
 		t.Surface = elevated
 		t.SurfaceHover = raised
@@ -352,6 +317,17 @@ func previewTheme(base *ui.Theme, prefs localPreferences) ui.Theme {
 		t.Accent = accent
 		t.AccentText = ui.Hex("#081a17")
 		t.AccentHover = ui.Hex("#6ee7b7")
+	} else {
+		t.Background = ui.Hex("#f8fbfa")
+		t.Surface = ui.Hex("#eef5f2")
+		t.SurfaceHover = ui.Hex("#e8f1ed")
+		t.SurfacePressed = ui.Hex("#e1eee8")
+		t.Text = ui.Hex("#16342e")
+		t.TextMuted = ui.Hex("#385c50")
+		t.Border = ui.Hex("#cadbd3")
+		t.Accent = ui.Hex("#087f78")
+		t.AccentText = ui.Hex("#ffffff")
+		t.AccentHover = ui.Hex("#09685f")
 	}
 	t.Selection = t.Accent.Alpha(.24)
 	t.Focus = t.Accent.Alpha(.4)
@@ -374,26 +350,14 @@ func (s *settingsState) selectHost(index int) {
 
 func composerSurface(c *ui.Context) ui.Color {
 	if c.Theme().Dark {
-		if c.Theme().Accent == ui.Hex("#d97757") {
-			return ui.Hex("#1e1d1b")
-		}
 		return ui.Hex("#1a2b29")
-	}
-	if c.Theme().Accent == ui.Hex("#c25a3c") {
-		return ui.Hex("#f3f1ea")
 	}
 	return ui.Hex("#e7efeb")
 }
 
 func searchSurface(c *ui.Context) ui.Color {
 	if c.Theme().Dark {
-		if c.Theme().Accent == ui.Hex("#d97757") {
-			return ui.Hex("#1e1d1b")
-		}
 		return sunken
-	}
-	if c.Theme().Accent == ui.Hex("#c25a3c") {
-		return ui.Hex("#f3f1ea")
 	}
 	return ui.Hex("#e7efeb")
 }
