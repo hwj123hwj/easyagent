@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"github.com/egoist/mygo"
 	_ "github.com/egoist/mygo/locales/zh-Hans"
 	"github.com/egoist/mygo/plugins/updater"
@@ -8,8 +9,12 @@ import (
 	"github.com/egoist/mygo/ui"
 	"log"
 	"os"
+	"runtime"
 	"time"
 )
+
+//go:embed resources/icon.png
+var appIconPNG []byte
 
 func main() {
 	mygo.Use(nativeupdater.Plugin)
@@ -17,6 +22,13 @@ func main() {
 	app.SetLanguages("zh-Hans", "en")
 	app.SetName("EasyAgent")
 	app.WhenReady(func() {
+		// Use the original artwork for the running Dock tile. Tahoe can wrap
+		// legacy ICNS artwork in another squircle and shrink it a second time.
+		if runtime.GOOS == "darwin" {
+			if err := app.Dock.SetIcon(appIconPNG); err != nil {
+				log.Printf("设置应用图标失败: %v", err)
+			}
+		}
 		app.SetMenu(mygo.NewMenu([]*mygo.MenuItem{{Role: mygo.RoleAppMenu}, {Role: mygo.RoleEditMenu}, {Role: mygo.RoleWindowMenu}}))
 		dir, err := app.Path(mygo.PathUserData)
 		if override := os.Getenv("EASYAGENT_NATIVE_DATA"); override != "" {
