@@ -77,7 +77,7 @@ func (a *preview) kbWorkbench(c *ui.Context) {
 	tagCount := formatCount(stats["tags"])
 
 	ui.Column(c).Padding(10, 12).Gap(8).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Row(c).Gap(4).Children(func() {
 				for _, tab := range []struct{ id, label, icon string }{
 					{"", "浏览", "book"},
@@ -107,13 +107,13 @@ func (a *preview) kbWorkbench(c *ui.Context) {
 			})
 			ui.Spacer(c)
 			ui.Row(c).Gap(4).Children(func() {
-				ui.Text(c, totalCount+" 条目").FontSize(10).FontWeight(600).
+				ui.Text(c, totalCount+" 条目").SingleLine().FontSize(10).FontWeight(600).
 					TextColor(c.Theme().TextMuted).Background(c.Theme().SurfaceHover).
 					Radius(4).Padding(2, 6)
-				ui.Text(c, catCount+" 分类").FontSize(10).FontWeight(600).
+				ui.Text(c, catCount+" 分类").SingleLine().FontSize(10).FontWeight(600).
 					TextColor(c.Theme().TextMuted).Background(c.Theme().SurfaceHover).
 					Radius(4).Padding(2, 6)
-				ui.Text(c, tagCount+" 标签").FontSize(10).FontWeight(600).
+				ui.Text(c, tagCount+" 标签").SingleLine().FontSize(10).FontWeight(600).
 					TextColor(c.Theme().TextMuted).Background(c.Theme().SurfaceHover).
 					Radius(4).Padding(2, 6)
 			})
@@ -176,35 +176,32 @@ func (a *preview) kbWorkbench(c *ui.Context) {
 		if a.resourceFeedback(c, "kb-tags") {
 			return
 		}
-		ui.Scroll(c).Grow(1).MinHeight(0).Padding(14).Children(func() {
-			tags := list(object(l.Data["kb-tags"])["tags"])
-			if len(tags) == 0 {
-				a.note(c, "暂无标签。")
+		tags := list(object(l.Data["kb-tags"])["tags"])
+		if len(tags) == 0 {
+			a.note(c, "暂无标签。")
+		}
+		w.KBTags.Key = func(i int) any { return str(object(tags[i])["name"]) }
+		ui.GridView(c, &w.KBTags, len(tags), 170, 38, func(i int) {
+			tag := object(tags[i])
+			name := str(tag["name"])
+			count := int(number(tag["count"]))
+			btn := ui.ButtonBase(c.Key("tag-"+name)).Label("标签："+name).Gap(5).Padding(6, 12).Radius(14).
+				Background(c.Theme().Surface).Border(1, c.Theme().Border).
+				OnClick(func() {
+					w.KBTag = name
+					w.KBView = ""
+					a.refreshWorkbench()
+				})
+			if btn.Hovered() {
+				btn.Background(c.Theme().SurfaceHover).Border(1, c.Theme().Accent)
 			}
-			ui.Row(c).Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
-				for _, raw := range tags {
-					tag := object(raw)
-					name := str(tag["name"])
-					count := int(number(tag["count"]))
-					btn := ui.ButtonBase(c.Key("tag-"+name)).Label("标签："+name).Gap(5).Padding(6, 12).Radius(14).
-						Background(c.Theme().Surface).Border(1, c.Theme().Border).
-						OnClick(func() {
-							w.KBTag = name
-							w.KBView = ""
-							a.refreshWorkbench()
-						})
-					if btn.Hovered() {
-						btn.Background(c.Theme().SurfaceHover).Border(1, c.Theme().Accent)
-					}
-					btn.Children(func() {
-						ui.Text(c, "#"+name).FontSize(12).FontWeight(500).TextColor(c.Theme().Accent)
-						ui.Text(c, formatCount(count)).FontSize(10).FontWeight(600).
-							TextColor(c.Theme().TextMuted).Background(c.Theme().SurfaceHover).
-							Radius(8).Padding(1, 6)
-					})
-				}
+			btn.Children(func() {
+				ui.Text(c, "#"+name).SingleLine().Grow(1).MinWidth(0).FontSize(12).FontWeight(500).TextColor(c.Theme().Accent)
+				ui.Text(c, formatCount(count)).FontSize(10).FontWeight(600).
+					TextColor(c.Theme().TextMuted).Background(c.Theme().SurfaceHover).
+					Radius(8).Padding(1, 6)
 			})
-		})
+		}).Grow(1).MinHeight(0).Padding(14).Gap(8)
 		return
 	}
 	if w.KBView == "health" {
@@ -220,10 +217,7 @@ func (a *preview) kbWorkbench(c *ui.Context) {
 			if input.Changed() {
 				w.KBSearchAt = time.Now().Add(250 * time.Millisecond)
 			}
-			if !w.KBSearchAt.IsZero() && time.Now().After(w.KBSearchAt) {
-				w.KBSearchAt = time.Time{}
-				a.refreshWorkbench()
-			}
+
 			if w.KBQuery != "" {
 				iconButton(c, "x", "清除知识库搜索").Size(24, 24).OnClick(func() {
 					w.KBQuery = ""
@@ -286,64 +280,62 @@ func (a *preview) kbWorkbench(c *ui.Context) {
 	if a.resourceFeedback(c, "kb") {
 		return
 	}
-	ui.Scroll(c).Grow(1).MinHeight(0).Padding(10, 12).Children(func() {
-		entries := list(object(l.Data["kb"])["entries"])
-		if len(entries) == 0 {
-			a.note(c, "没有符合条件的知识条目。")
+	entries := list(object(l.Data["kb"])["entries"])
+	if len(entries) == 0 {
+		a.note(c, "没有符合条件的知识条目。")
+	}
+	ui.List(c, &w.KBList, len(entries)).Grow(1).MinHeight(0).Padding(10, 12).Gap(8).
+		ItemKey(func(i int) any { return str(object(entries[i])["path"]) }).Rows(func(row ui.ListRow) {
+		c := row.Context
+		entry := object(entries[row.Index])
+		title := str(entry["title"])
+		if title == "" {
+			title = filepath.Base(str(entry["rel_path"]))
 		}
-		ui.Column(c).Gap(8).Children(func() {
-			for _, raw := range entries {
-				entry := object(raw)
-				title := str(entry["title"])
-				if title == "" {
-					title = filepath.Base(str(entry["rel_path"]))
-				}
-				tags := list(entry["tags"])
-				category := str(entry["category"])
-				summary := str(entry["summary"])
-				modified := str(entry["modified"])
+		tags := list(entry["tags"])
+		category := str(entry["category"])
+		summary := str(entry["summary"])
+		modified := str(entry["modified"])
 
-				card := ui.ButtonBase(c.Key(str(entry["path"]))).
-					Label("知识条目：" + title).
-					FillWidth().MinWidth(0).Justify(ui.Start).
-					Padding(10, 12).Radius(8).
-					Background(c.Theme().Surface).
-					Border(1, c.Theme().Border).
-					OnClick(func() { a.openKBEntry(entry) })
-				if card.Hovered() {
-					card.Background(c.Theme().SurfaceHover)
+		card := ui.ButtonBase(c.Key(str(entry["path"]))).
+			Label("知识条目："+title).
+			FillWidth().MinWidth(0).Justify(ui.Start).
+			Padding(10, 12).Radius(8).
+			Background(c.Theme().Surface).
+			Border(1, c.Theme().Border).
+			OnClick(func() { a.openKBEntry(entry) })
+		if card.Hovered() {
+			card.Background(c.Theme().SurfaceHover)
+		}
+		card.Children(func() {
+			ui.Column(c).MinWidth(0).Gap(5).Children(func() {
+				ui.Text(c, title).FontSize(13).FontWeight(600).SingleLine()
+				if summary != "" {
+					ui.Text(c, summary).FontSize(11).MaxLines(2).TextColor(c.Theme().TextMuted).LineHeight(1.5)
 				}
-				card.Children(func() {
-					ui.Column(c).MinWidth(0).Gap(5).Children(func() {
-						ui.Text(c, title).FontSize(13).FontWeight(600).SingleLine()
-						if summary != "" {
-							ui.Text(c, summary).FontSize(11).MaxLines(2).TextColor(c.Theme().TextMuted).LineHeight(1.5)
+				ui.Row(c).Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
+					if category != "" {
+						ui.Text(c, category).FontSize(10).FontWeight(500).TextColor(c.Theme().TextMuted)
+					}
+					if len(tags) > 0 {
+						limit := min(3, len(tags))
+						for _, rawTag := range tags[:limit] {
+							tagStr := str(rawTag)
+							ui.Text(c, tagStr).FontSize(9).FontWeight(500).
+								TextColor(c.Theme().Accent).
+								Background(c.Theme().Accent.Alpha(.14)).
+								Radius(3).Padding(1, 5)
 						}
-						ui.Row(c).Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
-							if category != "" {
-								ui.Text(c, category).FontSize(10).FontWeight(500).TextColor(c.Theme().TextMuted)
-							}
-							if len(tags) > 0 {
-								limit := min(3, len(tags))
-								for _, rawTag := range tags[:limit] {
-									tagStr := str(rawTag)
-									ui.Text(c, tagStr).FontSize(9).FontWeight(500).
-										TextColor(c.Theme().Accent).
-										Background(c.Theme().Accent.Alpha(.14)).
-										Radius(3).Padding(1, 5)
-								}
-								if len(tags) > 3 {
-									ui.Text(c, fmt.Sprintf("+%d", len(tags)-3)).FontSize(9).TextColor(c.Theme().TextMuted)
-								}
-							}
-							if modified != "" {
-								ui.Spacer(c)
-								ui.Text(c, modified).FontSize(10).TextColor(c.Theme().TextMuted)
-							}
-						})
-					})
+						if len(tags) > 3 {
+							ui.Text(c, fmt.Sprintf("+%d", len(tags)-3)).FontSize(9).TextColor(c.Theme().TextMuted)
+						}
+					}
+					if modified != "" {
+						ui.Spacer(c)
+						ui.Text(c, modified).FontSize(10).TextColor(c.Theme().TextMuted)
+					}
 				})
-			}
+			})
 		})
 	})
 }
@@ -396,10 +388,7 @@ func (a *preview) kbHealthView(c *ui.Context) {
 					if len(entries) == 0 {
 						a.note(c, "没有发现问题。")
 					}
-					for _, raw := range entries {
-						entry := object(raw)
-						flatButton(c, "file", str(entry["title"])+" "+str(entry["rel_path"])).FontSize(12).Justify(ui.Start).FillWidth().OnClick(func() { a.openKBEntry(entry) })
-					}
+					a.kbHealthEntries(c, entries)
 				})
 			}
 			groups := list(m["duplicate_groups"])
@@ -407,25 +396,38 @@ func (a *preview) kbHealthView(c *ui.Context) {
 				if len(groups) == 0 {
 					a.note(c, "没有发现重复标题。")
 				}
-				for _, raw := range groups {
-					group := object(raw)
-					ui.Text(c, str(group["canonical_title"])).FontSize(12).FontWeight(600)
-					for _, raw := range list(group["entries"]) {
-						entry := object(raw)
-						flatButton(c, "file", str(entry["rel_path"])).FontSize(11).OnClick(func() { a.openKBEntry(entry) })
-					}
-				}
+				ui.List(c, nil, len(groups)).Height(float32(min(320, len(groups)*100))).Rows(func(row ui.ListRow) {
+					c := row.Context
+					group := object(groups[row.Index])
+					ui.Column(c).Gap(4).Children(func() {
+						ui.Text(c, str(group["canonical_title"])).SingleLine().FontSize(12).FontWeight(600)
+						a.kbHealthEntries(c, list(group["entries"]))
+					})
+				})
 			})
 			clusters := list(m["tag_clusters"])
 			nativeDisclosure(c, "clusters", fmt.Sprintf("相似标签 · %d 组", len(clusters)), func() {
 				if len(clusters) == 0 {
 					a.note(c, "标签命名一致。")
 				}
-				for _, raw := range clusters {
-					cluster := object(raw)
-					a.note(c, str(cluster["canonical"])+" · "+displayText(cluster["variants"]))
-				}
+				ui.List(c, nil, len(clusters)).Height(float32(min(320, len(clusters)*36))).Rows(func(row ui.ListRow) {
+					cluster := object(clusters[row.Index])
+					ui.Text(row.Context, str(cluster["canonical"])+" · "+displayText(cluster["variants"])).SingleLine().FontSize(12)
+				})
 			})
+		})
+	})
+}
+
+// Expanded health findings can contain the entire library too.
+func (a *preview) kbHealthEntries(c *ui.Context, entries []any) {
+	ui.List(c, nil, len(entries)).Height(float32(min(260, len(entries)*36))).
+		ItemKey(func(i int) any { return str(object(entries[i])["rel_path"]) }).Rows(func(row ui.ListRow) {
+		c := row.Context
+		entry := object(entries[row.Index])
+		label := str(entry["title"]) + " " + str(entry["rel_path"])
+		ui.ButtonBase(c).Label(label).FillWidth().MinWidth(0).Padding(8).OnClick(func() { a.openKBEntry(entry) }).Children(func() {
+			ui.Text(c, label).SingleLine().FontSize(12)
 		})
 	})
 }

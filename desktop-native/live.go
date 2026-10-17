@@ -221,6 +221,14 @@ func (a *preview) liveTick() bool {
 		a.pollQR()
 		changed = true
 	}
+	w := &l.Workbench
+	if !w.KBSearchAt.IsZero() && !time.Now().Before(w.KBSearchAt) {
+		w.KBSearchAt = time.Time{}
+		if a.Workbench && !a.Settings.Open && w.Tab == "kb" && w.KBView == "" && w.KBPath == "" {
+			a.refreshWorkbench()
+			changed = true
+		}
+	}
 	if l.Voice != nil {
 		changed = true
 	}

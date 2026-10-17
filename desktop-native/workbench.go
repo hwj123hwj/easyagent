@@ -37,6 +37,8 @@ type nativeFile struct {
 	Image                                      *ui.Bitmap
 }
 type nativeWorkbench struct {
+	KBList                                                                           ui.ListState
+	KBTags                                                                           ui.GridState
 	KBSearchAt                                                                       time.Time
 	SavedFiles                                                                       map[string]fileWorkspace
 	RestoredFiles                                                                    map[string]bool
