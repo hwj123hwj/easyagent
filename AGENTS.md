@@ -31,6 +31,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ### 分支收尾
 
 - 长期只保留 `main`，开发分支仅用于当前任务，不积累已完成的分支。
+- 历史保留分支例外：`archive/workflow` 保存 2026-10-17 下线的 workflow 功能完整代码（PR #170 移除前的 main 快照，含动态工作流与 YAML 流水线）。它仅作历史恢复用途，不维护、不合并、不参与例行分支清理；`chore/release-0.15.11`（被 `release/v0.15.11` 取代的发布草稿，末端提交 d98f7c1）同日删除，恢复需要时从该 SHA 的 reflog 或备份找回。
 - PR 合并后，切回 `main` 并同步远端，删除对应的本地和远端开发分支，再运行 `git fetch --prune origin` 清理失效引用；这属于任务收尾，不能留给用户手动处理。
 - 删除前确认提交已进入 `main`。未合并的提交、未提交的改动和仍在使用的 worktree 必须先核实并保留，不用强制删除来凑成“只剩 main”。
 - 汇报完成前检查本地、远端分支；如仍有未合并或正在使用的分支，说明原因。
