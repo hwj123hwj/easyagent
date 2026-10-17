@@ -160,9 +160,9 @@ func (a *preview) conversationRow(c *ui.Context, s *session, index, selected int
 }
 
 type toolGroupState struct {
-	Open, Touched, Running bool
-	Shown                  int
-	Density                string
+	Open, Touched, Running, Failed bool
+	Shown                          int
+	Density                        string
 }
 
 func (a *preview) toolGroup(c *ui.Context, s *session, start, end, selected int) {
@@ -189,16 +189,22 @@ func (a *preview) toolGroup(c *ui.Context, s *session, start, end, selected int)
 	}
 	root := ui.Column(c).MinWidth(0).Gap(5)
 	state := ui.Local(root, "group", func() toolGroupState {
-		return toolGroupState{Open: running || failed || s.Density == "verbose", Running: running, Shown: 25, Density: s.Density}
+		return toolGroupState{Open: running || failed, Running: running, Failed: failed, Shown: 25, Density: s.Density}
 	})
 	if state.Density != s.Density {
 		state.Density = s.Density
 		state.Touched = false
 		state.Open = running || failed || s.Density == "verbose"
+		state.Failed = failed
 	}
-	if failed {
+	// 失败出现时自动展开一次；用户手动收起后不再强制打开，
+	// 只更新 Failed 标记，下次新失败再自动展开。
+	if failed && !state.Failed {
 		state.Open = true
-	} else if state.Running && !running && !state.Touched {
+		state.Touched = true
+	}
+	state.Failed = failed
+	if state.Running && !running && !state.Touched {
 		state.Open = false
 	}
 	state.Running = running
@@ -243,8 +249,10 @@ func (a *preview) toolGroup(c *ui.Context, s *session, start, end, selected int)
 		}
 		for i := start; i < min(end, start+state.Shown); i++ {
 			m := s.Messages[i]
-			if !m.ExpansionTouched && s.Density == "verbose" || selected == i {
+			// 搜索命中行展开一次即可；不每帧强制覆盖用户的手动折叠。
+			if selected == i && !m.ExpansionTouched {
 				m.Expanded = true
+				m.ExpansionTouched = true
 			}
 			a.conversationRow(c.Key(i), s, i, selected)
 		}
