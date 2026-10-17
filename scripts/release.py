@@ -27,12 +27,17 @@ def version_key(tag):
 
 def desktop_assets(tag):
     version_key(tag)
-    # Desktop installers ship Apple Silicon only; Intel Macs stay on v0.10.1.
+    # Preserve historical manifests; Electron is retired starting with v0.16.0.
+    if version_key(tag) >= version_key("v0.16.0-alpha.1"):
+        return ()
     return (f"EasyAgent-{tag[1:]}-arm64.dmg",)
 
 
 def native_assets(tag):
     version_key(tag)
+    # Signed archives and their manifests are mandatory for the native-only release.
+    if version_key(tag) >= version_key("v0.16.0-alpha.1"):
+        return ("easyagent-native-darwin-arm64.dmg", "update-darwin-arm64.json", f"easyagent-{tag[1:]}-darwin-arm64.tar.gz")
     # MyGo native client ships an Apple Silicon DMG with the promoted release.
     if version_key(tag) >= version_key("v0.15.12"):
         return ("easyagent-native-darwin-arm64.dmg",)

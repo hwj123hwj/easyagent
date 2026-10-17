@@ -44,6 +44,7 @@ func (a *preview) liveModelPicker(c *ui.Context, anchor ui.Element) {
 		input := ui.TextInput(c, &a.ModelSearch).Label("搜索模型").Placeholder("搜索模型…").AutoFocus().Padding(7).Background(c.Theme().Surface).Border(1, c.Theme().Border)
 		if input.Changed() {
 			l.ModelIndex = 0
+			l.ModelJump = true
 		}
 		composing := input.Composing()
 		input.OnTextKey(func(k ui.TextKey) bool {
@@ -59,6 +60,7 @@ func (a *preview) liveModelPicker(c *ui.Context, anchor ui.Element) {
 						step = -1
 					}
 					l.ModelIndex = (l.ModelIndex + step + len(choices)) % len(choices)
+					l.ModelJump = true
 					return true
 				}
 				if k.Key == ui.KeyEnter {
@@ -79,15 +81,15 @@ func (a *preview) liveModelPicker(c *ui.Context, anchor ui.Element) {
 		if len(choices) == 0 && !l.Loading["model-list"] {
 			a.note(c, "没有匹配的模型")
 		}
-		ui.Scroll(c).MaxHeight(260).FocusGroup(ui.Vertical).Children(func() {
+		ui.Scroll(c).Label("模型列表").MaxHeight(260).FocusGroup(ui.Vertical).Children(func() {
 			for i, choice := range choices {
 				button := ui.ButtonBase(c.Key(choice.ID)).TextColor(c.Theme().Text).FillWidth().MinWidth(0).Padding(8, 10).Gap(8).Radius(5).Selected(s.Model == choice.ID).Label("选择模型：" + choice.ID).Disabled(l.Loading["model/"+s.RemoteID]).OnClick(func() { a.switchLiveModel(choice.ID) })
 				if s.Model == choice.ID {
-					button.TextColor(c.Theme().Accent)
+					button.Background(c.Theme().Accent.Alpha(.12)).TextColor(c.Theme().Accent)
 				}
 				if i == l.ModelIndex {
-					button.Background(c.Theme().SurfaceHover)
-					if input.FocusWithin() {
+					button.Background(c.Theme().Text.Alpha(.08))
+					if l.ModelJump {
 						button.ScrollIntoView()
 					}
 				}
@@ -108,6 +110,7 @@ func (a *preview) liveModelPicker(c *ui.Context, anchor ui.Element) {
 				})
 			}
 		})
+		l.ModelJump = false
 		if str(object(l.Data["models"])["source"]) == "configured" {
 			a.note(c, "仅显示已配置模型，连接尚未验证")
 		}

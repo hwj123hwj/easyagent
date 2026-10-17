@@ -21,7 +21,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// The native and Electron clients use the same authenticated REST/WS protocol.
+// The native client uses the authenticated core REST/WS protocol.
 // The UI owns all projections; background work only delivers immutable results.
 type backendClient struct {
 	URL, Token string

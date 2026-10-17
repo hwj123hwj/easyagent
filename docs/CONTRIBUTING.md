@@ -13,7 +13,7 @@ Go 版本以 [go.mod](../go.mod) 为准（当前 1.24.2）。
 | `internal/` | EasyAgent 应用、协议、TUI、Web 与领域实现 |
 | `internal/web/static/` | 主 Web 界面的原生 HTML / CSS / JavaScript，嵌入 Go 程序 |
 | `third_party/bubbletea/` | TUI 依赖的本地模块及测试 |
-| `desktop/` | 独立 Electron / React 客户端 |
+| `desktop-native/` | Go / MyGo 原生桌面客户端 |
 | `deploy/`、`scripts/` | 服务模板、部署与验证脚本 |
 
 构建 Go 程序使用 `make build`，产出 `bin/easyagent` 和 `bin/easyagent-bridge`。`make install` 仅安装核心 CLI，不安装桥接。桌面打包见 [桌面客户端](DESKTOP.md)。
@@ -23,13 +23,13 @@ Go 版本以 [go.mod](../go.mod) 为准（当前 1.24.2）。
 从仓库根目录执行，与 [CI](../.github/workflows/verify.yml) 对齐：
 
 ```bash
-(cd desktop && npm ci --ignore-scripts && npm run typecheck && npm test && npm run build)
+(cd desktop-native && go test ./... && go vet ./...)
+bash scripts/build-native.sh darwin-arm64 # Apple Silicon macOS
 go test ./...
 go vet ./...
 (cd third_party/bubbletea && go test ./...)
 node --test scripts/web-test.mjs scripts/mcp-settings-test.mjs
 python3 scripts/test_update_mini.py
-python3 scripts/test_local_signing.py
 python3 -m unittest discover -s scripts -p "test_release*.py"
 git diff --check
 ```

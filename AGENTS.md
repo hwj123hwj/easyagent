@@ -46,12 +46,12 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ### 桌面构建与应用收尾
 
-- 桌面主宿主是 MyGo 原生客户端（`desktop-native/`，正式标识 `com.hwj.easyagent`），安装产物 `easyagent-native-darwin-arm64.dmg` 随正式 Release 发布；界面迭代优先原生客户端。Electron `desktop/` 进入维护态：只修严重缺陷，不再新增界面功能。
+- 桌面主宿主是 MyGo 原生客户端（`desktop-native/`，正式标识 `com.hwj.easyagent`），安装产物 `easyagent-native-darwin-arm64.dmg` 随正式 Release 发布；界面与桌面发布只维护此原生客户端。Electron / React / Capacitor 的 `desktop/` 已退役；历史源码见 `archive/workflow`，退役前的精确快照为 `e4b4088`。
 
 - 日常只保留一个已核实的 EasyAgent 应用入口；正式安装使用 `/Applications/EasyAgent.app`，不累积改名副本，也不自动替换用户当前运行的应用。
-- macOS 构建统一使用 `desktop/release.noindex/`；临时挂载、原生验收目录使用 `.noindex` 后缀，不把测试 `.app` 放到桌面、下载目录或 Applications。仅 Git ignore 不会阻止系统应用搜索收录。
-- 打包和安装包检查结束后自动撤销测试包及 Helper 的 LaunchServices 注册。原生 GUI 或 `electron:dev` 验收须先退出测试进程，再运行 `python3 scripts/unregister-desktop-apps.py <测试应用路径>`，然后收尾临时副本；`.noindex` 不能代替退出后的注册清理。
-- 清理前核实应用路径、Bundle ID、运行进程及工作树；保留当前运行的应用、开发依赖、安装包和用户数据。冗余测试应用先撤销注册，再移入废纸篓保留恢复路径；不重置整个 LaunchServices/Spotlight 数据库，不处理其他项目的 Electron。
+- macOS 原生构建统一使用 `desktop-native/build.noindex/`；临时挂载、原生验收目录使用 `.noindex` 后缀，不把测试 `.app` 放到桌面、下载目录或 Applications。仅 Git ignore 不会阻止系统应用搜索收录。
+- 打包和安装包检查结束后自动撤销测试包及 Helper 的 LaunchServices 注册。原生 GUI 验收须先退出测试进程，再运行 `python3 scripts/unregister-desktop-apps.py <测试应用路径>`，然后收尾临时副本；`.noindex` 不能代替退出后的注册清理。
+- 清理前核实应用路径、Bundle ID、运行进程及工作树；保留当前运行的应用、开发依赖、安装包和用户数据。冗余测试应用先撤销注册，再移入废纸篓保留恢复路径；不重置整个 LaunchServices/Spotlight 数据库，不处理其他项目的应用。
 
 ### 版本发布
 

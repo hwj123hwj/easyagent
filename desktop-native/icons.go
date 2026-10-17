@@ -2,7 +2,7 @@ package main
 
 import "github.com/egoist/mygo/ui"
 
-// SVG paths shared with desktop/src/components/Icon.tsx (Lucide).
+// SVG paths from Lucide.
 var icons = map[string]*ui.SVG{
 	"pin":             ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3l5 5-5 1-3 4-2 5-5-5 5-2 4-3z"/><path d="m2 22 7-7"/></svg>`)),
 	"undo":            ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h11a7 7 0 0 1 7 7"/><path d="m3 10 5-5m-5 5 5 5"/></svg>`)),

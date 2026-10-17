@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -136,10 +137,7 @@ func (a *preview) settingsView(c *ui.Context) {
 				ui.Text(c, "ea·").FontSize(20).FontWeight(600).TextColor(c.Theme().Accent)
 				ui.Column(c).Gap(2).Children(func() {
 					ui.Text(c, "EasyAgent").FontSize(12)
-					version := "Go 原生预览 · 0.1.0"
-					if a.Live != nil {
-						version = "Go 原生试用 · 0.2.5"
-					}
+					version := "Go 原生 · " + nativeAppVersion()
 					a.text(c, version).FontSize(10).TextColor(c.Theme().TextMuted)
 				})
 			})
@@ -217,22 +215,25 @@ func (a *preview) generalSettings(c *ui.Context) {
 				a.syncNativeLocale()
 			}
 		})
-		version := "EasyAgent 0.1.0 · MyGo 0.5.5"
-		if a.Live != nil {
-			version = "EasyAgent 0.2.5 · MyGo 0.5.5"
-		}
+		version := "EasyAgent " + nativeAppVersion()
 		a.preferenceRow(c, "桌面版本", version, func() {
-			a.action(c, "检查更新").OnClick(func() {
-				if a.Live == nil {
-					s.message("这是独立预览包，正式客户端的更新由现有发布流程管理。")
-				} else {
-					a.call("GET", "/health", nil, func(v any) {
-						a.Live.Notice = "当前核心版本：" + str(object(v)["version"]) + "。原生试用包尚未接入正式安装包的自动更新通道。"
-					})
-				}
-			})
+			a.action(c, "检查更新").Disabled(!a.UpdaterReady).OnClick(updater.CheckForUpdates)
 		})
 	})
+	if a.UpdaterReady {
+		checks := updater.AutomaticChecks()
+		if ui.Checkbox(c, &checks, "自动检查更新").Changed() {
+			updater.SetAutomaticChecks(checks)
+		}
+		downloads := updater.AutomaticDownloads()
+		if ui.Checkbox(c, &downloads, "自动下载并安装更新，下次启动生效").Changed() {
+			updater.SetAutomaticDownloads(downloads)
+		}
+		if last := updater.LastCheck(); !last.IsZero() {
+			a.note(c, "上次成功检查："+last.Local().Format("2006-01-02 15:04"))
+		}
+	}
+	a.note(c, "仅安装经过签名验证的原生更新包；运行中的任务或未保存文件会阻止重启。")
 	a.heading(c, "常用快捷键")
 	ui.Column(c).Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(10).Children(func() {
 		for _, shortcut := range []struct{ label, key string }{{"发送消息", "Enter"}, {"输入换行", "Shift + Enter"}, {"打开命令菜单", "/"}, {"文件工作台", "⌘ P"}, {"代码审查", "⌘ Shift G"}} {
@@ -592,4 +593,11 @@ func (a *preview) syncNativeLocale() {
 		tag = "en"
 	}
 	mygo.App.SetLocale(tag)
+}
+
+func nativeAppVersion() string {
+	if version := mygo.App.Version(); version != "" {
+		return version
+	}
+	return "开发版"
 }

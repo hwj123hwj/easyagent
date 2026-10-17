@@ -98,12 +98,18 @@ class AssetsTest(unittest.TestCase):
         self.assertEqual(release.native_assets('v0.15.12'), ('easyagent-native-darwin-arm64.dmg',))
         self.assertEqual(
             release.required_assets('v1.2.3'),
-            release.ASSETS + ('EasyAgent-1.2.3-arm64.dmg', 'easyagent-native-darwin-arm64.dmg'),
+            release.ASSETS + release.native_assets(self.tag),
         )
+
+    def test_electron_retirement_preserves_historical_manifests(self):
+        self.assertEqual(release.desktop_assets('v0.15.12'), ('EasyAgent-0.15.12-arm64.dmg',))
+        for tag in ('v0.16.0-alpha.1', 'v0.16.0', 'v1.0.0'):
+            self.assertEqual(release.desktop_assets(tag), ())
+            self.assertEqual(release.required_assets(tag), release.ASSETS + release.native_assets(tag))
 
     def test_each_missing_desktop_asset_rejects_manifest_and_publish(self):
         release.manifest(self.directory, self.tag, self.sha)
-        for name in release.desktop_assets(self.tag):
+        for name in release.native_assets(self.tag):
             path = self.directory / name
             content = path.read_bytes()
             path.unlink()
@@ -116,7 +122,7 @@ class AssetsTest(unittest.TestCase):
 
     def test_wrong_version_and_extra_desktop_assets_rejected(self):
         release.manifest(self.directory, self.tag, self.sha)
-        correct = self.directory / release.desktop_assets(self.tag)[0]
+        correct = self.directory / release.native_assets(self.tag)[0]
         wrong = self.directory / 'EasyAgent-0.2.0-rc.1-arm64.dmg'
         correct.rename(wrong)
         with self.assertRaisesRegex(ValueError, 'unexpected'):

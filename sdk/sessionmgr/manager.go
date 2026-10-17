@@ -79,6 +79,36 @@ func (m *Manager) SaveMeta(sessionID string, workspace string, application strin
 	})
 }
 
+// ModelPreference is the model selected for this session, without credentials.
+type ModelPreference struct {
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
+}
+
+func (m *Manager) SaveModel(id string, choice ModelPreference) error {
+	return m.updateMeta(id, func(meta map[string]any) { meta["model_selection"] = choice })
+}
+
+func (m *Manager) LoadModel(id string) (ModelPreference, error) {
+	m.metaMu.Lock()
+	defer m.metaMu.Unlock()
+	var meta struct {
+		Selection ModelPreference `json:"model_selection"`
+	}
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\\`) {
+		return meta.Selection, fmt.Errorf("invalid session id")
+	}
+	data, err := os.ReadFile(filepath.Join(m.SessionsDir(), id, "meta.json"))
+	if os.IsNotExist(err) {
+		return meta.Selection, nil
+	}
+	if err != nil {
+		return meta.Selection, err
+	}
+	err = json.Unmarshal(data, &meta)
+	return meta.Selection, err
+}
+
 // PreferencePatch changes only explicitly supplied indexing preferences.
 type PreferencePatch struct {
 	Title    *string `json:"title,omitempty"`
